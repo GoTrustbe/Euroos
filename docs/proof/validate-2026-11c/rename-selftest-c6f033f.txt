@@ -1,0 +1,95 @@
+# [rename] self-test, self-test image of c6f033f plus the test commit de92f08 only (R630, KVM, 2 GiB, smp 2)
+[rename] freestanding exit=1
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) FAILED where 1 0
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file FAILED where 1 0
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path FAILED file,where 13 1
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   freestanding renprobe: FAIL 20
+[rename] glibc exit=1
+[rename]   glibc renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename]   glibc renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   glibc renprobe: before every file by its path ok
+[rename]   glibc renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A1 the temporary name is gone ok
+[rename]   glibc renprobe: A1 every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: A1 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: A1 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: A1 the shared mapping of f12 ok
+[rename]   glibc renprobe: A1 the mapping of big1, pages first touched after the rename FAILED where 4097 0
+[rename]   glibc renprobe: A1 a new mapping through a held descriptor (f13) FAILED where 1 0
+[rename]   glibc renprobe: A2 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A2 the temporary name is gone ok
+[rename]   glibc renprobe: A2 every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: A2 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: A2 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: A2 the shared mapping of f12 ok
+[rename]   glibc renprobe: A3 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A3 the temporary name is gone ok
+[rename]   glibc renprobe: A3 every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: A3 every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: A3 a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: A3 the shared mapping of f12 ok
+[rename]   glibc renprobe: B a new file renamed over an OPEN file ok
+[rename]   glibc renprobe: B the open descriptor still reads the replaced file FAILED where 1 0
+[rename]   glibc renprobe: B the path gives the new file ok
+[rename]   glibc renprobe: B every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: B every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: B a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   glibc renprobe: C unlink of f04 and of the backup ok
+[rename]   glibc renprobe: C every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: C every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: C a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: C the shared mapping of f12 ok
+[rename]   glibc renprobe: C the mapping of big1, all of it FAILED where 4097 0
+[rename]   glibc renprobe: D big0 and big2 mapped, descriptors closed, first page read ok
+[rename]   glibc renprobe: D a new file renamed over the mapped big0 ok
+[rename]   glibc renprobe: D the mapping of the replaced file keeps its bytes FAILED where 4097 0
+[rename]   glibc renprobe: D the path big0 gives the new file ok
+[rename]   glibc renprobe: D unlink of the mapped big2 ok
+[rename]   glibc renprobe: D the mapping of the unlinked file keeps its bytes FAILED where 4097 0
+[rename]   glibc renprobe: D every file by its path FAILED file,where 13 1
+[rename]   glibc renprobe: D every held descriptor (bytes, offset, size) FAILED file,where 8 1
+[rename]   glibc renprobe: D a write through a held descriptor lands in its own file FAILED file,ret 9 13
+[rename]   glibc renprobe: FAIL 24
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 19 checks ok, 20 failed; glibc with demand paging: 23 checks ok, 24 failed, lazily filled mapping and step D ran) → FAILED

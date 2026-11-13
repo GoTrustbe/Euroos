@@ -835,6 +835,13 @@ pub fn maybe_check(fs: &mut dyn FileSystem, now: u64) {
         }
         REBOOT_AT.store(0, Ordering::Relaxed); // policy changed meanwhile: forget it
     }
+    if crate::bootopt::update_check_off() {
+        // Boot option `update.check=off`: say so once, then never look.
+        if !CHECK_OFF_SAID.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[euroupdate] update.check=off: no automatic update check in this boot");
+        }
+        return;
+    }
     let last = LAST_CHECK.load(Ordering::Relaxed);
     let due = if last == 0 { now >= CHECK_FIRST_TICKS } else { now.wrapping_sub(last) >= CHECK_INTERVAL_TICKS };
     if !due || STAGED_VERSION.load(Ordering::Relaxed) != 0 {
@@ -931,6 +938,7 @@ fn retry_phase(mut job: Job, why: &str) -> bool {
 }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
 static NO_SLOTS_SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static CHECK_OFF_SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// After a failed or unreachable check, try again in 30 minutes instead of 6 hours.
 const RETRY_TICKS: u64 = 30 * 60 * 100;
 fn retry_sooner(now: u64) {

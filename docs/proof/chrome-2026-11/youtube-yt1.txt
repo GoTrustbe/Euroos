@@ -1,0 +1,4 @@
+[gui-smoke] ok   youtube: the front page (or its consent dialog) loads: https://www.youtube.com/ after 4.1 s, 247 colours
+[gui-smoke] FAIL youtube: the watch page loads: the tab never showed watch with a title of its own: [('', 'YouTube')] after 90.5 s | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome-runs/yt1
+[linux-abi] [1:85:1112/194536.140000:ERROR:third_party/blink/renderer/bindings/core/v8/v8_initializer.cc:971] V8 process OOM (Zone).

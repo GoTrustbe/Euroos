@@ -1,0 +1,34 @@
+== user-smp4-iommu vs integ-2026-11
+== integ-2026-11_tcg-user-smp4-iommu.markers  vs  out2/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   altgr: OKx1
+   bug053: OKx1
+   bug063: OKx1
+   disks: OKx1
+   entropy: OKx1
+   fdspace: OKx1
+   linux-rand: OKx1
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+== user-smp1-noiommu vs integ-2026-11
+== integ-2026-11_tcg-user-smp1-noiommu.markers  vs  out2/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   altgr: OKx1
+   bug053: OKx1
+   bug063: OKx1
+   disks: OKx1
+   entropy: OKx1
+   fdspace: OKx1
+   linux-rand: OKx1
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+== user-smp4-iommu vs linux-rand-2026-11
+== linux-rand-2026-11_tcg-user-smp4-iommu.markers  vs  out2/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

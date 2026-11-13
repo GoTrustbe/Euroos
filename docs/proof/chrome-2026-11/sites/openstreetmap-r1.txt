@@ -1,0 +1,6 @@
+[gui-smoke] QEMU pid 1715920, booting (KVM, 2 cpu, 6144M)...
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 39.2 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 10.7, first child process 11.9, renderer 17.7), 19 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 4.9 s, load NOT finished 75.0 s later; content 2284 colours, commonest 36% | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[chrome-smoke] FAIL (1 step(s)) - 3/4 steps ok, report and screenshots in /srv/euroos/chrome-runs/sx-openstreetmap-r1

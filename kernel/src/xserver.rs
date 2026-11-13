@@ -19,8 +19,18 @@ const MAX_XCONN: usize = 8;
 
 /// Default screen geometry reported in the setup (refined to the real framebuffer
 /// once window mapping is wired to the compositor).
-const SCREEN_W: u16 = 1280;
-const SCREEN_H: u16 = 800;
+static SCREEN_W: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(1280);
+static SCREEN_H: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(800);
+fn screen_w() -> u16 { SCREEN_W.load(core::sync::atomic::Ordering::Relaxed) }
+fn screen_h() -> u16 { SCREEN_H.load(core::sync::atomic::Ordering::Relaxed) }
+
+/// The size of the X screen as clients see it in the connection setup, and the
+/// largest size a window can be given. The desktop sets it to the framebuffer
+/// before it starts a hosted client; 1280x800 until then.
+pub fn set_screen(w: usize, h: usize) {
+    SCREEN_W.store(w.clamp(640, 8192) as u16, core::sync::atomic::Ordering::Relaxed);
+    SCREEN_H.store(h.clamp(480, 8192) as u16, core::sync::atomic::Ordering::Relaxed);
+}
 
 // Fixed resource ids we hand out in the setup for the root window / visual / colormap.
 const ROOT_WINDOW: u32 = 0x0000_0001;
@@ -109,8 +119,123 @@ pub fn open() -> Option<u64> {
 
 pub fn close(fd: u64) {
     if is_xconn_fd(fd) {
-        XCONNS.lock()[(fd - XCONN_FD_BASE) as usize] = None;
+        let idx = (fd - XCONN_FD_BASE) as usize;
+        XCONNS.lock()[idx] = None;
+        SEL_OWNERS.lock().retain(|&(_, _, c)| c != idx);
+        XFIXES_SELECT.lock().retain(|e| e.0 != idx);
     }
+}
+
+/// The atom table: one id per name for every client, as the protocol says. (It
+/// used to be a fresh number per InternAtom call, so two clients, or one client
+/// asking twice, never agreed on what CLIPBOARD is.) Ids 1..=68 are predefined.
+const PREDEFINED_ATOMS: [&str; 68] = [
+    "PRIMARY", "SECONDARY", "ARC", "ATOM", "BITMAP", "CARDINAL", "COLORMAP", "CURSOR",
+    "CUT_BUFFER0", "CUT_BUFFER1", "CUT_BUFFER2", "CUT_BUFFER3", "CUT_BUFFER4", "CUT_BUFFER5",
+    "CUT_BUFFER6", "CUT_BUFFER7", "DRAWABLE", "FONT", "INTEGER", "PIXMAP", "POINT", "RECTANGLE",
+    "RESOURCE_MANAGER", "RGB_COLOR_MAP", "RGB_BEST_MAP", "RGB_BLUE_MAP", "RGB_DEFAULT_MAP",
+    "RGB_GRAY_MAP", "RGB_GREEN_MAP", "RGB_RED_MAP", "STRING", "VISUALID", "WINDOW", "WM_COMMAND",
+    "WM_HINTS", "WM_CLIENT_MACHINE", "WM_ICON_NAME", "WM_ICON_SIZE", "WM_NAME", "WM_NORMAL_HINTS",
+    "WM_SIZE_HINTS", "WM_ZOOM_HINTS", "MIN_SPACE", "NORM_SPACE", "MAX_SPACE", "END_SPACE",
+    "SUPERSCRIPT_X", "SUPERSCRIPT_Y", "SUBSCRIPT_X", "SUBSCRIPT_Y", "UNDERLINE_POSITION",
+    "UNDERLINE_THICKNESS", "STRIKEOUT_ASCENT", "STRIKEOUT_DESCENT", "ITALIC_ANGLE", "X_HEIGHT",
+    "QUAD_WIDTH", "WEIGHT", "POINT_SIZE", "RESOLUTION", "COPYRIGHT", "NOTICE", "FONT_NAME",
+    "FAMILY_NAME", "FULL_NAME", "CAP_HEIGHT", "WM_CLASS", "WM_TRANSIENT_FOR",
+];
+static ATOMS: Mutex<Vec<alloc::string::String>> = Mutex::new(Vec::new());
+
+/// The atom of `name`; 0 (None) when it does not exist and `only_if_exists`.
+fn intern_atom(name: &str, only_if_exists: bool) -> u32 {
+    if let Some(i) = PREDEFINED_ATOMS.iter().position(|a| *a == name) {
+        return i as u32 + 1;
+    }
+    let mut t = ATOMS.lock();
+    if let Some(i) = t.iter().position(|a| a == name) {
+        return 69 + i as u32;
+    }
+    if only_if_exists || t.len() >= 4096 {
+        return 0;
+    }
+    t.push(alloc::string::String::from(name));
+    68 + t.len() as u32
+}
+
+fn atom_name(atom: u32) -> Option<alloc::string::String> {
+    match atom {
+        1..=68 => Some(alloc::string::String::from(PREDEFINED_ATOMS[atom as usize - 1])),
+        _ => ATOMS.lock().get((atom as usize).checked_sub(69)?).cloned(),
+    }
+}
+
+/// The hosted desktop client (Chromium) gets the parts of a display server that
+/// the boot-phase test clients were never offered: XFIXES selection events and
+/// PropertyNotify. Set by the desktop before it starts the client.
+static DESKTOP_CLIENT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn set_desktop_client(on: bool) {
+    DESKTOP_CLIENT.store(on, core::sync::atomic::Ordering::Relaxed);
+    if !on {
+        XFIXES_SELECT.lock().clear();
+    }
+}
+/// XFIXES: major opcode, first event, first error (QueryExtension hands them out).
+const XFIXES_OPCODE: u8 = 138;
+const XFIXES_EVENT: u8 = 87;
+const XFIXES_ERROR: u8 = 140;
+/// XFixesSelectSelectionInput: (connection, window, selection atom, event mask).
+static XFIXES_SELECT: Mutex<Vec<(usize, u32, u32, u32)>> = Mutex::new(Vec::new());
+
+/// Who owns each selection: (selection atom, owner window, owner connection).
+/// Chrome copies by taking CLIPBOARD and then ASKS who owns it; only when the
+/// answer is its own window does it keep what was copied.
+static SEL_OWNERS: Mutex<Vec<(u32, u32, usize)>> = Mutex::new(Vec::new());
+
+/// The keyboard layout changed (`keymap`, the installer, the settings): every
+/// client gets a MappingNotify, on which it fetches the keyboard mapping again.
+pub fn keymap_changed() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        for conn in lock_home().iter_mut().flatten() {
+            if conn.state != State::Connected {
+                continue;
+            }
+            let mut e = [0u8; 32];
+            e[0] = 34; // MappingNotify
+            e[2..4].copy_from_slice(&conn.seq.to_le_bytes());
+            e[4] = 1; // request = Keyboard
+            e[5] = 8; // first keycode
+            e[6] = 248; // count
+            conn.outbuf.extend_from_slice(&e);
+        }
+    });
+}
+
+/// The desktop gave the hosted window's frame another size (resize grip,
+/// maximise, a smaller screen): the X window gets that size, a ConfigureNotify
+/// and an Expose, and the client lays itself out again and repaints.
+pub fn hosted_resize(w: usize, h: usize) {
+    let (w, h) = (w.clamp(64, screen_w() as usize) as u16, h.clamp(64, screen_h() as usize) as u16);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let shown = RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed);
+        if shown == 0 {
+            return;
+        }
+        let mut t = lock_home();
+        let Some(ci) = conn_of_window(&t[..], shown) else { return };
+        let Some(conn) = t[ci].as_mut() else { return };
+        let mut at = None;
+        if let Some(win) = conn.windows.iter_mut().find(|x| x.id == shown) {
+            if win.w != w || win.h != h {
+                win.w = w;
+                win.h = h;
+                win.buf = alloc::vec![win.bg; w as usize * h as usize];
+                at = Some((win.x, win.y));
+            }
+        }
+        if let Some((x, y)) = at {
+            send_configure_notify(conn, shown, x, y, w, h);
+            send_expose(conn, shown, w, h);
+            crate::serial_println!("[xserver] hosted window {shown:#x} resized to {w}x{h} by the desktop");
+        }
+    });
 }
 
 /// The client wrote `data` — feed the protocol state machine, producing replies.
@@ -121,17 +246,66 @@ pub fn write(fd: u64, data: &[u8]) -> u64 {
     // browser connection created), and holding the table lock across processing
     // made that lookup impossible.
     let idx = (fd - XCONN_FD_BASE) as usize;
-    let mut c = match XCONNS.lock().get_mut(idx).and_then(|s| s.take()) {
-        Some(c) => c,
-        None => return (-9i64) as u64, // -EBADF
+    if idx >= MAX_XCONN {
+        return (-9i64) as u64;
+    }
+    let mut c = {
+        let mut t = XCONNS.lock();
+        match t[idx].take() {
+            Some(c) => {
+                // Marked under the table lock: see lock_home().
+                OUT_MASK.fetch_or(1 << idx, core::sync::atomic::Ordering::Relaxed);
+                c
+            }
+            None => return (-9i64) as u64, // -EBADF
+        }
     };
     c.inbuf.extend_from_slice(data);
     process(&mut c);
-    if let Some(slot) = XCONNS.lock().get_mut(idx) {
-        *slot = Some(c);
+    {
+        let mut t = XCONNS.lock();
+        t[idx] = Some(c);
+        OUT_MASK.fetch_and(!(1 << idx), core::sync::atomic::Ordering::Relaxed);
     }
     data.len() as u64
 }
+
+/// Connections that are OUT of the table right now (bit = index): `write` takes
+/// a connection out while it processes that client's requests.
+static OUT_MASK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The connection table with EVERY connection in it, for whoever has an event to
+/// deliver. An input event that found its connection out of the table (the
+/// client busy in a PutImage on another core) had no owner to go to and was
+/// dropped: a key of a typed word, the release of a click, one press of a double
+/// click (BUG-094). The wait is as long as one batch of requests takes, on
+/// another core. On one core it never waits: a syscall is not preempted. Bounded
+/// anyway, so a mistake here costs an event and not the machine.
+fn lock_home() -> spin::MutexGuard<'static, [Option<XConn>; MAX_XCONN]> {
+    let mut spins = 0u32;
+    loop {
+        let t = XCONNS.lock();
+        if OUT_MASK.load(core::sync::atomic::Ordering::Relaxed) == 0 || spins > 20_000_000 {
+            if spins > 20_000_000 {
+                static SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+                if !SAID.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                    crate::serial_println!("[xserver] a connection stayed out of the table for 20M spins (mask {:#x}): delivering without it",
+                        OUT_MASK.load(core::sync::atomic::Ordering::Relaxed));
+                }
+            }
+            return t;
+        }
+        drop(t);
+        if spins == 0 {
+            HOME_WAITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+}
+/// How often an event had to wait for a connection that was out of the table
+/// (each of these was a dropped event before BUG-094). `cdiag` prints it.
+static HOME_WAITS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// The client is reading — drain up to `max` bytes of queued replies/events.
 /// Connections that have DRAINED events (called read and got bytes) — the ones with
@@ -212,8 +386,74 @@ fn input_target(c: &XConn, want: u32) -> Option<(u32, i16, i16)> {
 /// for shift-click, ctrl-click and drag; a hardcoded 0 makes every event a plain one.
 static MOD_STATE: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
 fn mod_state() -> u16 {
+    // Button1 = left (0x100), Button2 = middle (0x200), Button3 = right (0x400).
+    let b = crate::mouse::buttons();
     MOD_STATE.load(core::sync::atomic::Ordering::Relaxed)
-        | if crate::mouse::left_down() { 0x100 } else { 0 }
+        | if b & 0x1 != 0 { 0x100 } else { 0 }
+        | if b & 0x4 != 0 { 0x200 } else { 0 }
+        | if b & 0x2 != 0 { 0x400 } else { 0 }
+}
+/// An `E0` prefix was read from the scancode ring and its code is still to come.
+static KBD_EXT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The pointer's position in the hosted client's root coordinates (x << 16 | y),
+/// as the last event sent to it said. QueryPointer answers with it.
+static LAST_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The window a held mouse button belongs to (0 = no button held): X's implicit
+/// pointer grab, from the press to the release.
+static IMPLICIT_GRAB: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The keyboard half of the server's input state, for `cdiag`: the modifier
+/// word that goes into every event, the focus window, a pending `E0`.
+pub fn dump_input_state() {
+    crate::serial_println!("[xin] state: modifiers={:#x} (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons={:#x} focus={:#x} shown={:#x} E0-pending={}",
+        MOD_STATE.load(core::sync::atomic::Ordering::Relaxed), crate::mouse::buttons(),
+        FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed),
+        RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed),
+        KBD_EXT.load(core::sync::atomic::Ordering::Relaxed));
+    let sel: Vec<_> = SEL_OWNERS.lock().clone();
+    crate::serial_println!("[xin] selections owned (atom, window, connection): {sel:?}");
+    crate::serial_println!("[xin] events that waited for a connection busy on another core: {}",
+        HOME_WAITS.load(core::sync::atomic::Ordering::Relaxed));
+    let t = lock_home();
+    for (ci, c) in t.iter().enumerate() {
+        if let Some(c) = c {
+            let wins: Vec<_> = c.windows.iter().filter(|w| w.w > 1 && w.h > 1)
+                .map(|w| (w.id, w.x, w.y, w.w, w.h, w.mapped)).collect();
+            crate::serial_println!("[xin] connection {ci}: {} B queued, {} windows, larger than 1x1 (id, x, y, w, h, mapped): {wins:x?}",
+                c.outbuf.len(), c.windows.len());
+        }
+    }
+}
+
+/// The X keycode of a set-1 scancode: the evdev code + 8, which is what every X
+/// client's keycode tables assume. The main block is scancode + 8; the extended
+/// (`E0`) keys have codes of their own. 0 = a key this server does not know.
+fn x_keycode(ext: bool, code: u8) -> u8 {
+    if !ext {
+        return code + 8;
+    }
+    match code {
+        0x1C => 104, // KP_Enter
+        0x1D => 105, // Control_R
+        0x35 => 106, // KP_Divide
+        0x38 => 108, // AltGr
+        0x47 => 110, // Home
+        0x48 => 111, // Up
+        0x49 => 112, // Prior
+        0x4B => 113, // Left
+        0x4D => 114, // Right
+        0x4F => 115, // End
+        0x50 => 116, // Down
+        0x51 => 117, // Next
+        0x52 => 118, // Insert
+        0x53 => 119, // Delete
+        0x5B => 133, // Super_L
+        0x5C => 134, // Super_R
+        0x5D => 135, // Menu
+        _ => 0,
+    }
 }
 
 /// Pump REAL keyboard input into X key events. Pops PS/2 scancodes and delivers a
@@ -226,7 +466,7 @@ pub fn pump_keyboard() {
     // XCONNS with IF=0 — a preemption holding this lock would deadlock (BUG-007 class).
     x86_64::instructions::interrupts::without_interrupts(|| {
         let wants = {
-            let t = XCONNS.lock();
+            let t = lock_home();
             t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x3 != 0))
         };
         if !wants {
@@ -244,14 +484,24 @@ pub fn pump_keyboard() {
                     crate::serial_println!("[sc] {sc:#04x}");
                 }
             }
+            // An extended key is two bytes, `E0` and the code, and they can arrive
+            // in different calls. Taking `E0` for a key (code 0x60, a release) and
+            // the code after it for a plain key turned every arrow into a keypad
+            // digit and AltGr into Alt.
+            if sc == 0xE0 {
+                KBD_EXT.store(true, core::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+            let ext = KBD_EXT.swap(false, core::sync::atomic::Ordering::Relaxed);
             let pressed = sc & 0x80 == 0;
             let code = sc & 0x7f;
             // Track the modifiers ourselves: the state field of EVERY event carries
             // them, and a key event only means "A" instead of "a" because of it.
-            let bit: u16 = match code {
-                0x2a | 0x36 => 0x1, // Shift_L / Shift_R
-                0x1d => 0x4,        // Control_L
-                0x38 => 0x8,        // Alt_L (mod1)
+            let bit: u16 = match (ext, code) {
+                (false, 0x2a) | (false, 0x36) => 0x1, // Shift_L / Shift_R
+                (_, 0x1d) => 0x4,                     // Control_L / Control_R
+                (false, 0x38) => 0x8,                 // Alt_L (Mod1)
+                (true, 0x38) => 0x80,                 // AltGr = Mode_switch (Mod5)
                 _ => 0,
             };
             if bit != 0 {
@@ -261,14 +511,23 @@ pub fn pump_keyboard() {
                     MOD_STATE.fetch_and(!bit, core::sync::atomic::Ordering::Relaxed);
                 }
             }
-            let keycode = code + 8; // X keycode = PS/2 scancode + 8
+            // Caps Lock toggles the Lock bit on its press.
+            if !ext && code == 0x3a && pressed {
+                MOD_STATE.fetch_xor(0x2, core::sync::atomic::Ordering::Relaxed);
+            }
+            let keycode = x_keycode(ext, code);
+            trace(format_args!("key sc={sc:#04x} ext={ext} -> keycode {keycode} {} state={:#x}",
+                if pressed { "press" } else { "release" }, MOD_STATE.load(core::sync::atomic::Ordering::Relaxed)));
+            if keycode == 0 {
+                continue;
+            }
             let want: u32 = if pressed { 0x1 } else { 0x2 }; // KeyPress / KeyRelease mask
             let kind: u8 = if pressed { 2 } else { 3 };
             // Ferry typed characters to the page over the CDP bridge as well (the
             // reliable route; see pump_mouse). Presses only; layout = our qwerty
             // keysym table, shift honoured. Enter goes as a raw key event — an
             // inserted "\r" does not submit forms or activate links.
-            if pressed {
+            if pressed && crate::ring3::cdp_ferry() {
                 let (lo, hi) = keysym_for(keycode);
                 let shifted = MOD_STATE.load(core::sync::atomic::Ordering::Relaxed) & 0x1 != 0;
                 let ks = if shifted { hi } else { lo };
@@ -281,7 +540,7 @@ pub fn pump_keyboard() {
             }
             let (mx, my) = crate::mouse::pos();
             #[allow(unused_assignments)]
-            let mut t = XCONNS.lock();
+            let mut t = lock_home();
             // A key belongs to ONE window: the one holding the input focus, else the
             // one on top of the screen. Broadcasting a keystroke to every window was
             // survivable with a single demo client and is not, once a browser has a
@@ -296,7 +555,7 @@ pub fn pump_keyboard() {
                                     mx as i16, my as i16) > 0 {
                     continue;
                 }
-                t = XCONNS.lock();
+                t = lock_home();
             }
             if let Some(ci) = chosen.and_then(|w| conn_of_window(&t[..], w)) {
                 let wid = chosen.unwrap();
@@ -382,7 +641,7 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
             crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
             let readers: Vec<_> = READER_CONNS.lock().clone();
             crate::serial_println!("[xin]   readers={readers:?} focus={:#x}", FOCUS_WINDOW.load(core::sync::atomic::Ordering::Relaxed));
-            let t = XCONNS.lock();
+            let t = lock_home();
             for (ci, c) in t.iter().enumerate() {
                 if let Some(c) = c {
                     let wins: Vec<_> = c.windows.iter()
@@ -393,22 +652,16 @@ fn deliver_selected(win: u32, want: u32, kind: u8, detail: u8, rx: i16, ry: i16,
         }
     }
     // Every connection that selected `want` on `win`...
-    let mut targets: Vec<usize> = SELECTIONS.lock().iter()
+    let targets: Vec<usize> = SELECTIONS.lock().iter()
         .filter(|(w, _, m)| *w == win && (want == 0 || m & want != 0))
         .map(|(_, c, _)| *c)
         .collect();
-    // ...PLUS every connection with a live event loop (a reader). Chrome's browser
-    // connection selects input on its window but never polls that socket — its input
-    // thread pumps a DIFFERENT connection, and X input for the UI is routed to it.
-    // Without this the event sits unread on a connection nobody reads (measured:
-    // only fd606 was ever polled; the click queued forever on fd603).
-    for r in READER_CONNS.lock().iter() {
-        if !targets.contains(r) {
-            targets.push(*r);
-        }
-    }
+    // Only the selectors. Until BUG-090 the browser's first connection (the one
+    // that selects input on its window) was dead to xcb, and a copy of every event
+    // went to each connection that had ever read anything; with that connection
+    // alive a copy is a second key press.
     let mut sent = 0;
-    let mut t = XCONNS.lock();
+    let mut t = lock_home();
     for ci in targets {
         if let Some(Some(conn)) = t.get_mut(ci).map(|s| s.as_mut()) {
             // If this connection does NOT own `win`, its xcb event demux has no
@@ -573,7 +826,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
                 crate::serial_println!("[xin]   selections(win,conn,mask)={sel:?}");
                 let readers: Vec<_> = READER_CONNS.lock().clone();
                 crate::serial_println!("[xin]   readers={readers:?}");
-                let t = XCONNS.lock();
+                let t = lock_home();
                 for (ci, c) in t.iter().enumerate() {
                     if let Some(c) = c {
                         let wins: Vec<_> = c.windows.iter().filter(|w| w.mapped)
@@ -594,7 +847,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
             if sent > 0 {
                 return;
             }
-            let mut t = XCONNS.lock();
+            let mut t = lock_home();
             if let Some(ci) = conn_of_window(&t[..], wid) {
                 if let Some(conn) = t[ci].as_mut() {
                     let ok = conn.windows.iter().find(|w| w.id == wid)
@@ -607,7 +860,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
             }
             return;
         }
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         for conn in t.iter_mut().flatten() {
             if let Some((wid, wx, wy)) = input_target(conn, require_mask) {
                 send_input(conn, kind, detail, wid, px as i16, py as i16,
@@ -626,7 +879,7 @@ fn deliver_pointer(kind: u8, detail: u8, px: usize, py: usize, require_mask: u32
 /// sends this when the hosted X window gains/loses focus. IRQ-safe.
 pub fn deliver_focus(focused: bool) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         for conn in t.iter_mut().flatten() {
             if let Some(wid) = conn.windows.iter().filter(|w| w.mapped && w.w > 1 && w.h > 1)
                 .max_by_key(|w| w.w as u32 * w.h as u32).map(|w| w.id)
@@ -660,6 +913,32 @@ pub fn deliver_button(lx: i16, ly: i16) {
     trace(format_args!("deliver_button local=({lx},{ly})"));
 }
 
+/// A mouse button went DOWN over the hosted window, at window-local coordinates:
+/// the pointer is moved there first, then the ButtonPress. `button`: 1 left,
+/// 2 middle, 3 right. The release comes separately ([`hosted_release`]), when the
+/// physical button goes up, so a drag (text selection, a scrollbar, a slider) is a
+/// press, motion with the button in the state, and a release, as on any X server.
+pub fn hosted_press(button: u8, lx: i16, ly: i16) {
+    deliver_to_shown(6, 0, lx, ly);
+    deliver_to_shown(4, button, lx, ly);
+}
+
+/// The button went up again; the pointer may be outside the window by now
+/// (coordinates beyond its edges are what X reports during a grab).
+pub fn hosted_release(button: u8, lx: i16, ly: i16) {
+    deliver_to_shown(5, button, lx, ly);
+}
+
+/// The mouse wheel over the hosted window: X has no wheel event, a notch is a
+/// press and release of button 4 (up) or 5 (down). `notches` > 0 = scroll down.
+pub fn hosted_wheel(notches: i32, lx: i16, ly: i16) {
+    let button = if notches > 0 { 5 } else { 4 };
+    for _ in 0..notches.unsigned_abs().min(32) {
+        deliver_to_shown(4, button, lx, ly);
+        deliver_to_shown(5, button, lx, ly);
+    }
+}
+
 /// Pointer motion from the desktop into the hosted window (hover). Same routing as the
 /// click, so whatever highlights under the cursor is what a click would actually hit.
 pub fn deliver_motion(lx: i16, ly: i16) {
@@ -671,14 +950,38 @@ pub fn deliver_motion(lx: i16, ly: i16) {
 /// when nothing has been retained yet.
 fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut t = XCONNS.lock();
+        let mut t = lock_home();
         let shown = RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed);
         if shown != 0 {
             if let Some(ci) = conn_of_window(&t[..], shown) {
                 if let Some(conn) = t[ci].as_mut() {
-                    let (wx, wy) = conn.windows.iter().find(|w| w.id == shown)
-                        .map(|w| (w.x, w.y)).unwrap_or((0, 0));
-                    send_input(conn, kind, detail, shown, lx + wx, ly + wy, lx, ly);
+                    let (mx, my) = conn.windows.iter().find(|w| w.id == shown)
+                        .map(|w| (w.x as i32, w.y as i32)).unwrap_or((0, 0));
+                    let (rx, ry) = (lx as i32 + mx, ly as i32 + my);
+                    // The window under the pointer: the newest popup that contains
+                    // it, else the main window. While a button is held the events
+                    // stay with the window the press went to (X's implicit grab),
+                    // so a drag that crosses a popup or leaves the window is whole.
+                    let held = IMPLICIT_GRAB.load(core::sync::atomic::Ordering::Relaxed);
+                    let target = conn.windows.iter().rev()
+                        .filter(|w| w.mapped && w.w > 1 && w.h > 1)
+                        .find(|w| if held != 0 { w.id == held } else {
+                            w.id != shown && rx >= w.x as i32 && ry >= w.y as i32
+                                && rx < w.x as i32 + w.w as i32 && ry < w.y as i32 + w.h as i32
+                        })
+                        .map(|w| (w.id, w.x as i32, w.y as i32))
+                        .unwrap_or((shown, mx, my));
+                    if (1..=3).contains(&detail) {
+                        if kind == 4 && held == 0 {
+                            IMPLICIT_GRAB.store(target.0, core::sync::atomic::Ordering::Relaxed);
+                        } else if kind == 5 && crate::mouse::buttons() == 0 {
+                            IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    LAST_ROOT.store(((rx as i16 as u16 as u32) << 16) | ry as i16 as u16 as u32,
+                        core::sync::atomic::Ordering::Relaxed);
+                    send_input(conn, kind, detail, target.0, rx as i16, ry as i16,
+                               (rx - target.1) as i16, (ry - target.2) as i16);
                     return;
                 }
             }
@@ -693,40 +996,70 @@ fn deliver_to_shown(kind: u8, detail: u8, lx: i16, ly: i16) {
     });
 }
 
-/// US-QWERTY X keysyms for a keycode (which is PS/2 set-1 scancode + 8, matching the
-/// standard X keycodes): returns (unshifted, shifted). NoSymbol (0,0) if unmapped.
-fn keysym_for(kc: u8) -> (u32, u32) {
-    // Letters: lowercase = ASCII, shifted = uppercase.
-    let letter = |c: u8| (c as u32, (c - 0x20) as u32);
-    match kc {
-        9 => (0xff1b, 0xff1b),   // Escape
-        10 => (0x31, 0x21), 11 => (0x32, 0x40), 12 => (0x33, 0x23), 13 => (0x34, 0x24),
-        14 => (0x35, 0x25), 15 => (0x36, 0x5e), 16 => (0x37, 0x26), 17 => (0x38, 0x2a),
-        18 => (0x39, 0x28), 19 => (0x30, 0x29), // 1..9 0
-        20 => (0x2d, 0x5f), 21 => (0x3d, 0x2b), // - =
-        22 => (0xff08, 0xff08), // BackSpace
-        23 => (0xff09, 0xff09), // Tab
-        24 => letter(b'q'), 25 => letter(b'w'), 26 => letter(b'e'), 27 => letter(b'r'),
-        28 => letter(b't'), 29 => letter(b'y'), 30 => letter(b'u'), 31 => letter(b'i'),
-        32 => letter(b'o'), 33 => letter(b'p'),
-        34 => (0x5b, 0x7b), 35 => (0x5d, 0x7d), // [ ]
-        36 => (0xff0d, 0xff0d), // Return
-        37 => (0xffe3, 0xffe3), // Control_L
-        38 => letter(b'a'), 39 => letter(b's'), 40 => letter(b'd'), 41 => letter(b'f'),
-        42 => letter(b'g'), 43 => letter(b'h'), 44 => letter(b'j'), 45 => letter(b'k'),
-        46 => letter(b'l'),
-        47 => (0x3b, 0x3a), 48 => (0x27, 0x22), 49 => (0x60, 0x7e), // ; ' `
-        50 => (0xffe1, 0xffe1), // Shift_L
-        51 => (0x5c, 0x7c), // backslash |
-        52 => letter(b'z'), 53 => letter(b'x'), 54 => letter(b'c'), 55 => letter(b'v'),
-        56 => letter(b'b'), 57 => letter(b'n'), 58 => letter(b'm'),
-        59 => (0x2c, 0x3c), 60 => (0x2e, 0x3e), 61 => (0x2f, 0x3f), // , . /
-        62 => (0xffe2, 0xffe2), // Shift_R
-        64 => (0xffe9, 0xffe9), // Alt_L
-        65 => (0x20, 0x20), // space
-        66 => (0xffe5, 0xffe5), // Caps_Lock
-        _ => (0, 0),
+/// The keysym of a character: Latin-1 is its own keysym, the euro sign has a
+/// legacy one, everything else is the Unicode keysym (0x01000000 + code point).
+fn char_keysym(c: char) -> u32 {
+    match c as u32 {
+        0x20..=0x7e | 0xa0..=0xff => c as u32,
+        0x20ac => 0x20ac,
+        u => 0x0100_0000 | u,
     }
+}
+
+/// The four keysyms of a keycode, from the ACTIVE keyboard layout (ps2::layout,
+/// the one the rest of the system types with): group 1 = (plain, Shift), group 2
+/// = (AltGr, AltGr+Shift). AltGr is Mode_switch, which is how the core protocol
+/// selects the second group. NoSymbol (0) where a level has nothing.
+fn keysyms4(kc: u8) -> [u32; 4] {
+    let both = |k: u32| [k, k, 0, 0];
+    match kc {
+        9 => both(0xff1b),            // Escape
+        22 => both(0xff08),           // BackSpace
+        23 => [0xff09, 0xfe20, 0, 0], // Tab, ISO_Left_Tab
+        36 => both(0xff0d),           // Return
+        37 => both(0xffe3),           // Control_L
+        50 => both(0xffe1),           // Shift_L
+        62 => both(0xffe2),           // Shift_R
+        64 => both(0xffe9),           // Alt_L
+        65 => both(0x20),             // space
+        66 => both(0xffe5),           // Caps_Lock
+        67..=76 => both(0xffbe + (kc as u32 - 67)), // F1..F10
+        77 => both(0xff7f),           // Num_Lock
+        95 => both(0xffc8),           // F11
+        96 => both(0xffc9),           // F12
+        104 => both(0xff8d),          // KP_Enter
+        105 => both(0xffe4),          // Control_R
+        106 => both(0xffaf),          // KP_Divide
+        108 => both(0xff7e),          // Mode_switch (AltGr)
+        110 => both(0xff50),          // Home
+        111 => both(0xff52),          // Up
+        112 => both(0xff55),          // Prior
+        113 => both(0xff51),          // Left
+        114 => both(0xff53),          // Right
+        115 => both(0xff57),          // End
+        116 => both(0xff54),          // Down
+        117 => both(0xff56),          // Next
+        118 => both(0xff63),          // Insert
+        119 => both(0xffff),          // Delete
+        133 => both(0xffeb),          // Super_L
+        134 => both(0xffec),          // Super_R
+        135 => both(0xff67),          // Menu
+        10..=94 => {
+            let sc = kc - 8;
+            let layout = crate::ps2::layout();
+            let ks = |shift: bool| eurokeymap::translate(layout, sc, shift)
+                .filter(|c| !c.is_control()).map(char_keysym).unwrap_or(0);
+            let l3 = eurokeymap::level3(layout, sc).map(char_keysym).unwrap_or(0);
+            [ks(false), ks(true), l3, l3]
+        }
+        _ => [0; 4],
+    }
+}
+
+/// (plain, shifted) keysym of a keycode.
+fn keysym_for(kc: u8) -> (u32, u32) {
+    let k = keysyms4(kc);
+    (k[0], k[1])
 }
 
 fn trace(args: core::fmt::Arguments) {
@@ -819,15 +1152,72 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // GenericEvents instead of core ButtonPress) is the whole question about
             // why it reads our click and does nothing.
             let nlen = ru16(c, req, 4) as usize;
+            let mut xfixes = false;
             if req.len() >= 8 + nlen {
                 let name = alloc::string::String::from_utf8_lossy(&req[8..8 + nlen]);
-                trace(format_args!("QueryExtension {:?} -> not present", name));
+                xfixes = name == "XFIXES" && DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed);
+                trace(format_args!("QueryExtension {:?} -> {}", name, if xfixes { "present" } else { "not present" }));
             }
             let mut r = reply_header(c, 0);
             // 24 extra bytes already zero: present(1)=0, major(1), first-event(1),
-            // first-error(1), then 20 unused. Nothing more to set.
+            // first-error(1), then 20 unused.
+            if xfixes {
+                r[8] = 1;
+                r[9] = XFIXES_OPCODE;
+                r[10] = XFIXES_EVENT;
+                r[11] = XFIXES_ERROR;
+            }
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
+        }
+        // XFIXES, as far as a client needs it to learn that a selection changed
+        // hands: QueryVersion (minor 0) and SelectSelectionInput (minor 2). The
+        // other requests a toolkit sends (cursor hide/show, regions) owe no
+        // reply and are ignored; the four that do get BadImplementation.
+        XFIXES_OPCODE if DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed) => match detail {
+            0 => {
+                let major = ru32(c, req, 4).min(5);
+                let mut r = reply_header(c, 0);
+                wr32(c, &mut r, 8, major);
+                wr32(c, &mut r, 12, 0);
+                c.outbuf.extend_from_slice(&r);
+            }
+            2 => {
+                let win = ru32(c, req, 4);
+                let sel = ru32(c, req, 8);
+                let mask = ru32(c, req, 12);
+                let me = conn_index(c);
+                let mut t = XFIXES_SELECT.lock();
+                t.retain(|e| !(e.0 == me && e.1 == win && e.2 == sel));
+                if mask != 0 {
+                    t.push((me, win, sel, mask));
+                }
+                trace(format_args!("XFixesSelectSelectionInput window={win:#x} selection={sel} mask={mask:#x}"));
+            }
+            4 | 19 | 24 | 25 | 34 => send_error(c, 17, 0, opcode, detail as u16),
+            _ => {}
+        },
+        // ChangeProperty (18) / DeleteProperty (19): properties are not stored, but a
+        // client that selected PropertyChange on the window is told, with the server
+        // time. That event is how a toolkit ASKS for the server time (a no-op
+        // property change, then it waits for the notify); without it chrome stamps
+        // its selections with CurrentTime.
+        18 | 19 if DESKTOP_CLIENT.load(core::sync::atomic::Ordering::Relaxed) => {
+            let win = ru32(c, req, 4);
+            let atom = ru32(c, req, 8);
+            let me = conn_index(c);
+            let wants = SELECTIONS.lock().iter().any(|(w, ci, m)| *w == win && *ci == me && m & 0x0040_0000 != 0)
+                || c.windows.iter().any(|w| w.id == win && w.event_mask & 0x0040_0000 != 0);
+            if wants {
+                let mut e = [0u8; 32];
+                e[0] = 28; // PropertyNotify
+                e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                e[4..8].copy_from_slice(&win.to_le_bytes());
+                e[8..12].copy_from_slice(&atom.to_le_bytes());
+                e[12..16].copy_from_slice(&((crate::interrupts::ticks() * 10) as u32).to_le_bytes());
+                e[16] = if opcode == 19 { 1 } else { 0 }; // Deleted / NewValue
+                c.outbuf.extend_from_slice(&e);
+            }
         }
         // GetInputFocus (43): Xlib's sync/roundtrip. Reply: revert-to + focus window.
         43 => {
@@ -839,12 +1229,103 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
         }
-        // InternAtom (16): hand back a synthetic atom id (seq-based, nonzero).
+        // InternAtom (16): only-if-exists in the detail byte, name length@4, name@8.
         16 => {
+            let n = ru16(c, req, 4) as usize;
+            let name = alloc::string::String::from_utf8_lossy(req.get(8..8 + n).unwrap_or(&[])).into_owned();
+            let atom = intern_atom(&name, detail != 0);
             let mut r = reply_header(c, 0);
-            wr32(c, &mut r, 8, 0x1000 + c.seq as u32); // atom
+            wr32(c, &mut r, 8, atom);
             pad_reply(&mut r);
             c.outbuf.extend_from_slice(&r);
+        }
+        // GetAtomName (17): atom@4. Reply: name length@8, the name padded to 4.
+        17 => {
+            let atom = ru32(c, req, 4);
+            match atom_name(atom) {
+                Some(name) => {
+                    let mut r = reply_header(c, name.len().div_ceil(4) as u32);
+                    put16(c, &mut r, 8, name.len() as u16);
+                    r[32..32 + name.len()].copy_from_slice(name.as_bytes());
+                    c.outbuf.extend_from_slice(&r);
+                }
+                None => send_error(c, 5, atom, 17, 0), // BadAtom
+            }
+        }
+        // SetSelectionOwner (22): owner@4 (None = give it up), selection@8, time@12.
+        // The previous owner, if it is another window, is told with SelectionClear.
+        22 => {
+            let owner = ru32(c, req, 4);
+            let sel = ru32(c, req, 8);
+            let me = conn_index(c);
+            let prev = {
+                let mut t = SEL_OWNERS.lock();
+                let prev = t.iter().find(|e| e.0 == sel).copied();
+                t.retain(|e| e.0 != sel);
+                if owner != 0 {
+                    t.push((sel, owner, me));
+                }
+                prev
+            };
+            if let Some((_, pwin, pconn)) = prev {
+                if pwin != owner {
+                    let mut e = [0u8; 32];
+                    e[0] = 29; // SelectionClear
+                    e[4..8].copy_from_slice(&((crate::interrupts::ticks() * 10) as u32).to_le_bytes());
+                    e[8..12].copy_from_slice(&pwin.to_le_bytes());
+                    e[12..16].copy_from_slice(&sel.to_le_bytes());
+                    if pconn == me {
+                        e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                        c.outbuf.extend_from_slice(&e);
+                    } else if let Some(Some(o)) = XCONNS.lock().get_mut(pconn).map(|x| x.as_mut()) {
+                        e[2..4].copy_from_slice(&o.seq.to_le_bytes());
+                        o.outbuf.extend_from_slice(&e);
+                    }
+                }
+            }
+            // XFIXES: everyone who asked to hear about this selection. Chrome counts
+            // these events: its clipboard "sequence number" only moves when one
+            // arrives, and a paste within five seconds of the previous one is
+            // answered from a cache keyed by that number. Without the event the
+            // second of two quick copy-and-pastes pasted the FIRST text.
+            let subs: Vec<(usize, u32)> = XFIXES_SELECT.lock().iter()
+                .filter(|e| e.2 == sel && e.3 & 0x1 != 0).map(|e| (e.0, e.1)).collect();
+            let now = (crate::interrupts::ticks() * 10) as u32;
+            for (ci, win) in subs {
+                let mut e = [0u8; 32];
+                e[0] = XFIXES_EVENT; // XFixesSelectionNotify
+                e[1] = 0; // subtype: SetSelectionOwner
+                e[4..8].copy_from_slice(&win.to_le_bytes());
+                e[8..12].copy_from_slice(&owner.to_le_bytes());
+                e[12..16].copy_from_slice(&sel.to_le_bytes());
+                e[16..20].copy_from_slice(&now.to_le_bytes());
+                e[20..24].copy_from_slice(&now.to_le_bytes());
+                if ci == me {
+                    e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+                    c.outbuf.extend_from_slice(&e);
+                } else if let Some(Some(o)) = XCONNS.lock().get_mut(ci).map(|x| x.as_mut()) {
+                    e[2..4].copy_from_slice(&o.seq.to_le_bytes());
+                    o.outbuf.extend_from_slice(&e);
+                }
+            }
+            trace(format_args!("SetSelectionOwner selection={sel} owner={owner:#x}"));
+        }
+        // ConvertSelection (24): requestor@4, selection@8, target@12, property@16,
+        // time@20. Nobody owns it, or the owner is the asking connection's own
+        // window (a client answers itself without the server): SelectionNotify
+        // with property None, so the requestor does not wait. Handing a request to
+        // an owner on ANOTHER connection (SelectionRequest, properties, SendEvent)
+        // is not implemented: that paste comes up empty.
+        24 => {
+            let mut e = [0u8; 32];
+            e[0] = 31; // SelectionNotify
+            e[2..4].copy_from_slice(&c.seq.to_le_bytes());
+            e[4..8].copy_from_slice(&req[20..24]);   // time
+            e[8..12].copy_from_slice(&req[4..8]);    // requestor
+            e[12..16].copy_from_slice(&req[8..12]);  // selection
+            e[16..20].copy_from_slice(&req[12..16]); // target
+            // property@20 = None
+            c.outbuf.extend_from_slice(&e);
         }
         // GetProperty (20): reply "no property" (type=None, all lengths 0).
         20 => {
@@ -865,8 +1346,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // (set_default_size -> ConfigureWindow) then drives the final geometry.
             let raw_w = ru16(c, req, 16);
             let raw_h = ru16(c, req, 18);
-            let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, SCREEN_W) };
-            let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, SCREEN_H) };
+            let w = if raw_w >= 8192 { 400 } else { raw_w.clamp(1, screen_w()) };
+            let h = if raw_h >= 8192 { 260 } else { raw_h.clamp(1, screen_h()) };
             // CWBackPixel (0x2): the window starts filled with its background, as a
             // core-X client expects (hello-x11 asked for WhitePixel and got dark).
             let bg = value_at(c, req, 28, 32, 0x2).map(|v| v | 0xff00_0000).unwrap_or(0xff20_2020);
@@ -1005,6 +1486,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let mask = ru16(c, req, 8) as u32;
             let mut voff = 12usize;
             let (mut nw, mut nh) = (None, None);
+            let (mut nx, mut ny): (Option<i16>, Option<i16>) = (None, None);
             for bit in 0..7 {
                 if mask & (1 << bit) != 0 {
                     let v = ru32(c, req, voff);
@@ -1012,15 +1494,25 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     // asks for its full unconstrained size; honouring it would make a
                     // giant window. Keep the current size for those.
                     match bit {
-                        2 if v < 8192 => nw = Some((v as u16).clamp(1, SCREEN_W)),
-                        3 if v < 8192 => nh = Some((v as u16).clamp(1, SCREEN_H)),
+                        // x and y: where a popup sits (a tooltip follows the pointer).
+                        0 => nx = Some(v as i16),
+                        1 => ny = Some(v as i16),
+                        2 if v < 8192 => nw = Some((v as u16).clamp(1, screen_w())),
+                        3 if v < 8192 => nh = Some((v as u16).clamp(1, screen_h())),
                         _ => {}
                     }
                     voff += 4;
                 }
             }
             let mut notify = None;
+            let mut moved = false;
             if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
+                if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                    let (x, y) = (nx.unwrap_or(win.x), ny.unwrap_or(win.y));
+                    moved = (x, y) != (win.x, win.y) && win.mapped;
+                    win.x = x;
+                    win.y = y;
+                }
                 let w = nw.unwrap_or(win.w);
                 let h = nh.unwrap_or(win.h);
                 if w != win.w || h != win.h {
@@ -1032,7 +1524,10 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                     notify = Some((win.x, win.y, win.w, win.h));
                 }
             }
-            trace(format_args!("ConfigureWindow id={id:#x} -> {:?}x{:?}", nw, nh));
+            trace(format_args!("ConfigureWindow id={id:#x} -> {:?}x{:?} at {:?},{:?}", nw, nh, nx, ny));
+            if moved {
+                compose_windowed(c);
+            }
             if let Some((x, y, w, h)) = notify {
                 send_configure_notify(c, id, x, y, w, h);
                 send_expose(c, id, w, h);
@@ -1081,8 +1576,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
         // An off-screen buffer GTK renders its widget tree into. No reply.
         53 => {
             let id = ru32(c, req, 4);
-            let w = ru16(c, req, 12).clamp(1, SCREEN_W);
-            let h = ru16(c, req, 14).clamp(1, SCREEN_H);
+            let w = ru16(c, req, 12).clamp(1, screen_w());
+            let h = ru16(c, req, 14).clamp(1, screen_h());
             c.pixmaps.push(XPixmap { id, w, h, buf: alloc::vec![0xff00_0000u32; w as usize * h as usize] });
             trace(format_args!("CreatePixmap id={id:#x} {w}x{h}"));
         }
@@ -1107,11 +1602,13 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             trace(format_args!("CopyArea src={src:#x} dst={dst:#x} {w}x{h} @({dx},{dy})"));
             present(c, dst);
         }
-        // GetSelectionOwner(23): report None (0) — no selection owner. GTK checks the
-        // clipboard/WM/CM selections at startup; None is a valid answer.
+        // GetSelectionOwner(23): selection@4 -> the window SetSelectionOwner named,
+        // None (0) when nobody owns it.
         23 => {
+            let sel = ru32(c, req, 4);
+            let owner = SEL_OWNERS.lock().iter().find(|e| e.0 == sel).map(|e| e.1).unwrap_or(0);
             let mut r = reply_header(c, 0);
-            wr32(c, &mut r, 8, 0); // owner = None
+            wr32(c, &mut r, 8, owner);
             c.outbuf.extend_from_slice(&r);
         }
         // GetGeometry(14): drawable@4. Reply: depth in r[1], root, x,y,w,h,border.
@@ -1119,7 +1616,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let id = ru32(c, req, 4);
             let (x, y, w, h) = c.windows.iter().find(|w| w.id == id)
                 .map(|win| (win.x, win.y, win.w, win.h))
-                .unwrap_or((0, 0, SCREEN_W, SCREEN_H));
+                .unwrap_or((0, 0, screen_w(), screen_h()));
             let mut r = reply_header(c, 0);
             r[1] = 24; // depth
             wr32(c, &mut r, 8, ROOT_WINDOW); // root
@@ -1161,18 +1658,32 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             put16(c, &mut r, 40, 0);                  // do-not-propagate-mask
             c.outbuf.extend_from_slice(&r);
         }
-        // QueryPointer(38): pointer on root, at the live mouse position, no buttons.
+        // QueryPointer(38): window@4. Where the pointer is, in the SAME coordinates
+        // the events carry. In the desktop frame that is not the screen position
+        // of the mouse: the client's root coordinates are its window's X position
+        // plus the offset inside the frame (LAST_ROOT, from the last event sent).
+        // Answering with the raw screen position told the client its pointer was
+        // somewhere else than its own events said, by the frame's offset on the
+        // desktop; after the user moved the frame, often outside the window.
         38 => {
             let (mx, my) = crate::mouse::pos();
+            let (rx, ry) = if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                let p = LAST_ROOT.load(core::sync::atomic::Ordering::Relaxed);
+                ((p >> 16) as i16, p as i16)
+            } else {
+                (mx as i16, my as i16)
+            };
+            let win = ru32(c, req, 4);
+            let (wx, wy) = c.windows.iter().find(|w| w.id == win).map(|w| (w.x, w.y)).unwrap_or((0, 0));
             let mut r = reply_header(c, 0);
             r[1] = 1; // same-screen = true
             wr32(c, &mut r, 8, ROOT_WINDOW);   // root
             wr32(c, &mut r, 12, 0);            // child = None
-            put16(c, &mut r, 16, mx as u16);   // root-x
-            put16(c, &mut r, 18, my as u16);   // root-y
-            put16(c, &mut r, 20, mx as u16);   // win-x
-            put16(c, &mut r, 22, my as u16);   // win-y
-            put16(c, &mut r, 24, 0);           // mask (buttons/mods)
+            put16(c, &mut r, 16, rx as u16);   // root-x
+            put16(c, &mut r, 18, ry as u16);   // root-y
+            put16(c, &mut r, 20, (rx - wx) as u16); // win-x
+            put16(c, &mut r, 22, (ry - wy) as u16); // win-y
+            put16(c, &mut r, 24, mod_state()); // mask (buttons/mods)
             c.outbuf.extend_from_slice(&r);
         }
         // TranslateCoordinates(40): src-x@12(i16), src-y@14 → echo (windows share the
@@ -1193,21 +1704,23 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             wr32(c, &mut r, 8, 0); // number of events = 0
             c.outbuf.extend_from_slice(&r);
         }
-        // GetKeyboardMapping(101): first-keycode@4, count@5. Return a US-QWERTY keymap
-        // (2 keysyms/keycode: unshifted, shifted). Our keycodes are scancode+8, which
-        // match the standard X keycodes, so a toolkit maps keycode->keysym->character.
+        // GetKeyboardMapping(101): first-keycode@4, count@5. Four keysyms per
+        // keycode from the active layout: plain, Shift, AltGr, AltGr+Shift (the
+        // second pair is group 2, which Mode_switch selects). Keycodes are the
+        // evdev code + 8, so a toolkit maps keycode -> keysym -> character.
         101 => {
             let first = req.get(4).copied().unwrap_or(8);
             let count = req.get(5).copied().unwrap_or(0) as usize;
-            const N: usize = 2; // keysyms per keycode
+            const N: usize = 4; // keysyms per keycode
             let mut r = reply_header(c, (count * N) as u32);
             r[1] = N as u8;
             for i in 0..count {
                 let kc = first.wrapping_add(i as u8);
-                let (lo, hi) = keysym_for(kc);
-                let base = 32 + i * N * 4;
-                r[base..base + 4].copy_from_slice(&lo.to_le_bytes());
-                r[base + 4..base + 8].copy_from_slice(&hi.to_le_bytes());
+                let ks = keysyms4(kc);
+                for (k, sym) in ks.iter().enumerate() {
+                    let base = 32 + (i * N + k) * 4;
+                    put32(c, &mut r, base, *sym);
+                }
             }
             c.outbuf.extend_from_slice(&r);
             trace(format_args!("GetKeyboardMapping first={first} count={count}"));
@@ -1219,10 +1732,13 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             // Data = 8 modifiers × KPM keycodes × 1 byte = 8*KPM bytes = 2*KPM units.
             let mut r = reply_header(c, (2 * KPM) as u32);
             r[1] = KPM as u8;
-            // modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1(Alt) ...
-            let mods: [(usize, u8); 4] = [(0, 50), (1, 66), (2, 37), (3, 64)]; // Shift_L, Caps, Ctrl_L, Alt_L
-            for (m, kc) in mods {
-                r[32 + m * KPM] = kc; // first keycode for that modifier
+            // Modifier index: 0 Shift, 1 Lock, 2 Control, 3 Mod1 (Alt), 4 Mod2
+            // (Num_Lock), 7 Mod5 (Mode_switch = AltGr, the second keysym group).
+            let mods: [(usize, [u8; KPM]); 6] = [
+                (0, [50, 62]), (1, [66, 0]), (2, [37, 105]), (3, [64, 0]), (4, [77, 0]), (7, [108, 0]),
+            ];
+            for (m, kcs) in mods {
+                r[32 + m * KPM..32 + m * KPM + KPM].copy_from_slice(&kcs);
             }
             c.outbuf.extend_from_slice(&r);
             trace(format_args!("GetModifierMapping"));
@@ -1348,12 +1864,19 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 POINTER_WIN.store(0, core::sync::atomic::Ordering::Relaxed);
             }
             if opcode == 4 {
+                SEL_OWNERS.lock().retain(|e| e.1 != id);
                 c.windows.retain(|w| w.id != id);
                 SELECTIONS.lock().retain(|(w, _, _)| *w != id);
             } else if let Some(win) = c.windows.iter_mut().find(|w| w.id == id) {
                 win.mapped = false;
             }
             trace(format_args!("{} id={id:#x}", if opcode == 4 { "DestroyWindow" } else { "UnmapWindow" }));
+            if IMPLICIT_GRAB.load(core::sync::atomic::Ordering::Relaxed) == id {
+                IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+            }
+            if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+                compose_windowed(c); // the popup is gone from the frame
+            }
         }
         // GrabPointer (26) / GrabKeyboard (31): chrome grabs both — for menus, for
         // drags, for its own modal dialogs. Both expect a REPLY, and the old default
@@ -1408,8 +1931,51 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             crate::mouse::set_pos(nx.max(0) as usize, ny.max(0) as usize);
             trace(format_args!("WarpPointer -> ({nx},{ny})"));
         }
+        // GetPointerMapping (117): the physical-to-logical button map. Seven
+        // buttons, identity: 1-3 the buttons, 4-7 the wheel (up, down, left, right).
+        // Reply: map length in byte 1, then the map padded to 4.
+        117 => {
+            const BUTTONS: usize = 7;
+            let mut r = reply_header(c, BUTTONS.div_ceil(4) as u32);
+            r[1] = BUTTONS as u8;
+            for i in 0..BUTTONS {
+                r[32 + i] = (i + 1) as u8;
+            }
+            c.outbuf.extend_from_slice(&r);
+            trace(format_args!("GetPointerMapping -> {BUTTONS} buttons"));
+        }
+        // A request that owes a reply and has no handler above must still be
+        // answered: a client that waits for a reply waits forever (BUG-090: xcb
+        // sat in poll() on GetPointerMapping, the browser's first connection never
+        // got past its setup). The answer is the X error BadImplementation, which
+        // every client library turns into a failed call instead of a hang.
+        _ if owes_reply(opcode) => {
+            send_error(c, 17, 0, opcode, 0);
+            crate::serial_println!("[xserver] request {opcode} (owes a reply) is not implemented: answered with BadImplementation");
+        }
         _ => {}
     }
+}
+
+/// Core requests that the client waits on (X11 protocol, appendix B). Extension
+/// requests (128 and up) never arrive: QueryExtension reports none present.
+fn owes_reply(opcode: u8) -> bool {
+    matches!(opcode,
+        3 | 14 | 15 | 16 | 17 | 20 | 21 | 23 | 26 | 31 | 38 | 39 | 40 | 43 | 44 | 47 | 48 | 49 | 50 | 52
+        | 73 | 83 | 84 | 85 | 86 | 87 | 91 | 92 | 97 | 98 | 99 | 101 | 103 | 106 | 108 | 110 | 116 | 117
+        | 118 | 119)
+}
+
+/// Queue an X error for the request being handled: code, the offending value,
+/// and the major/minor opcode it answers (32 bytes, byte 0 = 0).
+fn send_error(c: &mut XConn, code: u8, bad_value: u32, major: u8, minor: u16) {
+    let mut e = alloc::vec![0u8; 32];
+    e[1] = code;
+    put16(c, &mut e, 2, c.seq);
+    put32(c, &mut e, 4, bad_value);
+    put16(c, &mut e, 8, minor);
+    e[10] = major;
+    c.outbuf.extend_from_slice(&e);
 }
 
 /// Copy a ZPixmap (32-bpp, LSBFirst) into the target window buffer, clipped.
@@ -1470,6 +2036,39 @@ pub fn x_app_active() -> bool { X_APP_ACTIVE.load(core::sync::atomic::Ordering::
 /// and draws it as a framed desktop window. Set by the desktop when it hosts an X app.
 pub static X_WINDOWED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Ordering::Relaxed); }
+
+/// A hosted app is about to start: it gets an EMPTY server. A client that ended
+/// without closing its socket (every X client of the boot self-tests; an app that
+/// was closed with the close button of its frame) stays in the table with its
+/// windows mapped. Since BUG-097 the frame shows every mapped window of every
+/// connection, so the next app came up with the pictures of the dead clients
+/// drawn over its own, and its keys went to the window of a dead client that was
+/// presented last (BUG-113). One hosted app runs at a time and none runs when
+/// the desktop calls this, so whatever is still connected is gone. It also
+/// gives the slots back: there are MAX_XCONN of them.
+pub fn forget_clients() {
+    let gone = {
+        let mut t = lock_home();
+        let n = t.iter().flatten().count();
+        for c in t.iter_mut() {
+            *c = None;
+        }
+        n
+    };
+    PRESENTED.lock().clear();
+    SELECTIONS.lock().clear();
+    SEL_OWNERS.lock().clear();
+    XFIXES_SELECT.lock().clear();
+    READER_CONNS.lock().clear();
+    FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
+    RETAINED_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+    IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+    LAST_ROOT.store(0, core::sync::atomic::Ordering::Relaxed);
+    *RETAINED_WINDOW.lock() = None;
+    if gone > 0 {
+        crate::serial_println!("[xserver] a hosted app starts: {gone} connection(s) of clients that are gone were forgotten");
+    }
+}
 pub fn x_windowed() -> bool { X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) }
 
 /// The RETAINED pixel buffer of a hosted X client's window: (w, h, pixels 0x00RRGGBB).
@@ -1647,30 +2246,25 @@ fn send_input(c: &mut XConn, kind: u8, detail: u8, window: u32, rx: i16, ry: i16
     // are piling up unread, and no amount of aiming at the right pixel would help.
     trace(format_args!("-> input kind={kind} detail={detail} window={window:#x} at({ex},{ey}) queued={} B",
         c.outbuf.len()));
-    // Events piling up unread: the client is not collecting them. Ask the next waits to
-    // say what they are waiting on and what we report as ready — the only way to tell
-    // "chrome never watches this fd" from "we tell it the fd is empty" from "we say
-    // ready and chrome ignores it".
-    // Re-arm with a cooldown instead of once-only: the first backlog often happens
-    // during hover (the thread is merely busy), and the dump that matters is the one
-    // taken while the click sits unread minutes later.
-    if c.outbuf.len() >= 128 {
+    // Events piling up unread: the client is not collecting them. This used to
+    // dump every thread, the futex table, the syscall histogram and the epoll sets
+    // as soon as FOUR events were queued, at most every 30 s: the instrument for a
+    // browser that never read its connection (BUG-090). With a browser that does
+    // read, four queued events is a person typing, and the dump (some 400 lines
+    // on the serial port with interrupts off) was itself the stall: the USB
+    // keyboard's reports were not collected while it printed, and three or four
+    // characters of a typed word were lost (BUG-095). Now: one line, and only
+    // for a backlog no healthy client has (512 events). `cdiag` in the shell
+    // prints the rest on request.
+    if c.outbuf.len() >= 16 * 1024 {
         let now = crate::interrupts::ticks();
         let last = STALL_LAST_DUMP.load(core::sync::atomic::Ordering::Relaxed);
         if now >= last + 3000
             && STALL_LAST_DUMP.compare_exchange(last, now,
                 core::sync::atomic::Ordering::Relaxed, core::sync::atomic::Ordering::Relaxed).is_ok()
         {
-            crate::serial_println!("[xserver] {} B of input queued unread on connection {} — who should be reading it?",
+            crate::serial_println!("[xserver] {} B of input queued unread on connection {}: the client is not reading (cdiag shows its threads)",
                 c.outbuf.len(), conn_index(c));
-            crate::ring3::arm_wait_diag(30);
-            crate::ring3::dump_threads_now("input events queued unread");
-            crate::ring3::dump_main_syscalls();
-            crate::ring3::dump_futex_state();
-            crate::ring3::dump_syscall_histogram();
-            crate::ring3::dump_epoll_sets();
-            // From here the profile is about the STALL, not about startup.
-            crate::ring3::reset_rip_profile();
         }
     }
 }
@@ -1814,6 +2408,10 @@ fn present(c: &XConn, id: u32) {
         }
     }
     ANCHOR.lock().clone_from(&best);
+    if X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) {
+        compose_windowed(c);
+        return;
+    }
     if c.windows.iter().any(|w| w.id == id) {
         present_win(c.windows.iter().find(|w| w.id == id && w.mapped), id);
         return;
@@ -1827,6 +2425,55 @@ fn present(c: &XConn, id: u32) {
             return;
         }
     }
+}
+
+/// Windowed mode: what the desktop shows in the client's frame. The MAIN window
+/// (the largest mapped one: the browser window) fills the frame; every other
+/// mapped window (a tooltip, a menu, a drop-down) is drawn on top of it at its
+/// X position relative to the main window, in creation order, clipped to it.
+///
+/// It used to be "the window that painted last": the first tooltip took the
+/// browser's place in the frame (a white frame with one line of text), clicks
+/// were sent to the tooltip, and a maximise resized the tooltip (BUG-097).
+/// `c` is the connection being processed (it is out of the table).
+fn compose_windowed(c: &XConn) {
+    let t = XCONNS.lock();
+    let all = c.windows.iter().chain(t.iter().flatten().flat_map(|x| x.windows.iter()))
+        .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.buf.len() == w.w as usize * w.h as usize);
+    let Some(main) = all.clone().max_by_key(|w| (w.w as u32 * w.h as u32, core::cmp::Reverse(w.id))) else {
+        return;
+    };
+    let (mw, mh) = (main.w as usize, main.h as usize);
+    let mut r = RETAINED_WINDOW.lock();
+    match r.as_mut() {
+        Some((w, h, buf)) if buf.len() == main.buf.len() => {
+            *w = mw;
+            *h = mh;
+            buf.copy_from_slice(&main.buf);
+        }
+        _ => *r = Some((mw, mh, main.buf.clone())),
+    }
+    if let Some((_, _, buf)) = r.as_mut() {
+        for p in all.filter(|w| w.id != main.id) {
+            let (ox, oy) = (p.x as i32 - main.x as i32, p.y as i32 - main.y as i32);
+            let (x0, x1) = (ox.max(0), (ox + p.w as i32).min(mw as i32));
+            if x0 >= x1 {
+                continue;
+            }
+            let n = (x1 - x0) as usize;
+            for sy in 0..p.h as i32 {
+                let dy = oy + sy;
+                if dy < 0 || dy >= mh as i32 {
+                    continue;
+                }
+                let s0 = sy as usize * p.w as usize + (x0 - ox) as usize;
+                let d0 = dy as usize * mw + x0 as usize;
+                buf[d0..d0 + n].copy_from_slice(&p.buf[s0..s0 + n]);
+            }
+        }
+    }
+    RETAINED_ID.store(main.id, core::sync::atomic::Ordering::Relaxed);
+    X_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// The current placement anchor (x, y, w, h), refreshed by present() BEFORE the
@@ -1952,10 +2599,10 @@ fn setup_reply(swap: bool, rid_base: u32) -> Vec<u8> {
     p32(&mut a, swap, 0x00ff_ffff); // white-pixel
     p32(&mut a, swap, 0x0000_0000); // black-pixel
     p32(&mut a, swap, 0); // current-input-masks
-    p16(&mut a, swap, SCREEN_W); // width in pixels
-    p16(&mut a, swap, SCREEN_H); // height in pixels
-    p16(&mut a, swap, (SCREEN_W as u32 * 254 / 960) as u16); // width in mm (~96 dpi)
-    p16(&mut a, swap, (SCREEN_H as u32 * 254 / 960) as u16); // height in mm
+    p16(&mut a, swap, screen_w()); // width in pixels
+    p16(&mut a, swap, screen_h()); // height in pixels
+    p16(&mut a, swap, (screen_w() as u32 * 254 / 960) as u16); // width in mm (~96 dpi)
+    p16(&mut a, swap, (screen_h() as u32 * 254 / 960) as u16); // height in mm
     p16(&mut a, swap, 1); // min-installed-maps
     p16(&mut a, swap, 1); // max-installed-maps
     p32(&mut a, swap, ROOT_VISUAL); // root-visual

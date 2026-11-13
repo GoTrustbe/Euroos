@@ -1,0 +1,1 @@
+187 suites, passed 1331, failed 0, ignored 1 (cargo test, default members, before the BUG-099 commit, which changes kernel/src/main.rs only)

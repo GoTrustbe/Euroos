@@ -1,0 +1,20 @@
+# c6f033f (self-test image): app run hello-x11, a key, a click
+wait 'interactive loop started': True
+scon $ keymap us
+   keyboard layout → US QWERTY (us)
+click 1100,171
+typed 'app run hello-x11\\n'
+wait 'launched in a window': True
+shot x11-drawn.png
+key x
+shot x11-after-key.png
+typed 'uname\\n'
+shot x11-after-uname.png
+click 500,600
+shot x11-after-click.png
+typed 'uname\\n'
+shot x11-end.png
+serial lines: 9182; fault lines: 0
+--- serial lines of the app, the X server's input and the Terminal:
+[e2e] $ app run hello-x11
+[e2e] Hello (window): launched in a window (task 34; caps 'console,file,proc', profile utility)

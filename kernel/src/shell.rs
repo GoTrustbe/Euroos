@@ -446,6 +446,43 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 app_cmd(line)
             }
         }
+        // `xtrace on|off`: every X request and reply of the in-kernel X server on
+        // the serial console (bring-up of an X client; a browser sends thousands).
+        "xtrace" => {
+            let on = arg1 == "on";
+            crate::xserver::TRACE.store(on, core::sync::atomic::Ordering::Relaxed);
+            vec![format!("xtrace: {}", if on { "on" } else { "off" })]
+        }
+        // `ctabs`: the pages the hosted browser has open, URL and title, as
+        // `[tabs]` lines on the serial console (the answer arrives a moment later).
+        "ctabs" => {
+            if crate::ring3::cdp_ask_tabs() {
+                vec!["ctabs: asked; the [tabs] lines follow on the serial console".into()]
+            } else {
+                vec!["ctabs: no hosted browser is running".into()]
+            }
+        }
+        // `fstrace N`: log the next N pread/pwrite calls of every program.
+        "fstrace" => {
+            let n: u32 = arg1.parse().unwrap_or(0);
+            crate::ring3::FSTRACE_LEFT.store(n, core::sync::atomic::Ordering::Relaxed);
+            vec![format!("fstrace: the next {n} positioned reads and writes go to the serial console")]
+        }
+        "cdiag" => {
+            // What a hosted glibc program (the browser) is doing right now: every
+            // thread with its state and last syscall, the main thread's recent
+            // syscalls, the epoll sets and the futex table, on the serial console.
+            // Interrupts off for the whole dump: the syscall paths take these
+            // tables with interrupts off, and this task preempted while holding
+            // one of them would wedge the next epoll_wait.
+            let _g = crate::sched::IfOffGuard::new();
+            crate::xserver::dump_input_state();
+            crate::ring3::dump_threads_now("cdiag (shell)");
+            crate::ring3::dump_main_syscalls();
+            crate::ring3::dump_epoll_sets();
+            crate::ring3::dump_futex_state();
+            vec!["cdiag: written to the serial console".into()]
+        }
         // How often the desktop repainted everything (BUG-057: once per loop
         // iteration while an overlay was open).
         "repaints" => {

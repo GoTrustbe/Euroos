@@ -1,0 +1,30 @@
+== boot of the soak guest (7be30cb) against integ-2026-11b/r630-soak-boot.markers
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/r630-soak-boot.markers  vs  /opt/euroos/validate-runs/r630/r630-soak-7be30cb-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== boot of the soak guest (7be30cb) against linux-rand-2026-11/r630-soak-boot.markers
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/r630-soak-boot.markers  vs  /opt/euroos/validate-runs/r630/r630-soak-7be30cb-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== boot of the soak guest (f98da76) against integ-2026-11b/r630-soak-boot.markers
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/r630-soak-boot.markers  vs  /opt/euroos/validate-runs/r630/r630-soak-f98da76-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== boot of the soak guest (f98da76) against linux-rand-2026-11/r630-soak-boot.markers
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/r630-soak-boot.markers  vs  /opt/euroos/validate-runs/r630/r630-soak-f98da76-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1

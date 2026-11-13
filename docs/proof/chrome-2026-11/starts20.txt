@@ -1,0 +1,121 @@
+chrome-smoke --starts 20: 0/20 PASS
+start 01: FAIL (1 step(s)) ...F.
+start 02: FAIL (1 step(s)) ...F.
+start 03: FAIL (1 step(s)) ...F.
+start 04: FAIL (1 step(s)) ...F.
+start 05: FAIL (1 step(s)) ...F.
+start 06: FAIL (1 step(s)) ...F.
+start 07: FAIL (2 step(s)) ..FF.
+start 08: FAIL (1 step(s)) ...F.
+start 09: FAIL (1 step(s)) ...F.
+start 10: FAIL (1 step(s)) ...F.
+start 11: FAIL (1 step(s)) ...F.
+start 12: FAIL (1 step(s)) ...F.
+start 13: FAIL (1 step(s)) ...F.
+start 14: FAIL (1 step(s)) ...F.
+start 15: FAIL (1 step(s)) ...F.
+start 16: FAIL (1 step(s)) ...F.
+start 17: FAIL (1 step(s)) ...F.
+start 18: FAIL (1 step(s)) ...F.
+start 19: FAIL (1 step(s)) ...F.
+start 20: FAIL (1 step(s)) ...F.
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 41.5 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.2, first child process 11.4, renderer 17.6)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.4 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 41.4 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.2, renderer 18.4)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.8 s, 79 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.6 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.2, renderer 17.8)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.2 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 39.3 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 10.1, first child process 11.3, renderer 17.9)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.8 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 36.9 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 9.8, first child process 11.0, renderer 16.6),
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.8 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 38.7 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.2, first child process 11.6, renderer 17.4)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.9 s, 273 colours | X input modifiers
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 39.3 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 10.3, first child process 11.5, renderer 17.3)
+[gui-smoke] FAIL page input right after start: typed text arrives: field A = 'first-ke' | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.6 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 36.7 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 11.0, first child process 12.4, renderer 18.5)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.4 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 38.8 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.4, first child process 11.8, renderer 18.2)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 5.3 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 38.7 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 11.0, first child process 12.4, renderer 19.0)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 5.3 s, 160 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 34.5 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 9.2, first child process 10.4, renderer 16.4),
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.0 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 36.3 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.6, first child process 12.0, renderer 17.0)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.3 s, 62 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.5 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.2, renderer 17.2)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.0 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 36.8 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 11.0, first child process 12.4, renderer 18.5)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 5.1 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 36.3 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 11.0, first child process 12.4, renderer 18.2)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.1 s, 64 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.3 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.0, renderer 17.2)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.3 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.5 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.2, renderer 17.6)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.1 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.0 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 10.9, first child process 12.3, renderer 17.1)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 4.1 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.5 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 10.8, first child process 12.0, renderer 17.6)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 3.9 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 35.4 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 10.7, first child process 12.1, renderer 17.9)
+[gui-smoke] ok   page input right after start: typed text arrives: field A = 'first-key'
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 3.7 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   browser UI right after start: the menu opens on a click

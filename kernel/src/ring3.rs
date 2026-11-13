@@ -1179,7 +1179,7 @@ pub fn set_chrome_urls(urls: &[String]) {
 /// reaches the new one (W19). Same-site navigations after this keep the session.
 /// Falls back to the staged local page.
 pub fn chrome_init_url() -> String {
-    CHROME_URLS.lock().iter().find(|u| u.starts_with("http"))
+    CHROME_URLS.lock().iter().find(|u| u.starts_with("http") || u.starts_with("file:"))
         .cloned()
         .unwrap_or_else(|| String::from("file:///tmp/euro.html"))
 }
@@ -1208,8 +1208,28 @@ pub fn cdp_window_to_view(wx: i32, wy: i32) -> (i32, i32) {
     (x, y)
 }
 
+/// Ask the hosted browser which pages it has open (Target.getTargets, a browser-
+/// level question that survives every renderer swap); the pump prints one
+/// `[tabs]` line per page. False when no browser with a DevTools pipe runs.
+pub fn cdp_ask_tabs() -> bool {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !persistent_running() {
+        return false;
+    }
+    cdp_send("{\"id\":52,\"method\":\"Target.getTargets\"}");
+    true
+}
+
+/// Does the desktop ALSO send clicks and typed text to the page over DevTools
+/// (boot option `chrome.input=cdp`)? Off by default since BUG-090: the browser
+/// reads its X connection, so X events are the one input route, and a second
+/// copy over DevTools is a second click (on whatever page coordinate the copy
+/// was translated to) and every character twice.
+pub fn cdp_ferry() -> bool {
+    crate::bootopt::chrome_input_cdp()
+}
+
 pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();
@@ -1228,7 +1248,7 @@ pub fn cdp_input_mouse(kind: u8, x: i32, y: i32) {
 /// Press Enter on the page: a raw key event pair, which submits forms and
 /// follows focused links (an inserted carriage return does neither).
 pub fn cdp_input_enter() {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();
@@ -1242,7 +1262,7 @@ pub fn cdp_input_enter() {
 }
 
 pub fn cdp_input_text(text: &str) {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
+    if !CDP_DRIVE.load(Ordering::Relaxed) || !cdp_ferry() {
         return;
     }
     let sid = CDP_SESSION.lock().clone();
@@ -1646,8 +1666,15 @@ pub fn cdp_pump() {
                         }
                     }
                 }
+                // The visit list is a TEST instrument: it navigates the browser by
+                // itself every few heartbeats. It runs only when `chrome` was given
+                // two or more steps. Plain `chrome` and `chrome URL` open one page
+                // and then leave the browser to whoever sits in front of it: the
+                // list used to take the page away from the user after two minutes
+                // (the start page again) and after five (the project site).
+                let walk = CHROME_URLS.lock().len() >= 2;
                 let i = NAV_NEXT.load(Ordering::Relaxed);
-                if i < list.len() && sent >= 4 + (i as u64) * step {
+                if walk && i < list.len() && sent >= 4 + (i as u64) * step {
                     let sid = CDP_SESSION.lock().clone();
                     if !sid.is_empty() {
                         NAV_NEXT.store(i + 1, Ordering::Relaxed);
@@ -2057,6 +2084,20 @@ pub fn cdp_pump() {
                 cdp_send(&alloc::format!("{{\"id\":6,\"sessionId\":\"{sid}\",\"method\":\"Page.enable\"}}"));
                 crate::serial_println!("[cdp] re-attached: session now {sid}");
             }
+        }
+        // `ctabs` (shell): every page target with its URL and title, in full. The
+        // title is what the tab shows, so a test page that puts a field's value
+        // in document.title makes typed text readable on the serial console.
+        if msg.contains("\"id\":52") {
+            let mut pages = 0;
+            for part in msg.split("{\"targetId\":").skip(1) {
+                if json_str(part, "type") == Some("page") {
+                    pages += 1;
+                    crate::serial_println!("[tabs] page url=\"{}\" title=\"{}\"",
+                        json_str(part, "url").unwrap_or(""), json_str(part, "title").unwrap_or(""));
+                }
+            }
+            crate::serial_println!("[tabs] {pages} page(s)");
         }
         // The head cuts a frameNavigated inside its URL; the verdict needs the host.
         if msg.contains("\"method\":\"Page.frameNavigated\"") {
@@ -7355,11 +7396,30 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
     if o.is_empty() || n.is_empty() {
         return (-2i64) as u64; // -ENOENT
     }
+    // Replacing an existing destination TOMBSTONES it, exactly like unlink and for
+    // the same reason: every open descriptor holds an INDEX into FILES. This used
+    // to be `files.retain(|(p, _)| *p != n)`, which removed the entry and moved
+    // every later file down one slot, so from the second time a program replaced
+    // a file by renaming a new one over it (how chrome saves Preferences, Local
+    // State and every other ImportantFileWriter file) all descriptors opened
+    // after that file read and wrote their neighbour's bytes: SQLite's WAL frames
+    // landed in the -shm file, and the renderers aborted on "Likely file
+    // corruption" (BUG-091).
+    let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
     {
         let mut files = FILES.lock();
-        files.retain(|(p, _)| *p != n); // replace an existing destination
-        if let Some(e) = files.iter_mut().find(|(p, _)| *p == o) {
-            e.0 = n.clone();
+        if let Some(src) = files.iter().position(|(p, _)| *p == o) {
+            if o != n {
+                for (i, (p, _)) in files.iter_mut().enumerate() {
+                    if i != src && *p == n {
+                        p.clear();
+                        dead.push(i);
+                    }
+                }
+                files[src].0 = n.clone();
+            }
+            drop(files);
+            reclaim_tombstones(&dead);
             return 0;
         }
     }
@@ -7369,7 +7429,15 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
         if let Some(e) = sl.iter_mut().find(|(p, _)| *p == o) {
             let t = e.1.clone();
             sl.retain(|(p, _)| *p != n && *p != o);
-            sl.push((n, t));
+            sl.push((n.clone(), t));
+            drop(sl);
+            for (i, (p, _)) in FILES.lock().iter_mut().enumerate() {
+                if *p == n {
+                    p.clear();
+                    dead.push(i);
+                }
+            }
+            reclaim_tombstones(&dead);
             return 0;
         }
     }
@@ -7412,14 +7480,66 @@ fn vfs_unlink(path: &[u8]) -> u64 {
     // POSIX promises, and what "create, unlink, ftruncate, mmap(MAP_SHARED)"
     // depends on: the standard way to get anonymous shared memory, and how chrome
     // allocates the Mojo buffers that carry a page's bytes to its renderer.
-    for (q, _) in FILES.lock().iter_mut() {
-        if *q == p {
+    let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    for (i, (q, _)) in FILES.lock().iter_mut().enumerate() {
+        if *q == p && !p.is_empty() {
             q.clear();
+            dead.push(i);
         }
     }
     SYMLINKS.lock().retain(|(q, _)| *q != p);
     MKDIRS.lock().retain(|q| *q != p);
+    reclaim_tombstones(&dead);
     0
+}
+
+/// Can file `fi` still be reached without its name: a descriptor in any fd
+/// space, or a mapping in any process?
+fn file_referenced(fi: usize) -> bool {
+    if OPEN_FDS_ALL.lock().any(|e| matches!(e, Some((f, _)) if *f == fi)) {
+        return true;
+    }
+    if SHARED_MAPS.lock().iter().any(|(f, _, _)| *f == fi) {
+        return true;
+    }
+    if SHARED_FRAMES.lock().iter().any(|(f, _)| *f == fi) {
+        return true;
+    }
+    if SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi) {
+        return true;
+    }
+    // A mapping that is filled page by page reads the file at every first touch,
+    // long after its descriptor was closed (BUG-110: "map, close, unlink" and a
+    // save over a mapped file read zeros in the pages not touched before).
+    if DEMAND_FILE_MAPS.lock().iter().any(|&(_, _, f, _, _)| f == fi) {
+        return true;
+    }
+    // The three lists above are those of the process that is running; the ones of
+    // the other processes are parked in CHILD_MEM (and while a fork child runs,
+    // the parent's are).
+    CHILD_MEM.lock().iter().any(|c| {
+        c.file_maps.iter().any(|&(_, _, f, _, _)| f == fi)
+            || c.shared_aliases.iter().any(|&(_, _, f)| f == fi)
+            || c.shared_maps.iter().any(|&(f, _, _)| f == fi)
+    })
+}
+
+/// Free the BYTES of files that have just lost their name (unlink, or a rename
+/// over them) and that nobody holds open or mapped. The slot stays, so no index
+/// moves; without this every file a program deleted or replaced kept its
+/// contents in the kernel heap until reboot. A file that is still open keeps
+/// its bytes (and, for now, keeps them after the last close too).
+fn reclaim_tombstones(idxs: &[usize]) {
+    for &fi in idxs {
+        if file_referenced(fi) {
+            continue;
+        }
+        if let Some(e) = FILES.lock().get_mut(fi) {
+            if e.0.is_empty() {
+                e.1 = alloc::borrow::Cow::Borrowed(&[]);
+            }
+        }
+    }
 }
 
 /// symlink(target, linkpath): record a symlink. Replaces any existing one (chrome
@@ -8712,6 +8832,8 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/pieprog" => include_bytes!("../../userland/pieprog.elf.sig"),
         "/bin/muslreal" => include_bytes!("../../userland/muslreal.elf.sig"),
         "/bin/randprobe" => include_bytes!("../../userland/randprobe.elf.sig"),
+        "/bin/renprobe" => include_bytes!("../../userland/renprobe.elf.sig"),
+        "/bin/grenprobe" => include_bytes!("../../userland/glibc/grenprobe.sig"),
         "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
@@ -11338,6 +11460,9 @@ pub fn chrome_stage_files() {
     register_file("/etc/fonts/fonts.conf", b"<?xml version=\"1.0\"?>\n<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n<fontconfig>\n  <dir>/usr/share/fonts/truetype/dejavu</dir>\n  <cachedir>/var/cache/fontconfig</cachedir>\n  <alias><family>sans-serif</family><prefer><family>DejaVu Sans</family></prefer></alias>\n  <alias><family>serif</family><prefer><family>DejaVu Serif</family></prefer></alias>\n  <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n</fontconfig>\n".to_vec());
     register_device_files();
     register_file("/tmp/euro.html", include_bytes!("euro_page.html").to_vec());
+    // The input test page of scripts/chrome-smoke.py: two fields whose values the
+    // page mirrors into document.title (read back with `ctabs`).
+    register_file("/tmp/input-test.html", include_bytes!("input_test_page.html").to_vec());
     // /etc/localtime: every chrome log line formats a timestamp, localtime_r takes
     // glibc's tz lock and reads this file on first use — and the lock at
     // __abort_msg+0x10 is exactly where main/viz/renderer were found parked with
@@ -11437,16 +11562,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // ERR_SSL_PROTOCOL_ERROR with the record walker seeing nothing wrong.
     b"--vmodule=ssl_client_socket_impl=2,ssl_connect_job=1,transport_connect_job=1,http_stream_factory_job=1,ech_config_list=1,dns_transaction=1",
     b"--no-first-run", b"--no-default-browser-check",
-    // The live site's name, pinned the way the boot-test path pins it. On the
-    // desktop a navigation to https://euro-os.eu/ ends in ERR_NAME_NOT_RESOLVED
-    // the instant it starts: chrome reads /etc/hosts twice and never sends a
-    // query (no socket, no packet), while lookups for its own background hosts
-    // went out to 10.0.2.3:53 minutes earlier in the same run. Its DNS config
-    // service wants netlink, which this kernel does not provide, and a pinned
-    // /etc/hosts did not change the outcome. The rule takes name resolution out
-    // of the picture so the TCP, TLS and HTTP underneath can be measured; the
-    // resolver itself stays an open item (sprint plan W5b).
-    b"--host-resolver-rules=MAP euro-os.eu 82.192.72.16,MAP www.euro-os.eu 82.192.72.16",
+    // --test-type: no "You are using an unsupported command-line flag" infobar.
+    // The flag it complains about is --no-sandbox, and that one is not a choice
+    // here: chrome's Linux sandbox wants user namespaces and seccomp-bpf, and the
+    // processes run under this kernel's own capability and syscall profile instead.
+    b"--test-type",
+    // No --host-resolver-rules. The flag pinned euro-os.eu while a stale
+    // /etc/hosts entry made every lookup fail (September); /etc/hosts
+    // (chrome_stage_files) carries the right address, other names go to the
+    // resolver, and the flag cost every session the infobar "You are using an
+    // unsupported command-line flag ... Stability and security will suffer".
     // Everything the browser does BESIDES showing the page. The RIP histogram settled
     // what the main thread is busy with: 838 samples spread over 96+ code pages with
     // no hot spot -- not a livelock, just an enormous amount of startup work
@@ -11466,7 +11591,16 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // embeddings after first paint and never returns to its event loop under
     // emulation. Unknown feature names are ignored harmlessly, so the list names
     // every plausible spelling.
-    b"--disable-features=SafeBrowsing,OptimizationHints,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    b"--disable-features=SafeBrowsing,SegmentationPlatform,MediaRouter,Translate,InterestFeedContentSuggestions,CalculateNativeWinOcclusion,MojoUseEventFd,AudioServiceOutOfProcess,AudioServiceSandbox,PageContentAnnotations,HistoryEmbeddings,PageEmbeddings,AnnotatedPageContentExtraction,AIPageContent,TextEmbedder,PageContentExtraction,OptimizationGuideModelDownloading,OptimizationTargetPrediction,PageVisibility,ModelExecution",
+    // "OptimizationHints" is NOT in that list any more. With it disabled the
+    // browser has no OptimizationGuideKeyedService, and not every consumer checks:
+    // contextual_tasks::ContextualTasksContextModelHandler is built with the null
+    // provider when a page loads in a second tab, and the browser's main thread
+    // died on a read of address 0 (chrome-smoke runs s7 and s8, both at the tabs
+    // step: rip in optimization_guide::ModelHandler<float, const
+    // std::vector<float>&>::ModelHandler(OptimizationGuideModelProvider*, ...)
+    // +0x2ed, `mov (%r14),%rax` with r14 = 0). Model downloads and target
+    // prediction stay off, so the service has nothing to fetch.
     // The fast, reproducible demo page. The REAL site works down the whole
     // stack on the post-campaign kernel (desk4, 2026-08-31: DNS via usernet,
     // TCP+TLS established to euro-os.eu:443, first composited paint quad at
@@ -11477,6 +11611,9 @@ pub const CHROME_ARGV: &[&[u8]] = &[
 pub const CHROME_ENVP: &[&[u8]] = &[
     b"PATH=/bin", b"LANG=C", b"HOME=/root", b"DISPLAY=:0",
     b"FONTCONFIG_PATH=/etc/fonts", b"CHROME_DEVEL_SANDBOX=/dev/null",
+    // A Chromium build without Google API keys opens every session with the
+    // infobar "Google API keys are missing". These three say "none, on purpose".
+    b"GOOGLE_API_KEY=no", b"GOOGLE_DEFAULT_CLIENT_ID=no", b"GOOGLE_DEFAULT_CLIENT_SECRET=no",
 ];
 
 /// Take everything a persistent app has written since the last call. A program that
@@ -13961,6 +14098,9 @@ pub fn dump_epoll_sets() {
     }
 }
 
+/// Budget of the positioned-I/O trace (`fstrace N` in the shell).
+pub static FSTRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 pub fn dump_main_syscalls() {
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     crate::serial_println!("[msc] main thread t{main}: last {} syscalls (tick num(a1)=ret):", MSC_RING);
@@ -14007,6 +14147,17 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
     if creates_fd && (r as i64) >= 0 && r < 1000 {
         child_note_open(r as usize);
+    }
+    // `fstrace N` (shell): the next N positioned reads and writes, whatever the file.
+    if matches!(num, 17 | 18) && FSTRACE_LEFT.load(Ordering::Relaxed) > 0 {
+        FSTRACE_LEFT.fetch_sub(1, Ordering::Relaxed);
+        let (fi, path) = {
+            let fi = if (a1 as usize) < MAX_FD { OPEN_FDS.lock()[a1 as usize].map(|(fi, _)| fi) } else { None };
+            let path = fi.and_then(|fi| FILES.lock().get(fi).map(|(q, _)| q.clone())).unwrap_or_default();
+            (fi, path)
+        };
+        crate::serial_println!("[fstrace] t{} {}(fd {a1}, len {a3:#x}, off {a4:#x}) = {r:#x} fi={fi:?} {path:?} size={:?}",
+            crate::sched::current_lockfree(), if num == 17 { "pread" } else { "pwrite" }, vfs_size(a1 as usize));
     }
     // Profile-directory file ops that failed or came up short (see FSDIAG_BITS).
     if a1 < 1024 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
@@ -14233,12 +14384,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // epoll timeout and result say whether it is parked on an infinite
             // wait (a lost wakeup) or cycling on a timeout with nothing to do.
             let r = epoll_wait(a1, a2, a3, a4);
-            if thread_name(crate::sched::current()) == "Compositor" {
-                static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
-                if LEFT.fetch_sub(1, Ordering::Relaxed) > 0 {
-                    crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
-                        a4 as i64, r as i64);
-                }
+            // Forty lines, then nothing: the budget used to be counted down with
+            // fetch_sub on an unsigned counter, which wraps at zero, so every
+            // Compositor wait of the session printed a line (4540 in four
+            // minutes), and every epoll_wait of every thread paid for the name
+            // lookup.
+            static LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(40);
+            if LEFT.load(Ordering::Relaxed) > 0 && thread_name(crate::sched::current()) == "Compositor" {
+                LEFT.fetch_sub(1, Ordering::Relaxed);
+                crate::serial_println!("[compo] epoll_wait(ep={a1}, max={a3}, timeout={}) = {}",
+                    a4 as i64, r as i64);
             }
             r
         }

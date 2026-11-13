@@ -99,6 +99,7 @@ mod update;
 mod tpm;
 mod entropy;
 mod linuxrand;
+mod renametest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -465,7 +466,14 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // A browser is a UI: it must LIVE. The tickless fast-forward exists to make a
     // run-to-completion boot test finish, and would race a live window's deadlines.
     ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    xserver::forget_clients();
     xserver::set_windowed(true);
+    // The X screen is the real screen: the window can then be as large as the
+    // desktop makes its frame (maximise), not 1280x800 at most.
+    if let Some(fbi) = FB_INFO.get() {
+        xserver::set_screen(fbi.width, fbi.height);
+    }
+    xserver::set_desktop_client(true);
     // CHROME_ARGV carries --remote-debugging-pipe, so fd 3/4 MUST exist before
     // chrome's first instruction — and the input bridge wants the session anyway:
     // desktop clicks and typing ride the same reliable DevTools route as the
@@ -559,6 +567,7 @@ fn launch_installed_app(ctx: &mut shell::ShellCtx, name: &str) -> (bool, String)
             ring3::NEXT_SPAWN_PROFILE.store(0, core::sync::atomic::Ordering::Relaxed);
             return (false, String::from("a hosted app is already running (close its window first)"));
         }
+        xserver::forget_clients();
         xserver::set_windowed(true);
         match ring3::spawn_glibc_persistent(ctx.mem, &bytes, ring3::ldlinux_bytes(), &argv, envp, caps) {
             Some(t) => (true, format!("{}: launched in a window (task {t}; caps '{}', profile {})", app.title, app.caps, app.profile)),
@@ -1484,7 +1493,7 @@ fn main() -> Status {
     // granted capabilities (least-privilege) and the syscall ABI. This lets a
     // shell later start them by NAME — the kernel itself knows with which rights + ABI.
     use ring3::{CAP_CONSOLE as CO, CAP_FILE as FI, CAP_NET as NE, CAP_PROC_INFO as PR};
-    let installed: [(&str, u64, bool); 25] = [
+    let installed: [(&str, u64, bool); 26] = [
         ("/bin/fbtest", CO, true), // app-graphics smoke test (large-arena scheduled)
         ("/bin/doom", CO | FI, true), // the DOOM port: draws frames + reads its WAD (CAP_FILE)
         ("/bin/browser", CO | FI | NE, true), // EuroBrowser: draws + fetches live sites (CAP_NET)
@@ -1502,6 +1511,7 @@ fn main() -> Status {
         ("/bin/muslfile", CO | FI, true),
         ("/bin/mcat", CO | FI, true),
         ("/bin/mwrite", CO | FI, true),
+        ("/bin/renprobe", CO | FI, true), // BUG-091: rename over an existing file; `renprobe save|check DIR VER`
         ("/bin/mecho", CO, true),
         ("/bin/mupper", CO | FI, true), // reads stdin (read=0 falls under CAP_FILE)
         ("/bin/menv", CO, true),        // reads envp/getenv
@@ -3679,6 +3689,7 @@ fn main() -> Status {
             if live_gtk_demo {
                 // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
                 // so the desktop composites it as a framed window.
+                xserver::forget_clients();
                 xserver::set_windowed(true);
                 match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
                     Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
@@ -4226,6 +4237,8 @@ fn main() -> Status {
         ring3::fdspace_selftest(&mut allocator);
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
         linuxrand::selftest(&mut allocator);
+        // BUG-091: rename over an existing file under open descriptors and mappings ([rename]).
+        renametest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
@@ -5272,6 +5285,13 @@ fn main() -> Status {
     // its Reset button to prove desktop->X input routing (the counter visibly resets).
     let mut gtk_dtick = 0u32;
     let mut last_hover = (usize::MAX, usize::MAX); // last pointer position forwarded to a hosted X app
+    // The hosted X window (Chromium): a button that went down in its body is held
+    // there until the physical button goes up, and it has the X focus while it is
+    // the active window.
+    let mut x_held = false;
+    let mut x_rheld = false;
+    let mut x_focus = false;
+    let mut x_body = (0usize, 0usize); // the body size the hosted X window was last given
     // Desktop cost accounting while a hosted app runs: (tick, loops, x-repaints, full repaints)
     let mut hosted_last = (0u64, 0u64, 0u64, 0u64);
     let mut loop_iters = 0u64;
@@ -5396,6 +5416,17 @@ fn main() -> Status {
                         suite_ui::SuiteApp::Files => files::wheel(wh, wheel),
                         suite_ui::SuiteApp::Text => textedit::wheel(wheel),
                         suite_ui::SuiteApp::None => compositor::term_scroll(&windows[i], wheel),
+                        suite_ui::SuiteApp::XClient => {
+                            // A hosted X client scrolls itself: the notches go to it
+                            // as presses of buttons 4 and 5 at the pointer.
+                            let (bx, by, bw, bh) = compositor::window_body_rect(&windows[i]);
+                            if let Some((xw, xh)) = xserver::front_window_size() {
+                                let ox = (bx + bw.saturating_sub(xw) / 2) as i32;
+                                let oy = (by + bh.saturating_sub(xh) / 2) as i32;
+                                xserver::hosted_wheel(wheel, (px as i32 - ox) as i16, (py as i32 - oy) as i16);
+                            }
+                            false
+                        }
                         _ => false,
                     };
                     if moved {
@@ -5596,7 +5627,25 @@ fn main() -> Status {
                 need_full = true;
             }
         } else if let Some((rx, ry)) = mouse::take_right_press() {
-            if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
+            // A right click in the body of the hosted X window belongs to that
+            // program (a browser's own context menu), not to the desktop's menu.
+            let mut to_x = false;
+            if ring3::persistent_running()
+                && order.iter().rev().copied().find(|&i| windows[i].visible && windows[i].contains(rx, ry)) == Some(gtk_idx)
+            {
+                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+                if let Some((xw, xh)) = xserver::front_window_size() {
+                    let ox = bx + bw.saturating_sub(xw) / 2;
+                    let oy = by + bh.saturating_sub(xh) / 2;
+                    if rx >= ox && ry >= oy && rx < ox + xw && ry < oy + xh {
+                        xserver::hosted_press(3, (rx - ox) as i16, (ry - oy) as i16);
+                        x_rheld = true;
+                        to_x = true;
+                    }
+                }
+            }
+            if to_x {
+            } else if portal_buttons.is_none() && !launcher::is_open() && !filedialog::is_open() && !symbolpicker::is_open() {
                 build_context_menu(rx, ry, &windows, &order, &dock_targets, width, height);
                 need_full = true;
             }
@@ -5800,8 +5849,15 @@ fn main() -> Status {
                             let ox = bx + bw.saturating_sub(xw) / 2;
                             let oy = by + bh.saturating_sub(xh) / 2;
                             if px >= ox && py >= oy && px < ox + xw && py < oy + xh {
-                                xserver::deliver_focus(true); // clicking the window focuses it
-                                xserver::deliver_button((px - ox) as i16, (py - oy) as i16);
+                                // The press now, the release when the button goes
+                                // up (below, with the motion): a click, a double
+                                // click or a drag, whichever the user makes.
+                                if !x_focus {
+                                    x_focus = true;
+                                    xserver::deliver_focus(true); // clicking the window focuses it
+                                }
+                                xserver::hosted_press(1, (px - ox) as i16, (py - oy) as i16);
+                                x_held = true;
                             }
                         }
                     } else if windows[i].app == suite_ui::SuiteApp::EuroSurface {
@@ -6106,7 +6162,15 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() { None } else { ps2::poll_key() } {
+        // The hosted X client (Chromium) takes RAW scancodes while its window has
+        // the keyboard: xserver::pump_keyboard, further down, turns them into X key
+        // events. The character loop below would empty the ring first (and drop
+        // every key, as no shell window is focused): Ctrl+L and typing never
+        // reached the browser.
+        let xclient_keys = focused.map(|i| windows[i].app == suite_ui::SuiteApp::XClient).unwrap_or(false)
+            && ring3::persistent_running()
+            && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open() && !files::prompt_open();
+        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -7106,6 +7170,25 @@ fn main() -> Status {
             }
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
+        } else if windows[gtk_idx].visible && xserver::take_dirty() {
+            // The hosted X client painted: its body, now. This used to wait for
+            // the 2-second status tick above (the tick was 10 Hz until the
+            // idle-CPU work made it t/200), so a character typed into the
+            // browser showed up to two seconds later unless the mouse happened
+            // to move: 1742 ms key to screen, median of 27 keys (chrome-smoke
+            // --only perf). Only the body's rectangle and the cursor are blitted.
+            xrepaints += 1;
+            let (ox, oy) = (cmx, cmy);
+            compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
+            compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            cmx = px;
+            cmy = py;
+            compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
+            compositor::draw_cursor(&fb, cmx, cmy);
+            let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+            fb.present_rect(gx, gy, gw, gh);
+            fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
+            fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
         } else if px != cmx || py != cmy {
             // Only move the cursor (save-under) — blit only the area
             // the cursor leaves + arrives at, so the mouse stays smooth.
@@ -7286,23 +7369,51 @@ fn main() -> Status {
                 }
             }
         }
-        if windows[gtk_idx].visible && windows[gtk_idx].active {
-            xserver::pump_keyboard();
-            // Hover: forward pointer motion over the hosted window's body, so the app
-            // highlights what is under the cursor (a browser's tabs, buttons and links
-            // all react to hover long before anyone clicks). Only on a real move — a
-            // motion event per desktop frame would be a needless flood.
+        // The hosted X window is as large as the body of its frame: after a resize
+        // or maximise (once the button is up, not for every pixel of the drag) the
+        // client is told its new size and paints for it.
+        if ring3::persistent_running() && windows[gtk_idx].visible && !mouse::left_down() {
+            let (_, _, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+            if (bw, bh) != x_body && xserver::front_window_size().is_some() {
+                x_body = (bw, bh);
+                xserver::hosted_resize(bw, bh);
+            }
+        }
+        // The hosted X window: focus follows the active window, keys go to it while
+        // it is active, the pointer while it is over the body or a button is held.
+        let x_active = windows[gtk_idx].visible && windows[gtk_idx].active;
+        if x_active != x_focus {
+            x_focus = x_active;
+            xserver::deliver_focus(x_active);
+        }
+        if x_active || x_held || x_rheld {
+            if x_active {
+                xserver::pump_keyboard();
+            }
             let (mpx, mpy) = mouse::pos();
-            if (mpx, mpy) != last_hover {
-                last_hover = (mpx, mpy);
-                let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
-                if let Some((xw, xh)) = xserver::front_window_size() {
-                    let ox = bx + bw.saturating_sub(xw) / 2;
-                    let oy = by + bh.saturating_sub(xh) / 2;
-                    if mpx >= ox && mpy >= oy && mpx < ox + xw && mpy < oy + xh {
-                        xserver::deliver_motion((mpx - ox) as i16, (mpy - oy) as i16);
-                    }
+            let (bx, by, bw, bh) = compositor::window_body_rect(&windows[gtk_idx]);
+            if let Some((xw, xh)) = xserver::front_window_size() {
+                let lx = mpx as i32 - (bx + bw.saturating_sub(xw) / 2) as i32;
+                let ly = mpy as i32 - (by + bh.saturating_sub(xh) / 2) as i32;
+                let inside = lx >= 0 && ly >= 0 && lx < xw as i32 && ly < xh as i32;
+                // Hover and drag: only on a real move (a motion event per desktop
+                // frame would be a flood), and outside the body only while a
+                // button that went down inside is still held.
+                if (mpx, mpy) != last_hover && (inside || x_held || x_rheld) {
+                    last_hover = (mpx, mpy);
+                    xserver::deliver_motion(lx as i16, ly as i16);
                 }
+                if x_held && !mouse::left_down() {
+                    x_held = false;
+                    xserver::hosted_release(1, lx as i16, ly as i16);
+                }
+                if x_rheld && mouse::buttons() & 0x2 == 0 {
+                    x_rheld = false;
+                    xserver::hosted_release(3, lx as i16, ly as i16);
+                }
+            } else {
+                x_held = false;
+                x_rheld = false;
             }
         }
 
@@ -7596,7 +7707,7 @@ fn net_late_suite(allocator: &mut FrameAllocator, fs: &mut dyn FileSystem) -> Ve
     demo
 }
 
-pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
+pub fn system_binaries() -> [(&'static str, &'static [u8]); 33] {
     [
         ("/bin/fbtest", ring3::fbtest_bytes()),
         ("/bin/doom", ring3::doom_bytes()),
@@ -7615,6 +7726,7 @@ pub fn system_binaries() -> [(&'static str, &'static [u8]); 32] {
         ("/bin/muslfile", ring3::muslfile_bytes()),
         ("/bin/mcat", ring3::mcat_bytes()),
         ("/bin/mwrite", ring3::mwrite_bytes()),
+        ("/bin/renprobe", renametest::renprobe_bytes()),
         ("/bin/mecho", ring3::mecho_bytes()),
         ("/bin/mupper", ring3::mupper_bytes()),
         ("/bin/daemon", ring3::daemon_bytes()),
