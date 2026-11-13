@@ -5669,8 +5669,34 @@ const MAX_THREADS: usize = 224; // chrome-scale: dozens of pthreads (< MAX_TASKS
 const TKSTACK_SIZE: usize = 64 * 1024;
 static mut THREAD_KSTACKS: [[u8; TKSTACK_SIZE]; MAX_THREADS] = [[0; TKSTACK_SIZE]; MAX_THREADS];
 // Per-slot in-use flag (lock-free bitmap allocator).
-static THREAD_KSTACK_USED: [core::sync::atomic::AtomicBool; MAX_THREADS] =
-    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS];
+static THREAD_KSTACK_USED: [core::sync::atomic::AtomicBool; MAX_THREADS_ALL] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS_ALL];
+/// BUG-147: thread kernel stacks past the static MAX_THREADS come from the heap,
+/// one 64 KiB block per slot, made the first time the slot is needed and kept
+/// for its next thread. Static memory stays what small machines can carry.
+const MAX_THREADS_ALL: usize = 480;
+static HEAP_KSTACK: [AtomicU64; MAX_THREADS_ALL - MAX_THREADS] =
+    [const { AtomicU64::new(0) }; MAX_THREADS_ALL - MAX_THREADS];
+
+/// The base of the kernel stack of slot `i`, or None when the heap has no room.
+fn kstack_base(i: usize) -> Option<u64> {
+    if i < MAX_THREADS {
+        return Some(unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 });
+    }
+    let h = &HEAP_KSTACK[i - MAX_THREADS];
+    let b = h.load(Ordering::Acquire);
+    if b != 0 {
+        return Some(b);
+    }
+    let layout = core::alloc::Layout::from_size_align(TKSTACK_SIZE, 4096).ok()?;
+    // SAFETY: a non-zero-sized layout; the block is never freed (kept per slot).
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) } as u64;
+    if p == 0 {
+        return None;
+    }
+    h.store(p, Ordering::Release);
+    Some(p)
+}
 // task id -> slot, so a dying task frees its kernel stack back to the pool.
 static THREAD_KSTACK_OWNER: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
 // (legacy monotonic counter removed — slots are now a recycling bitmap allocator.)
@@ -5680,12 +5706,15 @@ static THREAD_KSTACK_OWNER: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(
 /// id from spawn_*, then calls `register_thread_kstack(task, slot)` so the slot
 /// is freed when that task dies.
 fn alloc_thread_kstack() -> Option<(usize, u64)> {
-    for i in 0..MAX_THREADS {
+    for i in 0..MAX_THREADS_ALL {
         if THREAD_KSTACK_USED[i]
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let Some(kbase) = kstack_base(i) else {
+                THREAD_KSTACK_USED[i].store(false, Ordering::Release);
+                break;
+            };
             let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
             return Some((i, top));
         }
@@ -5710,12 +5739,15 @@ fn alloc_thread_kstack() -> Option<(usize, u64)> {
             }
         }
     }
-    for i in 0..MAX_THREADS {
+    for i in 0..MAX_THREADS_ALL {
         if THREAD_KSTACK_USED[i]
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let kbase = unsafe { core::ptr::addr_of_mut!(THREAD_KSTACKS[i]) as u64 };
+            let Some(kbase) = kstack_base(i) else {
+                THREAD_KSTACK_USED[i].store(false, Ordering::Release);
+                break;
+            };
             let top = (kbase + TKSTACK_SIZE as u64) & !0xF;
             return Some((i, top));
         }
