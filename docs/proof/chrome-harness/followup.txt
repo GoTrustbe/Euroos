@@ -1,0 +1,31 @@
+# 95a3bf2 image (/srv/euroos/w23-runs/img/m1-pub.img), harness of this commit, KVM 2 vCPU
+## 5 YouTube consent runs
+yt1:    consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+yt2:    consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+yt3:    consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+yt4:    consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+yt5:    consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+## 10 interaction-matrix boots (first series, before the scroll fix: scroll+reload failed in 6 of 10, link+history 10 of 10 ok)
+iv1a:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+iv1b:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+iv2a:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+iv2b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv3a:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+iv3b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv4a:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+iv4b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv5a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv5b:  FAIL (2 step(s)) - 16/18 steps ok, report and screensho
+## 10 interaction-matrix boots (after the scroll fix)
+iv1a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv1b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv2a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv2b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv3a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv3b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv4a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv4b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv5a:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+iv5b:  PASS - 18/18 steps ok, report and screenshots in /srv/e
+## link step: page ready after (s), second series
+page ready after 8.6 s;page ready after 8.0 s;page ready after 8.2 s;page ready after 8.2 s;page ready after 7.8 s;page ready after 7.6 s;page ready after 8.5 s;page ready after 7.6 s;page ready after 7.6 s;page ready after 8.4 s;

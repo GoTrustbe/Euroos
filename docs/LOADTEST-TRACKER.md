@@ -2190,8 +2190,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   previous page (`input-test.html`) under the new tab title, with the stop button; 15 s later the page is there and the
   pointer is over its Download button (screenshots in the proof). The harness waits for 1.5 s of unchanged picture, which a
   page that has not painted yet also gives.
-- **Next (harness):** wait for the load to finish (`wait_loaded`, as the site matrix does) and for the target's pixels before
-  clicking a link.
+- **Harness fix (`feature/chrome-harness` `b943448`):** `chrome-smoke.py` waits for the end of the load plus 3 s of a still
+  picture (`wait_ready`) before a link click; 20 of 20 boots followed the link (`proof/chrome-harness/followup.txt`).
 
 ### BUG-170 — a new socket could be born non-blocking: Chromium's audio sync socket ✅ FIXED
 - **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH (BUG-160)

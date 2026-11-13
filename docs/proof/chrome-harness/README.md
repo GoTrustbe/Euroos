@@ -81,3 +81,16 @@ started before QEMU. Scan and printer pass, the other 11 legs are unchanged.
 | YouTube | blocked by the bot page, see 2 |
 | local video | see 3 (BUG-160) |
 | BUG-137 (demand pool) | not reached in this run (a 2-hour soak is needed); unchanged |
+
+## Follow-up (BUG-162, YouTube consent, 10 boots; `followup*.txt`, image of `95a3bf2`)
+
+- **Link click (BUG-162):** not an input bug, the click came while euro-os.eu was still loading. `wait_ready()` now waits for the
+  browser's own end of load (reload button is the arrow again) and 3 s of an unchanged picture, at most 20 s, before the link click and
+  before Alt+Left and the forward button. In all 20 boots `link` and `history` passed.
+- **Scroll and reload (found by the 10 boots, same cause class):** with the first harness 6 of 10 boots failed `scroll` (Home was sent
+  while the smooth scroll of End was still moving: scrollY 1379 -> 1388, not 0) and `reload` (it clicked field A in the scrolled page).
+  `scroll_settled()` waits until scrollY stands still between keys. After it: **10 of 10 boots 18/18, 0 harness misses**.
+- **YouTube "Accept all" instead of "Reject all":** the find bar text was right (screenshot `followup-findbar-after-click.png`: "reject all",
+  0/0 after the banner is gone), so no lost keys. The flake was the dialog still being drawn/indexed when the search ran; with the wait
+  for the dialog (BUG-145 round), the warm-up and the retry, **5 of 5 runs clicked "Reject all" and the banner was gone**. The
+  "found nothing" notes in those reports are the searches after the click (the dialog is gone then), not misses before it.
