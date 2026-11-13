@@ -468,6 +468,24 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             crate::ring3::FSTRACE_LEFT.store(n, core::sync::atomic::Ordering::Relaxed);
             vec![format!("fstrace: the next {n} positioned reads and writes go to the serial console")]
         }
+        // `fds`: the descriptor tables (BUG-098). One line per process: how many
+        // descriptors it has open and its highest number; and how many objects
+        // (open files, pipe ends, sockets, ...) exist behind all of them. Also
+        // on the serial console, so a harness can read it.
+        "fds" => {
+            let (procs, descs, objs, root) = crate::ring3::fd_census();
+            let mut out = vec![format!(
+                "fds: {procs} processes, {descs} descriptors, {objs} objects; {root} of {} file/pipe/directory objects of the launcher space in use",
+                crate::ring3::ROOT_FDS
+            )];
+            for l in crate::ring3::fd_census_lines() {
+                out.push(format!("  {l}"));
+            }
+            for l in out.iter() {
+                crate::serial_println!("[fds] {}", l.trim_start());
+            }
+            out
+        }
         "cdiag" => {
             // What a hosted glibc program (the browser) is doing right now: every
             // thread with its state and last syscall, the main thread's recent

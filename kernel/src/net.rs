@@ -2168,16 +2168,17 @@ pub fn cmd_https(host: &str) -> alloc::vec::Vec<String> {
 // SOCK_FD_BASE so they don't collide with the (small) VFS fd's.
 
 /// First fd number that represents a socket (well above the VFS fd's).
-pub const SOCK_FD_BASE: u64 = 500;
+pub const SOCK_FD_BASE: u64 = 0x1_0000;
 /// 16 was the whole table, and a desktop browser is past it in minutes: its
 /// background lookups and connections took fd 500..515, and the sixteen-th was
 /// the last. From then on every socket() returned -1, which chrome reads as
 /// EPERM: net::ERR_ACCESS_DENIED on a connect, and net::ERR_NAME_NOT_RESOLVED
 /// on the resolver's UDP socket, both the instant a navigation started and
 /// without a packet leaving. Both were chased as resolver problems first.
-/// 96, not more: descriptor bands are 100 wide (sockets at 500, AF_UNIX at
-/// 600, X connections at 700, eventfds at 800, epoll at 900) and is_sock_fd is
-/// a range test, so a bigger table would make fd 600 a socket AND a unix fd.
+/// These are OBJECT numbers: the program sees its own descriptors (ring3's
+/// fdtab.rs). The classes are 0x1000 apart above the file tables (sockets,
+/// AF_UNIX, X connections, eventfds, epoll) and is_sock_fd is a range test, so
+/// no class table may reach the next base.
 const MAX_SOCK: usize = 96;
 
 /// A connectionless UDP socket: after connect() we remember the destination and
@@ -3334,16 +3335,6 @@ pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, Un
 pub fn unix_readable(ep: UnixEndpoint) -> bool {
     UNIX_SWITCH.readable(ep)
 }
-/// The unix fd NUMBERS currently open (UNIX_FD_BASE-relative slots occupied) —
-/// the fork snapshot needs them so a live child's inherited channel end is not
-/// endpoint-closed by the parent's routine post-fork close.
-pub fn unix_fds_open() -> alloc::vec::Vec<u64> {
-    UNIX_FDS.lock().iter().enumerate()
-        .filter(|(_, s)| s.is_some())
-        .map(|(i, _)| UNIX_FD_BASE + i as u64)
-        .collect()
-}
-
 /// POSIX EOF for a unix fd: stream drained AND peer closed — a read/recvmsg then
 /// returns 0, never EAGAIN (an EAGAIN here left epoll's level-triggered EOF
 /// readability unconsumable: chrome's IOThread livelocked on it, run 20).
@@ -3360,46 +3351,33 @@ pub fn unix_close(ep: UnixEndpoint) {
 }
 
 // ── AF_UNIX socket fds for glibc/musl programs ───────────────────────────────
-// A parallel fd space (base 600) mapping a process fd to a UnixEndpoint, so the
+// A class of objects (from UNIX_FD_BASE) mapping to a UnixEndpoint, so the
 // Linux socket syscalls (socketpair/read/write/close) can drive local IPC. This
 // is the transport a real X11 client (and dbus, etc.) uses to reach a server.
-pub const UNIX_FD_BASE: u64 = 600;
+pub const UNIX_FD_BASE: u64 = 0x1_1000;
 // Chrome opens far more of these than a small app: every Mojo channel is a
 // socketpair, and a compositor that loses its frame sink RETRIES, taking two more
 // each time. Running out is silent from the program's side (socketpair fails, a
 // channel is never established, a service never connects), so the ceiling has to be
 // generous — and exhaustion says so in the log.
-const MAX_UNIX_FD: usize = 192;
+const MAX_UNIX_FD: usize = 384;
 
 // ── eventfd (Linux) ────────────────────────────────────────────────────────
 // A counter-backed fd used by GLib's GMainContext (GWakeup) to break a poll():
 // signal = write(+n), the loop polls it readable, acknowledge = read (drains).
 // Essential for any GLib/GTK main loop. Own fd range so read/write/poll/close route.
-pub const EVENTFD_BASE: u64 = 800;
-// NOTE: these fd spaces must not overlap. sockets 500.., unix 600.., eventfd
-// 800.., epoll 900.. — so eventfd may hold at most 100 slots, or an epoll fd would
-// answer to is_eventfd() and be read as a counter. (That overlap hung the boot
-// once: 128 eventfds reach 927, straight through the epoll base.)
-const MAX_EVENTFD: usize = 96;
+pub const EVENTFD_BASE: u64 = 0x1_3000;
+// NOTE: the object classes must not overlap (0x1000 numbers each): an epoll
+// number that answers to is_eventfd() would be read as a counter. (That
+// overlap hung the boot once, when the classes were 100 apart.)
+const _: () = assert!(MAX_EVENTFD <= 0x1000 && MAX_UNIX_FD <= 0x1000 && MAX_SOCK <= 0x1000);
+const MAX_EVENTFD: usize = 256;
 static EVENTFDS: Mutex<[Option<u64>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
 
 pub fn is_eventfd(fd: u64) -> bool {
     fd >= EVENTFD_BASE && (fd - EVENTFD_BASE) < MAX_EVENTFD as u64
 }
 /// eventfd2(initval, flags) — allocate a counter fd. Returns None if the table is full.
-/// Which slot an eventfd fd actually names. A DUP of an eventfd must share the
-/// counter: chrome hands children an eventfd over SCM_RIGHTS and signals them
-/// through it, and a duplicate with a counter of its own turns every one of those
-/// wakeups into a signal nobody receives. Some(o) = "this fd is a duplicate of
-/// slot o"; None = the fd owns its slot.
-static EVENTFD_ALIAS: Mutex<[Option<usize>; MAX_EVENTFD]> = Mutex::new([const { None }; MAX_EVENTFD]);
-
-/// Resolve an eventfd fd to the slot holding the shared counter.
-fn eventfd_slot(fd: u64) -> usize {
-    let idx = (fd - EVENTFD_BASE) as usize;
-    EVENTFD_ALIAS.lock()[idx].unwrap_or(idx)
-}
-
 pub fn eventfd_create(initval: u64) -> Option<u64> {
     let mut t = EVENTFDS.lock();
     for (i, s) in t.iter_mut().enumerate() {
@@ -3411,7 +3389,7 @@ pub fn eventfd_create(initval: u64) -> Option<u64> {
     None
 }
 pub fn eventfd_readable(fd: u64) -> bool {
-    is_eventfd(fd) && EVENTFDS.lock()[eventfd_slot(fd)].map_or(false, |c| c > 0)
+    is_eventfd(fd) && EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize].map_or(false, |c| c > 0)
 }
 /// read(): return the current counter and reset to 0. Some(0) => the caller should
 /// return -EAGAIN (nothing to read). None => not a live eventfd.
@@ -3419,7 +3397,7 @@ pub fn eventfd_read(fd: u64) -> Option<u64> {
     if !is_eventfd(fd) {
         return None;
     }
-    let slot = eventfd_slot(fd);
+    let slot = (fd - EVENTFD_BASE) as usize;
     let mut t = EVENTFDS.lock();
     match t[slot].as_mut() {
         Some(c) => {
@@ -3439,7 +3417,7 @@ pub fn eventfd_write(fd: u64, add: u64) -> bool {
     if !is_eventfd(fd) {
         return false;
     }
-    let slot = eventfd_slot(fd);
+    let slot = (fd - EVENTFD_BASE) as usize;
     let mut t = EVENTFDS.lock();
     match t[slot].as_mut() {
         Some(c) => {
@@ -3453,17 +3431,9 @@ pub fn eventfd_close(fd: u64) {
     if !is_eventfd(fd) {
         return;
     }
-    let idx = (fd - EVENTFD_BASE) as usize;
-    let slot = eventfd_slot(fd);
-    EVENTFD_ALIAS.lock()[idx] = None;
-    if idx != slot {
-        return; // a duplicate closed: the shared counter belongs to `slot`
-    }
-    // The owner closed. Keep the counter alive while any duplicate still names it.
-    if EVENTFD_ALIAS.lock().iter().any(|a| *a == Some(slot)) {
-        return;
-    }
-    EVENTFDS.lock()[slot] = None;
+    // The last descriptor of this eventfd is gone (the descriptor tables count
+    // them, duplicates and other processes included): the counter goes.
+    EVENTFDS.lock()[(fd - EVENTFD_BASE) as usize] = None;
 }
 
 /// What an AF_UNIX fd is backed by. socket() makes a Pending fd; connect()/socketpair
@@ -3536,9 +3506,6 @@ pub fn unix_socket() -> u64 {
     unix_alloc(UnixSock::Pending).unwrap_or((-24i64) as u64) // -EMFILE
 }
 
-/// dup(AF_UNIX fd): a NEW fd aliasing the SAME endpoint (UnixSock is Copy, so both
-/// fds share the endpoint's buffers). close() of either just clears its slot; the
-/// endpoint outlives both. Chrome's Mojo dups channel socket handles.
 /// Which CONNECTION SIDE an AF_UNIX fd names, if any. Stable across dup and
 /// across passing the descriptor to another process, unlike the fd number.
 pub fn unix_key(fd: u64) -> Option<(u32, u8)> {
@@ -3560,45 +3527,6 @@ pub fn unix_peer_key(fd: u64) -> Option<(u32, u8)> {
         Some(UnixSock::Stream(e)) => Some(e.peer_key()),
         _ => None,
     }
-}
-
-pub fn unix_fd_dup(fd: u64) -> u64 {
-    if !is_unix_fd(fd) {
-        return (-9i64) as u64; // -EBADF
-    }
-    let sock = UNIX_FDS.lock()[(fd - UNIX_FD_BASE) as usize];
-    match sock {
-        Some(s) => unix_alloc(s).unwrap_or((-24i64) as u64), // -EMFILE
-        None => (-9i64) as u64,
-    }
-}
-
-/// dup(eventfd): a new eventfd fd seeded with the current counter value. Note this
-/// does NOT share the counter (our table is per-slot); adequate for the common
-/// dup-to-transfer-then-close-original pattern chrome uses for platform handles.
-pub fn eventfd_dup(fd: u64) -> u64 {
-    if !is_eventfd(fd) {
-        return (-9i64) as u64;
-    }
-    let owner = eventfd_slot(fd);
-    if EVENTFDS.lock()[owner].is_none() {
-        return (-9i64) as u64;
-    }
-    // A duplicate SHARES the counter. It used to get a copy of the value and its
-    // own counter, so a write through one fd was invisible through the other -
-    // and an eventfd exists to be written by one party and read by another.
-    // Chrome passes eventfds to its children over SCM_RIGHTS (that path dups),
-    // and every wakeup sent through them went nowhere.
-    let mut t = EVENTFDS.lock();
-    for (i, slot) in t.iter_mut().enumerate() {
-        if slot.is_none() && i != owner {
-            *slot = Some(0); // marks the fd live; the counter that counts is `owner`
-            drop(t);
-            EVENTFD_ALIAS.lock()[i] = Some(owner);
-            return EVENTFD_BASE + i as u64;
-        }
-    }
-    (-24i64) as u64 // -EMFILE
 }
 
 /// connect(fd, sockaddr_un path): resolve a Pending AF_UNIX fd. The X display socket

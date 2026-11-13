@@ -9,6 +9,8 @@
 //! * [`Guard`]: a held lock that dereferences to the part of one space;
 //! * [`FlagSlots`]: per-descriptor status flags per space, read without a lock;
 //! * [`Registry`]: which space numbers are in use, reference counted.
+//! * [`ProcTab`] and [`Refs`]: the descriptor table of one process on top of
+//!   a space, and the reference counts of the objects (BUG-098).
 //!
 //! Space [`ROOT`] always exists and lives inside the static; the other spaces
 //! get heap blocks. Every allocation that happens when a space is made is
@@ -21,6 +23,9 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+
+mod proc;
+pub use proc::{Desc, ProcTab, Refs, TabError};
 
 /// The launcher's space: task 0, kernel tasks and the one foreground or glibc
 /// process the launcher runs at a time.
@@ -54,9 +59,19 @@ impl<E: Clone + 'static, const N: usize> Tab<E, N> {
 
     /// A block of `N` copies of `fill`, or `None` when the heap has no room.
     pub fn block(fill: E) -> Option<Box<[E]>> {
+        Self::block_len(N, fill)
+    }
+
+    /// A block of `len` copies of `fill` (`len <= N`): the table of a space
+    /// that is smaller than the one of the root. The owner indexes a space
+    /// only below the length it gave it.
+    pub fn block_len(len: usize, fill: E) -> Option<Box<[E]>> {
+        if len == 0 || len > N {
+            return None;
+        }
         let mut v: Vec<E> = Vec::new();
-        v.try_reserve_exact(N).ok()?;
-        v.resize(N, fill);
+        v.try_reserve_exact(len).ok()?;
+        v.resize(len, fill);
         Some(v.into_boxed_slice())
     }
 
@@ -76,7 +91,7 @@ impl<E: Clone + 'static, const N: usize> Tab<E, N> {
 
     /// Give space `s` its table. `reserve(s)` must have succeeded.
     pub fn install(&mut self, s: usize, b: Box<[E]>) {
-        if s != ROOT && s <= self.extra.len() && b.len() == N {
+        if s != ROOT && s <= self.extra.len() && !b.is_empty() && b.len() <= N {
             self.extra[s - 1] = Some(b);
         }
     }
@@ -393,11 +408,17 @@ mod tests {
         // the number is used again: a fresh table, nothing of the old one
         t.install(4, T::block(None).unwrap());
         assert_eq!(t.of(4)[0], None);
-        // a block of the wrong size is not installed
+        // a block longer than the root's is not installed; a shorter one is
+        // (the table of a small space), and has its own length
         let mut u = T::new([None; 8]);
         assert!(u.reserve(2));
-        u.install(2, alloc::vec![None; 4].into_boxed_slice());
+        u.install(2, alloc::vec![None; 9].into_boxed_slice());
         assert!(!u.has(2));
+        u.install(2, T::block_len(4, None).unwrap());
+        assert!(u.has(2));
+        assert_eq!(u.of(2).len(), 4);
+        assert_eq!(u.of(ROOT).len(), 8);
+        assert!(T::block_len(0, None).is_none() && T::block_len(9, None).is_none());
         // install without reserve is a no-op, not a panic
         let mut v = T::new([None; 8]);
         v.install(6, T::block(None).unwrap());

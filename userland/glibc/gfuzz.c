@@ -27,6 +27,7 @@ static int skip(long nr) {
     case SYS_futex: case SYS_wait4: case SYS_waitid: case SYS_rt_sigsuspend: case SYS_sigaltstack:
     case SYS_arch_prctl: case SYS_set_tid_address: case SYS_setuid: case SYS_setresuid: case SYS_setreuid:
     case SYS_reboot: case SYS_vhangup: case SYS_ptrace:
+    case SYS_close_range:   /* closes the fuzzer's own stdout, like close and dup2 */
         return 1;
     default: return 0;
     }

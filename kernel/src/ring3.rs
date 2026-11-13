@@ -403,12 +403,32 @@ static FILES: eurolock::sync::Mutex<alloc::vec::Vec<(String, alloc::borrow::Cow<
 // Max open file descriptors per the flat VFS. 16 was fine for the shell + small
 // apps but chrome opens hundreds (libs, profile DBs, memfd shm, pipes, epoll) — a
 // full table made EVERY new open return -1 (EPERM): the shm/README/history failures.
-// Kept below UNIX_FD_BASE (600) so regular fds never collide with the socket range.
-const MAX_FD: usize = 512;
+// These are OBJECTS (open files, pipe ends, directory handles) per fd space;
+// the numbers a program sees are descriptors, per process (fdtab.rs), and the
+// socket, eventfd and epoll classes are numbered above every table
+// (GLOBAL_OBJ_BASE).
+/// Objects in the launcher's space: the foreground program or the glibc
+/// process with all its fork children (the browser).
+pub const ROOT_FDS: usize = 4096;
+/// Objects in the space of a background process group.
+const BG_FDS: usize = 512;
+/// The size of the object tables of the calling task's space.
+#[inline]
+fn max_fd() -> usize {
+    if fdspace::current() == fdspace::ROOT { ROOT_FDS } else { BG_FDS }
+}
+/// Object numbers from here up belong to the classes that are numbered once
+/// for the whole system (sockets, eventfds, epoll instances).
+const GLOBAL_OBJ_BASE: u64 = crate::net::SOCK_FD_BASE;
+const _: () = assert!(GLOBAL_OBJ_BASE as usize >= ROOT_FDS);
 
 // One set of descriptor tables per process group (BUG-060): see the module text.
 #[path = "fdspace.rs"]
 mod fdspace;
+// One descriptor table per process on top of them (BUG-098).
+#[path = "fdtab.rs"]
+mod fdtab;
+pub use fdtab::{census as fd_census, census_lines as fd_census_lines};
 
 /// A spin-locked value that exists once per fd space: `lock()` takes the one
 /// lock and yields the part of the calling task's space.
@@ -421,22 +441,22 @@ impl<D: fdspace::Spaced> SpacedLock<D> {
 }
 static SITE_OPEN_FDS: eurolock::LockSite = eurolock::LockSite::new("ring3.OPEN_FDS", eurolock::LockClass::Process);
 // J1: measured legacy global lock (Mode::Plain = statistics only, behaviour unchanged).
-static OPEN_FDS_ALL: eurolock::sync::Mutex<fdspace::Tab<Option<(usize, usize)>, MAX_FD>> =
-    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, fdspace::Tab::new([None; MAX_FD]));
+static OPEN_FDS_ALL: eurolock::sync::Mutex<fdspace::Tab<Option<(usize, usize)>, ROOT_FDS>> =
+    eurolock::sync::Mutex::new_site(&SITE_OPEN_FDS, eurolock::Mode::Plain, fdspace::Tab::new([None; ROOT_FDS]));
 /// The open-file table of the calling task's fd space: (file index, offset) per fd.
 struct OpenFds;
 static OPEN_FDS: OpenFds = OpenFds;
 impl OpenFds {
-    fn lock(&self) -> fdspace::Guard<eurolock::sync::MutexGuard<'static, fdspace::Tab<Option<(usize, usize)>, MAX_FD>>> {
+    fn lock(&self) -> fdspace::Guard<eurolock::sync::MutexGuard<'static, fdspace::Tab<Option<(usize, usize)>, ROOT_FDS>>> {
         let s = fdspace::current();
         fdspace::Guard::new(OPEN_FDS_ALL.lock(), s)
     }
 }
 /// Open DIRECTORY fds (Linux getdents64): (normalized dir path, cursor in the
 /// children list). Separate table so a dir fd is not read as a file.
-static OPEN_DIRS_ALL: Mutex<fdspace::Tab<Option<(String, usize)>, MAX_FD>> =
-    Mutex::new(fdspace::Tab::new([const { None }; MAX_FD]));
-static OPEN_DIRS: SpacedLock<fdspace::Tab<Option<(String, usize)>, MAX_FD>> = SpacedLock(&OPEN_DIRS_ALL);
+static OPEN_DIRS_ALL: Mutex<fdspace::Tab<Option<(String, usize)>, ROOT_FDS>> =
+    Mutex::new(fdspace::Tab::new([const { None }; ROOT_FDS]));
+static OPEN_DIRS: SpacedLock<fdspace::Tab<Option<(String, usize)>, ROOT_FDS>> = SpacedLock(&OPEN_DIRS_ALL);
 
 // ── PIPES (S3 IPC between processes) ─────────────────────────────────────────
 // A pipe is an in-kernel FIFO buffer with two ends (read/write). The
@@ -471,7 +491,7 @@ fn pipes_lock() -> PipesGuard {
 }
 /// Pipe fds: per fd (pipe-id, is_write_end). Separate table alongside file/dir fds.
 /// Taken only through [`pipe_fds`] (interrupts off while held).
-static PIPE_FDS: Mutex<fdspace::Tab<Option<(usize, bool)>, MAX_FD>> = Mutex::new(fdspace::Tab::new([None; MAX_FD]));
+static PIPE_FDS: Mutex<fdspace::Tab<Option<(usize, bool)>, ROOT_FDS>> = Mutex::new(fdspace::Tab::new([None; ROOT_FDS]));
 
 /// BUG-037 (and the BUG-033 hangs): PIPE_FDS is the same disease as PIPES above. The launcher (task 0)
 /// clears it in `reset_fd_table` with interrupts on, and every pipe syscall of a
@@ -480,7 +500,7 @@ static PIPE_FDS: Mutex<fdspace::Tab<Option<(usize, bool)>, MAX_FD>> = Mutex::new
 /// spinning in `pipe_write_fd` on PIPE_FDS with IF=0 (NMI probe), silence. Every
 /// acquisition goes through here: interrupts off first, lock second.
 struct PipeFdsGuard {
-    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Tab<Option<(usize, bool)>, MAX_FD>>>,
+    g: fdspace::Guard<spin::MutexGuard<'static, fdspace::Tab<Option<(usize, bool)>, ROOT_FDS>>>,
     _if: crate::sched::IfOffGuard,
 }
 impl core::ops::Deref for PipeFdsGuard {
@@ -501,11 +521,172 @@ fn pipe_fds() -> PipeFdsGuard {
 /// way and FATALs on a spurious EAGAIN). Parallel to PIPES by index.
 static PIPE_NONBLOCK_ALL: Mutex<fdspace::Lists<bool>> = Mutex::new(fdspace::Lists::new());
 static PIPE_NONBLOCK: SpacedLock<fdspace::Lists<bool>> = SpacedLock(&PIPE_NONBLOCK_ALL);
+/// Per pipe-id: which ends are closed. An end is closed when the last object
+/// naming it is (and an object is closed when its last descriptor is, in
+/// whatever process: fdtab.rs). A reader of a pipe whose write end is closed
+/// gets what is left and then end-of-file; a writer to a pipe whose read end
+/// is closed gets EPIPE. Parallel to PIPES by index; taken with interrupts off
+/// and never while another pipe lock is wanted after it.
+static PIPE_CLOSED_ALL: Mutex<fdspace::Lists<u8>> = Mutex::new(fdspace::Lists::new());
+const PIPE_RD_CLOSED: u8 = 1;
+const PIPE_WR_CLOSED: u8 = 2;
+
+/// Is end `bit` of pipe `id` (in the calling task's space) closed?
+fn pipe_end_closed(id: usize, bit: u8) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    let c = PIPE_CLOSED_ALL.lock();
+    fdspace::Spaced::of(&*c, fdspace::current()).get(id).is_some_and(|b| b & bit != 0)
+}
+
+/// A new, empty pipe in the calling task's space: its id. The slot of a pipe
+/// whose two ends are closed is used again.
+fn pipe_new(nonblock: bool) -> usize {
+    let mut p = pipes_lock();
+    let s = fdspace::current();
+    let mut call = PIPE_CLOSED_ALL.lock();
+    let closed = fdspace::Spaced::of_mut(&mut *call, s);
+    let mut nb = PIPE_NONBLOCK.lock();
+    if closed.len() < p.len() {
+        closed.resize(p.len(), 0);
+    }
+    if let Some(id) = closed.iter().position(|&c| c == PIPE_RD_CLOSED | PIPE_WR_CLOSED) {
+        p[id] = alloc::vec::Vec::new();
+        closed[id] = 0;
+        if nb.len() <= id {
+            nb.resize(id + 1, false);
+        }
+        nb[id] = nonblock;
+        return id;
+    }
+    p.push(alloc::vec::Vec::new());
+    closed.push(0);
+    nb.push(nonblock);
+    p.len() - 1
+}
+
+/// Object `fd` of fd space `s` is closed: an open file, a directory handle or
+/// a pipe end. Works from any task (the reaper closes for a process that is
+/// gone). When that was the last object of a pipe end, the other end is told:
+/// readers blocked on the pipe wake up and find end-of-file.
+fn close_low_in(s: usize, fd: usize) {
+    let cap = if s == fdspace::ROOT { ROOT_FDS } else { BG_FDS };
+    if fd >= cap {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    if s == fdspace::ROOT {
+        FD_NONBLOCK_ROOT[fd].store(false, Ordering::Relaxed); // status flags back to the defaults
+        FD_ACCMODE_ROOT[fd].store(2, Ordering::Relaxed);
+    } else if let Some(f) = FD_FLAGS.get(s) {
+        f.nonblock[fd].store(false, Ordering::Relaxed);
+        f.accmode[fd].store(2, Ordering::Relaxed);
+    }
+    {
+        let mut t = OPEN_FDS_ALL.lock();
+        if t.has(s) {
+            fdspace::Spaced::of_mut(&mut *t, s)[fd] = None;
+        }
+    }
+    {
+        let mut t = OPEN_DIRS_ALL.lock();
+        if t.has(s) {
+            fdspace::Spaced::of_mut(&mut *t, s)[fd] = None;
+        }
+    }
+    let (end, others) = {
+        let mut t = PIPE_FDS.lock();
+        if !t.has(s) {
+            return;
+        }
+        let tab = fdspace::Spaced::of_mut(&mut *t, s);
+        let end = tab[fd].take();
+        (end, end.is_some_and(|e| tab.iter().any(|o| *o == Some(e))))
+    };
+    let Some((id, is_write)) = end else { return };
+    if others {
+        return; // another object still names this end (a kernel-made pair)
+    }
+    let both = {
+        let mut c = PIPE_CLOSED_ALL.lock();
+        let v = fdspace::Spaced::of_mut(&mut *c, s);
+        if v.len() <= id {
+            v.resize(id + 1, 0);
+        }
+        v[id] |= if is_write { PIPE_WR_CLOSED } else { PIPE_RD_CLOSED };
+        v[id] == PIPE_RD_CLOSED | PIPE_WR_CLOSED
+    };
+    if both {
+        // Nobody can read what is left: the buffer goes back to the heap now.
+        let old = {
+            let mut p = PIPES.lock();
+            fdspace::Spaced::of_mut(&mut *p, s).get_mut(id).map(core::mem::take)
+        };
+        drop(old);
+    }
+    let mut w = PIPE_WAITERS_ALL.lock();
+    let v = fdspace::Spaced::of_mut(&mut *w, s);
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].0 == id {
+            crate::sched::unblock(v[i].1);
+            v.swap_remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Hang-up state of object `fd` for poll and epoll: (POLLHUP, POLLERR). The
+/// read end of a pipe whose write end is closed and a socket whose peer is
+/// closed and drained hang up; the write end of a pipe without a reader is in
+/// error.
+fn fd_hangup(fd: u64) -> (bool, bool) {
+    if crate::net::is_unix_fd(fd) {
+        return (crate::net::unix_fd_at_eof(fd), false);
+    }
+    if (fd as usize) < max_fd() {
+        if let Some((id, is_write)) = pipe_fds()[fd as usize] {
+            return if is_write {
+                (false, pipe_end_closed(id, PIPE_RD_CLOSED))
+            } else {
+                (pipe_end_closed(id, PIPE_WR_CLOSED), false)
+            };
+        }
+    }
+    (false, false)
+}
+
+/// Object `fd` is closed: no epoll instance watches it any more.
+fn epoll_forget(fd: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    for list in EPOLLS.lock().iter_mut().flatten() {
+        list.retain(|(f, _, _)| *f as i64 as u64 != fd);
+    }
+}
+
+/// The AF_UNIX socket `fd` is about to close: descriptors that were sent to
+/// it and never received are dropped, and the objects they named with them
+/// when those were their last references.
+fn scm_drop_pending_for(fd: u64) {
+    let Some((conn, side)) = crate::net::unix_key(fd) else { return };
+    let key = ((conn as u64) << 1 | side as u64) | (1 << 40);
+    let objs: alloc::vec::Vec<u64> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut q = SCM_PENDING.lock();
+        let objs = q.iter().filter(|e| e.0 == key).map(|e| e.1).collect();
+        q.retain(|e| e.0 != key);
+        SCM_MSG_BYTES.lock().retain(|e| e.0 != key);
+        objs
+    };
+    for o in objs {
+        fdtab::unref_obj(o);
+    }
+}
 /// Per-fd-NUMBER O_NONBLOCK, for ANY fd kind (socket, eventfd, memfd, file), set via
 /// fcntl(F_SETFL) and reported via fcntl(F_GETFL). Previously only pipe fds tracked
 /// it, so chrome setting a Mojo SOCKET non-blocking then verifying with F_GETFL saw
 /// its flag missing -> invariant violation -> IMMEDIATE_CRASH. Cleared on close.
-/// O_NONBLOCK for SOCKET fds. Socket numbers are class-encoded ABOVE MAX_FD, so
+/// O_NONBLOCK for SOCKET fds. Socket numbers are class-encoded above the tables, so
 /// they never fit FD_NONBLOCK's array: F_SETFL(O_NONBLOCK) on a socket was dropped
 /// and F_GETFL always answered "blocking". Both matter now that a blocking recv
 /// actually waits - answering EAGAIN to a blocking reader is wrong, and blocking a
@@ -635,7 +816,7 @@ fn tls_walk(fd: u64, tx: bool, data: &[u8]) {
 }
 
 fn fd_is_nonblock(fd: u64) -> bool {
-    if (fd as usize) < MAX_FD {
+    if (fd as usize) < max_fd() {
         let f = fd as usize;
         return FD_NONBLOCK[f].load(Ordering::Relaxed) || (is_pipe_fd(f) && pipe_is_nonblock(f));
     }
@@ -644,7 +825,7 @@ fn fd_is_nonblock(fd: u64) -> bool {
 }
 
 fn fd_set_nonblock(fd: u64, nb: bool) {
-    if (fd as usize) < MAX_FD {
+    if (fd as usize) < max_fd() {
         FD_NONBLOCK[fd as usize].store(nb, Ordering::Relaxed);
         if is_pipe_fd(fd as usize) {
             pipe_set_nonblock(fd as usize, nb);
@@ -790,12 +971,12 @@ fn seals_add(fd: u64, add: u32) -> u64 {
     }
 }
 
-static FD_NONBLOCK_ROOT: [core::sync::atomic::AtomicBool; MAX_FD] =
-    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_FD];
+static FD_NONBLOCK_ROOT: [core::sync::atomic::AtomicBool; ROOT_FDS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; ROOT_FDS];
 /// The flag blocks of the fd spaces of background processes; the launcher's
 /// space uses the two `_ROOT` statics. `FD_NONBLOCK[fd]` / `FD_ACCMODE[fd]`
 /// index the calling task's space.
-static FD_FLAGS: fdspace::FlagSlots<MAX_FD> = fdspace::FlagSlots::new();
+static FD_FLAGS: fdspace::FlagSlots<BG_FDS> = fdspace::FlagSlots::new();
 struct FdNonblock;
 static FD_NONBLOCK: FdNonblock = FdNonblock;
 impl core::ops::Index<usize> for FdNonblock {
@@ -823,8 +1004,8 @@ impl core::ops::Index<usize> for FdAccmode {
 /// memfd (not opened via open()) read back read-write, unchanged. Chrome verifies
 /// (F_GETFL & O_ACCMODE) matches how it opened the fd and IMMEDIATE_CRASHes on a
 /// mismatch — so a read-only file must report O_RDONLY, not a hardcoded O_RDWR.
-static FD_ACCMODE_ROOT: [core::sync::atomic::AtomicU8; MAX_FD] =
-    [const { core::sync::atomic::AtomicU8::new(2) }; MAX_FD];
+static FD_ACCMODE_ROOT: [core::sync::atomic::AtomicU8; ROOT_FDS] =
+    [const { core::sync::atomic::AtomicU8::new(2) }; ROOT_FDS];
 
 /// `[linux-rand]` self-test hook: while set, the random syscalls and devices
 /// treat the CSPRNG as not seeded (the pool itself is not touched).
@@ -921,13 +1102,13 @@ fn sys_getrandom(buf: u64, len: u64, flags: u64) -> u64 {
 
 /// (rlim_cur, rlim_max) for a Linux RLIMIT_* resource. Sane, self-consistent values
 /// so a program that reads a limit and sizes/checks against it behaves. NOFILE matches
-/// our fd table (MAX_FD); STACK is 8 MiB; most others are unlimited.
+/// the descriptor limit of a fresh process; STACK is 8 MiB; most others are unlimited.
 fn rlimit_for(resource: u64) -> (u64, u64) {
     const INF: u64 = u64::MAX; // RLIM_INFINITY
     match resource {
         3 => (8 * 1024 * 1024, INF),          // RLIMIT_STACK: 8 MiB soft
         4 => (0, INF),                        // RLIMIT_CORE: no core dumps
-        7 => (MAX_FD as u64, MAX_FD as u64),  // RLIMIT_NOFILE: our fd table size
+        7 => (fdtab::NOFILE_DEFAULT, fdtab::NOFILE_DEFAULT), // RLIMIT_NOFILE: descriptors per process
         _ => (INF, INF),                      // CPU/DATA/AS/... unlimited
     }
 }
@@ -935,7 +1116,7 @@ fn rlimit_for(resource: u64) -> (u64, u64) {
 /// Copy a fd's access mode + O_NONBLOCK to another fd number (dup semantics), so a
 /// duplicated fd reports the same flags via fcntl(F_GETFL) as its source.
 fn copy_fd_flags(from: usize, to: usize) {
-    if from < MAX_FD && to < MAX_FD {
+    if from < max_fd() && to < max_fd() {
         FD_ACCMODE[to].store(FD_ACCMODE[from].load(Ordering::Relaxed), Ordering::Relaxed);
         FD_NONBLOCK[to].store(FD_NONBLOCK[from].load(Ordering::Relaxed), Ordering::Relaxed);
     }
@@ -943,7 +1124,7 @@ fn copy_fd_flags(from: usize, to: usize) {
 
 /// Record the access mode (low 2 bits of the open `flags`) for a freshly-opened fd.
 fn set_fd_accmode(fd: u64, flags: u64) {
-    if fd != u64::MAX && (fd as usize) < MAX_FD {
+    if fd != u64::MAX && (fd as usize) < max_fd() {
         FD_ACCMODE[fd as usize].store((flags & 3) as u8, Ordering::Relaxed);
     }
 }
@@ -1311,18 +1492,8 @@ fn cdp_pipes_create() {
     if !CDP_DRIVE.load(Ordering::Relaxed) {
         return;
     }
-    let cmd_id = {
-        let mut p = pipes_lock();
-        p.push(alloc::vec::Vec::new());
-        PIPE_NONBLOCK.lock().push(false);
-        p.len() - 1
-    };
-    let res_id = {
-        let mut p = pipes_lock();
-        p.push(alloc::vec::Vec::new());
-        PIPE_NONBLOCK.lock().push(false);
-        p.len() - 1
-    };
+    let cmd_id = pipe_new(false);
+    let res_id = pipe_new(false);
     {
         let mut pf = pipe_fds();
         pf[3] = Some((cmd_id, false)); // fd 3: chrome reads our commands
@@ -1330,6 +1501,9 @@ fn cdp_pipes_create() {
     }
     FD_ACCMODE[3].store(0, Ordering::Relaxed); // O_RDONLY, as a real read end reports
     FD_ACCMODE[4].store(1, Ordering::Relaxed); // O_WRONLY
+    // ...and in the descriptor table of the program that is about to start.
+    fdtab::preopen(0, fdspace::ROOT, 3, 3);
+    fdtab::preopen(0, fdspace::ROOT, 4, 4);
     CDP_CMD_ID.store(cmd_id, Ordering::Relaxed);
     CDP_RES_ID.store(res_id, Ordering::Relaxed);
     crate::serial_println!("[cdp] pipes ready: fd 3 = commands (pipe {cmd_id}), fd 4 = answers (pipe {res_id})");
@@ -2369,21 +2543,15 @@ fn pipe_create(user_fds: u64) -> u64 {
 
 /// pipe2 with flags (O_NONBLOCK = 0x800). Records the pipe's blocking mode.
 fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
-    let id = {
-        let mut p = pipes_lock();
-        p.push(alloc::vec::Vec::new());
-        PIPE_NONBLOCK.lock().push(flags & 0x800 != 0);
-        p.len() - 1
-    };
-    let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD); // stay below socket fds
+    let id = pipe_new(flags & 0x800 != 0);
+    let ceil = (crate::net::SOCK_FD_BASE as usize).min(max_fd()); // stay below socket fds
     let files = OPEN_FDS.lock();
     let dirs = OPEN_DIRS.lock();
     let mut pf = pipe_fds();
     let mut got = [usize::MAX; 2];
     let mut k = 0;
     for fd in 3..ceil {
-        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() && !fd_is_aliased(fd) {
-            // (a fork child's pipe fds are recorded below, after the guards drop)
+        if pf[fd].is_none() && files[fd].is_none() && dirs[fd].is_none() {
             got[k] = fd;
             k += 1;
             if k == 2 {
@@ -2391,20 +2559,25 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
             }
         }
     }
+    let give_back = |id: usize| {
+        let mut c = PIPE_CLOSED_ALL.lock();
+        if let Some(b) = fdspace::Spaced::of_mut(&mut *c, fdspace::current()).get_mut(id) {
+            *b = PIPE_RD_CLOSED | PIPE_WR_CLOSED;
+        }
+    };
     if k < 2 {
-        return (-24i64) as u64; // -EMFILE
+        give_back(id);
+        return (-23i64) as u64; // -ENFILE: the object table of this space is full
     }
     // Validate the output pointer (int[2]) BEFORE we commit the fds, so a
     // forged `fds` cannot overwrite kernel memory.
-    let fds = [got[0] as i32, got[1] as i32];
     if !in_user_arena(user_fds, 8) {
+        give_back(id);
         return EFAULT;
     }
     pf[got[0]] = Some((id, false)); // read end
     pf[got[1]] = Some((id, true)); // write end
     drop(pf);
-    child_note_open(got[0]); // a fork child's own pipes free on its close/exit
-    child_note_open(got[1]);
     if flags & 0x8_0000 != 0 { // O_CLOEXEC on both ends
         fd_set_cloexec(got[0] as u64, true);
         fd_set_cloexec(got[1] as u64, true);
@@ -2414,14 +2587,27 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     // a hardcoded O_RDWR for both was the mismatch that IMMEDIATE_CRASHed it.
     FD_ACCMODE[got[0]].store(0, Ordering::Relaxed); // O_RDONLY (read end)
     FD_ACCMODE[got[1]].store(1, Ordering::Relaxed); // O_WRONLY (write end)
-    let _ = write_user(user_fds, fds[0]);
-    let _ = write_user(user_fds + 4, fds[1]);
-    0
+    drop(files);
+    drop(dirs);
+    // The two ends become descriptors of the calling process (fdtab.rs): those
+    // are the numbers the program gets.
+    match fdtab::install_pair(got[0] as u64, got[1] as u64) {
+        Ok((rd, wr)) => {
+            let _ = write_user(user_fds, rd as i32);
+            let _ = write_user(user_fds + 4, wr as i32);
+            0
+        }
+        Err(e) => {
+            vfs_close(got[0]);
+            vfs_close(got[1]);
+            e
+        }
+    }
 }
 
 /// True if `fd` is either end of a pipe.
 fn is_pipe_fd(fd: usize) -> bool {
-    fd < MAX_FD && pipe_fds()[fd].is_some()
+    fd < max_fd() && pipe_fds()[fd].is_some()
 }
 
 /// Is `fd` a currently-open descriptor of ANY kind (VFS file, pipe, epoll, eventfd,
@@ -2434,8 +2620,8 @@ fn fd_is_open(fd: u64) -> bool {
         return true;
     }
     let u = fd as usize;
-    (u < MAX_FD && OPEN_FDS.lock()[u].is_some())
-        || (u < MAX_FD && OPEN_DIRS.lock()[u].is_some()) // open DIRECTORY fds count too
+    (u < max_fd() && OPEN_FDS.lock()[u].is_some())
+        || (u < max_fd() && OPEN_DIRS.lock()[u].is_some()) // open DIRECTORY fds count too
         || is_pipe_fd(u)
         || is_epoll_fd(fd)
         || crate::net::is_eventfd(fd)
@@ -2472,9 +2658,9 @@ pub fn fd_kind(fd: u64) -> &'static str {
             }
         }
         "inet-sock"
-    } else if u < MAX_FD && OPEN_DIRS.lock()[u].is_some() {
+    } else if u < max_fd() && OPEN_DIRS.lock()[u].is_some() {
         "dir"
-    } else if u < MAX_FD && OPEN_FDS.lock()[u].is_some() {
+    } else if u < max_fd() && OPEN_FDS.lock()[u].is_some() {
         "file"
     } else if fd < 3 {
         "std"
@@ -2505,8 +2691,8 @@ fn pipe_is_nonblock(fd: usize) -> bool {
 // reports the currently-ready fds (or 0 = "timeout") so the pump keeps turning. It
 // does NOT block the calling thread — chrome's other threads run at syscall
 // boundaries and post wake-ups (an eventfd) that the next wait observes as ready.
-const EPOLL_FD_BASE: u64 = 900;
-const MAX_EPOLL: usize = 64;
+const EPOLL_FD_BASE: u64 = 0x1_4000;
+const MAX_EPOLL: usize = 256;
 static EPOLLS: Mutex<[Option<alloc::vec::Vec<(i32, u32, u64)>>; MAX_EPOLL]> =
     Mutex::new([const { None }; MAX_EPOLL]);
 
@@ -2591,9 +2777,10 @@ fn epoll_fd_ready(fd: u64) -> bool {
         // descriptors-only Mojo handshake message carries 0 data bytes and was
         // invisible to byte-based readiness (the MP child-connect stall).
         crate::net::unix_fd_readable(fd) || scm_pending_for(fd)
-    } else if (fd as usize) < MAX_FD && is_pipe_fd(fd as usize) {
+    } else if (fd as usize) < max_fd() && is_pipe_fd(fd as usize) {
         match pipe_fds()[fd as usize] {
-            Some((id, false)) => !pipes_lock()[id].is_empty(), // read end w/ data
+            // read end with data, or at end-of-file (a read does not block)
+            Some((id, false)) => !pipes_lock()[id].is_empty() || pipe_end_closed(id, PIPE_WR_CLOSED),
             _ => false,                                        // write end: not "readable"
         }
     } else {
@@ -2610,7 +2797,7 @@ fn epoll_fd_writable(fd: u64) -> bool {
     crate::net::is_eventfd(fd)
         || crate::net::is_unix_fd(fd)
         || crate::net::sock_writable(fd)
-        || ((fd as usize) < MAX_FD && is_pipe_fd(fd as usize))
+        || ((fd as usize) < max_fd() && is_pipe_fd(fd as usize))
 }
 
 /// epoll_wait(epfd, *events, maxevents, timeout): report ready fds. When nothing is
@@ -2647,6 +2834,13 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             }
             if evmask & 0x4 != 0 && epoll_fd_writable(fd as u64) {
                 evs |= 0x4; // EPOLLOUT
+            }
+            let (hup, err) = fd_hangup(fd as u64);
+            if hup {
+                evs |= 0x10; // EPOLLHUP
+            }
+            if err {
+                evs |= 0x8; // EPOLLERR
             }
             if evs != 0 {
                 // struct epoll_event {u32 events; u64 data} packed = 12 bytes.
@@ -2739,7 +2933,7 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
 
 /// Write to a pipe fd (write end). None = `fd` is not a pipe write fd.
 fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return None;
     }
     // Big writes on the DevTools answer pipe are the frame replies: on native
@@ -2752,6 +2946,9 @@ fn pipe_write_fd(fd: usize, bytes: &[u8]) -> Option<u64> {
     }
     let _g = crate::sched::IfOffGuard::new();
     if let Some((id, true)) = pipe_fds()[fd] {
+        if pipe_end_closed(id, PIPE_RD_CLOSED) {
+            return Some((-32i64) as u64); // -EPIPE: the last read end is closed
+        }
         pipes_lock()[id].extend_from_slice(bytes);
         // Wake any tasks blocked reading this pipe.
         let mut w = PIPE_WAITERS.lock();
@@ -2795,6 +2992,10 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
                 return Some(n as u64);
             }
         }
+        // Empty and nobody can write any more: end-of-file.
+        if pipe_end_closed(id, PIPE_WR_CLOSED) {
+            return Some(0);
+        }
         // Empty: non-blocking pipe -> EAGAIN; blocking -> park until a write wakes us.
         let nonblock = PIPE_NONBLOCK.lock().get(id).copied().unwrap_or(false);
         if nonblock {
@@ -2826,15 +3027,16 @@ fn pipe_read_blocking(fd: usize, buf: u64, len: usize) -> Option<u64> {
 /// Read from a pipe fd (read end). Empty -> -EAGAIN (the reader polls). None = not a
 /// pipe read fd.
 fn pipe_read_fd(fd: usize, buf: u64, len: usize) -> Option<u64> {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return None;
     }
     if let Some((id, false)) = pipe_fds()[fd] {
+        if pipes_lock()[id].is_empty() {
+            // End-of-file when the last write end is closed, else "not yet".
+            return Some(if pipe_end_closed(id, PIPE_WR_CLOSED) { 0 } else { (-11i64) as u64 });
+        }
         let mut pipes = pipes_lock();
         let p = &mut pipes[id];
-        if p.is_empty() {
-            return Some((-11i64) as u64); // -EAGAIN
-        }
         let n = len.min(p.len());
         // Validate the destination buffer BEFORE we consume from the pipe; on a
         // forged pointer the read fails without losing data or touching kernel
@@ -2859,9 +3061,9 @@ static FD_SPACES: Mutex<fdspace::Registry> = Mutex::new(fdspace::Registry::new()
 /// Give fd space `s` its tables and flags. False when the heap has no room;
 /// the caller then takes back what was installed ([`fdspace_drop_tables`]).
 fn fdspace_install(s: usize) -> bool {
-    let a = fdspace::Tab::<Option<(usize, usize)>, MAX_FD>::block(None);
-    let b = fdspace::Tab::<Option<(String, usize)>, MAX_FD>::block(None);
-    let c = fdspace::Tab::<Option<(usize, bool)>, MAX_FD>::block(None);
+    let a = fdspace::Tab::<Option<(usize, usize)>, ROOT_FDS>::block_len(BG_FDS, None);
+    let b = fdspace::Tab::<Option<(String, usize)>, ROOT_FDS>::block_len(BG_FDS, None);
+    let c = fdspace::Tab::<Option<(usize, bool)>, ROOT_FDS>::block_len(BG_FDS, None);
     let (Some(a), Some(b), Some(c)) = (a, b, c) else { return false };
     {
         let mut t = OPEN_FDS_ALL.lock();
@@ -2895,7 +3097,10 @@ fn fdspace_drop_tables(s: usize) {
     let d = PIPES.lock().remove(s);
     let e = PIPE_NONBLOCK_ALL.lock().remove(s);
     let f = PIPE_WAITERS_ALL.lock().remove(s);
+    let g = PIPE_CLOSED_ALL.lock().remove(s);
+    drop(g);
     FD_FLAGS.remove(s);
+    fdtab::space_released(s);
     let owner = cloexec_space_owner(s);
     FD_CLOEXEC.lock().retain(|&(o, _)| o != owner);
     drop((a, b, c, d, e, f)); // freed after the locks are gone
@@ -2944,6 +3149,7 @@ fn fdspace_release(s: usize) {
         fdspace::Spaced::of_mut(&mut *PIPE_FDS.lock(), o).fill(None);
         fdspace::Spaced::of_mut(&mut *PIPES.lock(), o).clear();
         fdspace::Spaced::of_mut(&mut *PIPE_NONBLOCK_ALL.lock(), o).clear();
+        fdspace::Spaced::of_mut(&mut *PIPE_CLOSED_ALL.lock(), o).clear();
         fdspace::Spaced::of_mut(&mut *PIPE_WAITERS_ALL.lock(), o).clear();
         if let Some(f) = FD_FLAGS.get(o) {
             f.reset();
@@ -2955,6 +3161,7 @@ fn fdspace_release(s: usize) {
 /// Scheduler hook: a task slot is handed out again (see `sched::alloc_slot`).
 pub fn fd_space_slot_reset(task: usize) {
     fdspace::task_slot_reset(task);
+    fdtab::task_slot_reset(task);
 }
 
 /// Fd spaces in use by background processes (a leak counter for the self-tests).
@@ -2979,6 +3186,21 @@ fn reset_fd_table_inner() {
     for w in LINUX_ENOSYS_SEEN.iter() {
         w.store(0, Ordering::Relaxed);
     }
+    // The descriptor tables of the old run's processes, and what was still in
+    // flight between them. A socket, eventfd or epoll instance that nothing
+    // names any more is closed here (unless a hosted program is still running
+    // in this space: its objects are left as they always were).
+    let in_flight: alloc::vec::Vec<u64> = SCM_PENDING.lock().drain(..).map(|e| e.1).collect();
+    SCM_MSG_BYTES.lock().clear();
+    let left = fdtab::reset_root();
+    if !persistent_running() {
+        for o in in_flight.into_iter().filter(|&o| o >= GLOBAL_OBJ_BASE) {
+            fdtab::unref_obj(o);
+        }
+        for o in left {
+            let _ = close_fd_now(o);
+        }
+    }
     OPEN_FDS.lock().fill(None);
     for slot in OPEN_DIRS.lock().iter_mut() {
         *slot = None;
@@ -2989,6 +3211,7 @@ fn reset_fd_table_inner() {
     pipe_fds().fill(None);
     pipes_lock().clear();
     PIPE_NONBLOCK.lock().clear();
+    fdspace::Spaced::of_mut(&mut *PIPE_CLOSED_ALL.lock(), fdspace::current()).clear();
     PIPE_WAITERS.lock().clear();
 }
 
@@ -3190,10 +3413,6 @@ pub fn dump_suspect_addrs() {
     a!(alloc_low_fd, "alloc_low_fd");
     a!(open_low_fd, "open_low_fd");
     a!(pipe_create2, "pipe_create2");
-    a!(fd_is_aliased, "fd_is_aliased");
-    a!(child_note_open, "child_note_open");
-    a!(child_close_own, "child_close_own");
-    a!(child_opened_release, "child_opened_release");
     a!(disk_cache_get, "disk_cache_get");
     a!(disk_cache_put, "disk_cache_put");
     a!(shared_phys_sorted, "shared_phys_sorted");
@@ -3203,11 +3422,7 @@ pub fn dump_suspect_addrs() {
     a!(scm_pending_for, "scm_pending_for");
     a!(scm_take, "scm_take");
     a!(crate::net::unix_fd_at_eof, "net::unix_fd_at_eof");
-    a!(crate::net::unix_fds_open, "net::unix_fds_open");
-    a!(fork_child_release_fds, "fork_child_release_fds");
     a!(close_fd_now, "close_fd_now");
-    a!(dup2_fd, "dup2_fd");
-    a!(unalias_fd, "unalias_fd");
     // Static addresses too: the NMI probe decodes the polled static's absolute
     // address; these lines let it be matched to a name.
     macro_rules! sa { ($st:expr, $n:expr) => { crate::serial_println!("[saddr] {:#018x}  {}", core::ptr::addr_of!($st) as usize as u64, $n); } }
@@ -3219,22 +3434,17 @@ pub fn dump_suspect_addrs() {
     sa!(CHILD_EXE_PATH, "CHILD_EXE_PATH");
     sa!(CHILD_EXITS, "CHILD_EXITS");
     sa!(CHILD_MEM, "CHILD_MEM");
-    sa!(CHILD_OPENED, "CHILD_OPENED");
     sa!(CHILD_THREADS, "CHILD_THREADS");
     sa!(CURRENT_APP, "CURRENT_APP");
     sa!(DAEMON_OUTPUT, "DAEMON_OUTPUT");
     sa!(DAEMON_PARTIAL, "DAEMON_PARTIAL");
-    sa!(DEFERRED_CLOSE, "DEFERRED_CLOSE");
     sa!(DEMAND_FILE_MAPS, "DEMAND_FILE_MAPS");
     sa!(DIRTY, "DIRTY");
     sa!(DISK_FILES, "DISK_FILES");
     sa!(DISK_PAGE_CACHE, "DISK_PAGE_CACHE");
     sa!(ENV, "ENV");
     sa!(EPOLLS, "EPOLLS");
-    sa!(FD_ALIAS, "FD_ALIAS");
     sa!(FILES, "FILES");
-    sa!(FORK_CHILD_CLOSED, "FORK_CHILD_CLOSED");
-    sa!(FORK_INHERITED, "FORK_INHERITED");
     sa!(FUTEX_LAST_WAKE, "FUTEX_LAST_WAKE");
     sa!(FUTEX_QUEUE, "FUTEX_QUEUE");
     sa!(GLIBC_CHILD_EXITS, "GLIBC_CHILD_EXITS");
@@ -3264,12 +3474,9 @@ pub fn dump_suspect_addrs() {
     sa!(THREAD_NAMES, "THREAD_NAMES");
     sa!(VDSO_IMAGE_FRAMES, "VDSO_IMAGE_FRAMES");
     sa!(crate::interrupts::TICKS, "interrupts::TICKS");
-    a!(fd_alias_set, "fd_alias_set");
-    a!(fd_alias_clear, "fd_alias_clear");
     a!(vfs_close, "vfs_close");
     a!(crate::net::unix_fd_close, "net::unix_fd_close");
     a!(crate::net::eventfd_close, "net::eventfd_close");
-    a!(fork_child_mark_closed, "fork_child_mark_closed");
     a!(futex_wait, "futex_wait");
     a!(futex_wake, "futex_wake");
     a!(vfs_read, "vfs_read");
@@ -3560,7 +3767,6 @@ fn open_low_fd(fi: usize) -> u64 {
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_FDS.lock()[fd] = Some((fi, 0));
-            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
@@ -3593,7 +3799,7 @@ fn cloexec_space_owner(s: usize) -> usize {
 
 /// Mark/unmark `fd` close-on-exec for the CURRENT process.
 fn fd_set_cloexec(fd: u64, on: bool) {
-    if fd >= MAX_FD as u64 && !crate::net::is_sock_fd(fd)
+    if fd >= max_fd() as u64 && !crate::net::is_sock_fd(fd)
         && !crate::net::is_unix_fd(fd) && !crate::net::is_eventfd(fd) && !is_epoll_fd(fd) {
         return;
     }
@@ -3612,75 +3818,6 @@ fn fd_is_cloexec(fd: u64) -> bool {
     let _g = crate::sched::IfOffGuard::new();
     let o = cloexec_owner();
     FD_CLOEXEC.lock().iter().any(|&(ow, f)| ow == o && f as u64 == fd)
-}
-
-/// execve: close every close-on-exec descriptor of this process, exactly as a
-/// real kernel does, before the new image starts.
-fn cloexec_do_exec(owner: usize) {
-    let fds: alloc::vec::Vec<u32> = {
-        let _g = crate::sched::IfOffGuard::new();
-        let mut c = FD_CLOEXEC.lock();
-        let mine: alloc::vec::Vec<u32> = c.iter().filter(|&&(o, _)| o == owner).map(|&(_, f)| f).collect();
-        c.retain(|&(o, _)| o != owner);
-        mine
-    };
-    let n = fds.len();
-    for fd in fds {
-        let fd = fd as u64;
-        // The child's own descriptors really close; an inherited one is only
-        // closed FOR THIS PROCESS (the parent keeps its share) - the same split
-        // the rest of the fd model uses.
-        if !child_close_own(fd) {
-            fd_alias_clear(fd as usize);
-            fork_child_mark_closed(fd);
-        }
-    }
-    if n > 0 {
-        crate::serial_println!("[execve] closed {n} close-on-exec descriptor(s)");
-    }
-}
-
-/// Low fds OPENED BY a fork child, per owner. A child's close of one of ITS OWN
-/// fds really frees the slot (nobody else holds it), and a child's exit frees
-/// whatever it left open. Without this every child open pinned a global slot for
-/// ever (the child's close is mark-only, meant for INHERITED fds), and six
-/// re-exec'd children x ~85 ld.so lib opens marched the table into the 500
-/// ceiling: run 9's renderer died with "error while loading shared libraries:
-/// libnssutil3.so" at fd 498.
-static CHILD_OPENED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u16>)>> =
-    Mutex::new(alloc::vec::Vec::new());
-
-fn child_note_open(fd: usize) {
-    let _g = crate::sched::IfOffGuard::new();
-    let cur = crate::sched::current();
-    if let Some(owner) = fork_child_owner(cur) {
-        let mut g = CHILD_OPENED.lock();
-        if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
-            if !set.contains(&(fd as u16)) {
-                set.push(fd as u16);
-            }
-        } else {
-            g.push((owner, alloc::vec![fd as u16]));
-        }
-    }
-}
-
-/// close() by a fork child: if the fd is one the CHILD itself opened, really
-/// free it and report true; else (an inherited fd) the caller mark-closes it.
-fn child_close_own(fd: u64) -> bool {
-    let _g = crate::sched::IfOffGuard::new();
-    let cur = crate::sched::current();
-    let Some(owner) = fork_child_owner(cur) else { return false };
-    let mut g = CHILD_OPENED.lock();
-    if let Some((_, set)) = g.iter_mut().find(|(o, _)| *o == owner) {
-        if let Some(i) = set.iter().position(|&f| f as u64 == fd) {
-            set.swap_remove(i);
-            drop(g);
-            let _ = close_fd_now(fd);
-            return true;
-        }
-    }
-    false
 }
 
 /// CROSS-PROCESS PAGE CACHE for disk-served (EuroPack) file pages. Every fork
@@ -3776,21 +3913,6 @@ fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
     keep
 }
 
-/// A fork child is gone: free every low fd it opened and still had open.
-fn child_opened_release(owner: usize) {
-    let _g = crate::sched::IfOffGuard::new();
-    let set = {
-        let mut g = CHILD_OPENED.lock();
-        match g.iter().position(|(o, _)| *o == owner) {
-            Some(i) => g.swap_remove(i).1,
-            None => return,
-        }
-    };
-    for fd in set {
-        let _ = close_fd_now(fd as u64);
-    }
-}
-
 /// Read from an open fd into a user buffer -> number of bytes (u64::MAX on error).
 /// pread(2): read `len` bytes from file `fd` at absolute `offset` into `buf`,
 /// WITHOUT changing the fd's position. Serves the embedded WAD and VFS files.
@@ -3884,7 +4006,7 @@ fn diag_page_read(fi: usize, n: u64, how: &str) {
 }
 
 fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return u64::MAX;
     }
     let fi = match OPEN_FDS.lock()[fd] {
@@ -3998,7 +4120,7 @@ fn char_device_read(fi: usize, buf: u64, len: usize) -> Option<u64> {
 }
 
 fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return u64::MAX;
     }
     let mut fds = OPEN_FDS.lock();
@@ -4107,7 +4229,7 @@ fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
 /// Write `len` bytes from a user buffer to an open fd (in the VFS); the file
 /// grows as needed. Returns the number of bytes written.
 fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return u64::MAX;
     }
     let mut fds = OPEN_FDS.lock();
@@ -4492,7 +4614,9 @@ pub fn reap_dead(falloc: &mut FrameAllocator) {
         }
         // Sockets the process still held: closed now (FIN for a live TCP peer).
         bg_net_release(p.pid);
-        // Its files, directories and pipes: gone with the last process of its fd space.
+        // Its descriptors, if it did not get to close them itself; its files,
+        // directories and pipes are gone with the last process of its fd space.
+        bg_fds_exit(p.pid, p.fdspace);
         fdspace_release(p.fdspace);
         // LOADTEST-R630 BUG-014: give the scheduler slots back. The process task and
         // its thread tasks are Dead (exit / exit_group marked them) and their kernel
@@ -4655,6 +4779,7 @@ pub fn note_isolation_kill(task: usize, addr: u64) -> u64 {
     let mut bg = BG.lock();
     if let Some(p) = bg.iter_mut().find(|p| p.task == task) {
         p.zombie = true; // ready to be reaped
+        bg_fds_exit(p.pid, p.fdspace);
         p.output.clear(); // the isolation reason is more informative than the last output
         p.kill_reason = Some(alloc::format!("memory isolation: access {addr:#x} denied"));
         return p.pid;
@@ -4761,7 +4886,7 @@ pub static PATH_DENIES: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 
 fn proc_limits(key: usize) -> eurosandbox::Limits {
     PROC_LIMITS.lock().iter().find(|(k, _)| *k == key).map(|(_, l)| *l)
-        .unwrap_or_else(|| eurosandbox::Limits::defaults(MAX_FD as u64))
+        .unwrap_or_else(|| eurosandbox::Limits::defaults(fdtab::NOFILE_DEFAULT))
 }
 
 fn proc_limits_set(key: usize, l: eurosandbox::Limits) {
@@ -4972,6 +5097,7 @@ pub fn kill_pid(pid: u64) -> bool {
         bg.iter_mut().find(|p| p.pid == pid && !p.zombie).map(|p| {
             p.zombie = true;
             p.kill_reason = Some(String::from("terminated via shell (kill)"));
+            bg_fds_exit(p.pid, p.fdspace);
             p.task
         })
     });
@@ -5527,6 +5653,11 @@ fn do_fork(bg: &mut alloc::vec::Vec<BgProc>, pos: usize) -> u64 {
     let space = bg[pos].fdspace;
     fdspace_retain(space);
     fdspace::set_task(task, space);
+    // Its descriptor table is a copy of the parent's (fdtab.rs).
+    fdtab::set_task_pid(task, child_pid);
+    if !fdtab::fork(fdtab::bg_proc(parent_pid), fdtab::bg_proc(child_pid), space, &mut |o| bg_close_obj(space, o)) {
+        crate::serial_println!("[fork] pid {child_pid}: no memory for the descriptor table (standard streams only)");
+    }
 
     bg.push(BgProc {
         task,
@@ -5645,6 +5776,9 @@ fn do_execve(p: &mut BgProc, path_ptr: u64, argv_ptr: u64) -> u64 {
         regs.add(12).write(0x202); // rflags with IF=1
         USER_RSP = rsp;
     }
+    // The close-on-exec descriptors of this process are gone with the old image.
+    let space = p.fdspace;
+    fdtab::exec(fdtab::bg_proc(p.pid), space, &mut |o| bg_close_obj(space, o));
     crate::kinfo!("[exec] pid {} execve {path} -> entry {:#x} (same arena {arena:#x})", p.pid, info.entry);
     // 3D-6: record the execution in the hash-chained audit log.
     crate::audit::record_execve(&path);
@@ -5660,7 +5794,7 @@ fn bg_read_fd(fd: usize, buf: u64, len: usize) -> u64 {
     // for every background process, a boot demo could leave a stale pipe on the fd
     // number this process later opened a file on; each process has its own fd
     // space since BUG-060, and the order is kept.)
-    if fd < MAX_FD && OPEN_FDS.lock()[fd].is_some() {
+    if fd < max_fd() && OPEN_FDS.lock()[fd].is_some() {
         vfs_read(fd, buf, len)
     } else if let Some(r) = pipe_read_fd(fd, buf, len) {
         r
@@ -5896,18 +6030,8 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             0
         }
         22 | 293 => pipe_create(a1),                                  // pipe / pipe2
-        32 => a1, // dup(fd) -> same fd (simplified)
-        33 => {
-            // dup2(oldfd, newfd): copy the pipe end to newfd.
-            let (old, new) = (a1 as usize, a2 as usize);
-            if old < MAX_FD && new < MAX_FD {
-                let v = pipe_fds()[old];
-                pipe_fds()[new] = v;
-                new as u64
-            } else {
-                (-9i64) as u64
-            }
-        }
+        // dup, dup2, dup3 are answered by the descriptor table (fdtab.rs).
+        32 | 33 | 292 => (-9i64) as u64,
         9 => {
             // mmap -> bump from the OWN heap (anonymous allocation, page-aligned).
             let len = (a2 + 0xFFF) & !0xFFF;
@@ -5971,6 +6095,7 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             set_task_caps(child, effective_caps()); // thread: same rights
             fdspace::set_task(child, p.fdspace); // and the same descriptors
+            fdtab::set_task_pid(child, p.pid);
             register_thread_kstack(child, slot);
             p.threads.push(child);
             crate::serial_println!("[thread] clone: pid {} -> thread task {child} (shared address space, own stack/TLS)", p.pid);
@@ -6209,6 +6334,8 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             // the reaper frees the frames. musl spins afterward until the timer switches.
             p.zombie = true;
             p.kill_reason = Some(alloc::format!("done (exit {a1})"));
+            // Its descriptors close: a pipe it was the last writer of ends here.
+            bg_fds_exit(p.pid, p.fdspace);
             // If the app that owned the screen just exited, release ownership.
             // set_active(false) is a single atomic store (LOCK-FREE), so it is
             // safe under the held BG spinlock; and during boot app_pid()==0 never
@@ -6337,6 +6464,22 @@ fn bg_sock_owner(fd: u64) -> Option<(u64, bool)> {
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG_SOCKS.lock().iter().find(|e| e.0 == fd).map(|e| (e.1, e.2))
     })
+}
+
+/// Object `o` of background fd space `space` lost its last descriptor. Files,
+/// directory handles and pipe ends close here; the sockets of a background
+/// process are closed by pid ([`bg_net_release`]) or by its own close call.
+fn bg_close_obj(space: usize, o: u64) {
+    if o < GLOBAL_OBJ_BASE {
+        close_low_in(space, o as usize);
+    }
+}
+
+/// Background process `pid` is gone (exit, kill, reap): its descriptor table
+/// goes, and the objects it was the last holder of are closed. Safe to call
+/// more than once and from any task.
+fn bg_fds_exit(pid: u64, space: usize) {
+    fdtab::exit(fdtab::bg_proc(pid), space, &mut |o| bg_close_obj(space, o));
 }
 
 /// Close every socket a dead background process still owned (from reap_dead,
@@ -6774,6 +6917,7 @@ pub fn spawn_bg_musl(falloc: &mut FrameAllocator, program: &[u8], pid: u64, argv
         return false;
     }
     fdspace::set_task(idx, space); // before the task can run (interrupts are off)
+    fdtab::set_task_pid(idx, pid);
     // BUG-007 hardening: irqsave BG hold (non-preemptible) for the registration push.
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
@@ -6943,6 +7087,7 @@ pub fn spawn_bg_app(
         return None;
     }
     fdspace::set_task(idx, space); // before the task can run (interrupts are off)
+    fdtab::set_task_pid(idx, pid);
     x86_64::instructions::interrupts::without_interrupts(|| {
         BG.lock().push(BgProc {
             task: idx,
@@ -7033,74 +7178,11 @@ pub fn spawn_euro_app(
 }
 
 fn vfs_close(fd: usize) -> u64 {
-    if fd < MAX_FD {
-        FD_NONBLOCK[fd].store(false, Ordering::Relaxed); // reset status flags for reuse
-        FD_ACCMODE[fd].store(2, Ordering::Relaxed);      // back to default O_RDWR for reuse
-        OPEN_FDS.lock()[fd] = None;
-        OPEN_DIRS.lock()[fd] = None;
-    }
+    close_low_in(fdspace::current(), fd);
     0
 }
 
-/// dup(oldfd): allocate a NEW fd aliasing the same open object. fd numbers encode
-/// their class by range (unix 600+, eventfd 800+, epoll 900+), so the dup is made
-/// in the SAME class. Runs non-preemptively (IF=0) so brief nested table locks can't
-/// deadlock. Chrome's Mojo dups channel socket/eventfd/pipe handles; without dup it
-/// gets ENOSYS and IPC channel setup (incl. the in-process GPU channel) fails.
-fn dup_fd(oldfd: u64) -> u64 {
-    if crate::net::is_eventfd(oldfd) {
-        return crate::net::eventfd_dup(oldfd);
-    }
-    if crate::net::is_unix_fd(oldfd) {
-        return crate::net::unix_fd_dup(oldfd);
-    }
-    if is_epoll_fd(oldfd) {
-        let src = EPOLLS.lock().get((oldfd - EPOLL_FD_BASE) as usize).cloned().flatten();
-        let list = match src {
-            Some(l) => l,
-            None => return (-9i64) as u64,
-        };
-        let mut e = EPOLLS.lock();
-        for (i, slot) in e.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(list);
-                return EPOLL_FD_BASE + i as u64;
-            }
-        }
-        return (-24i64) as u64; // -EMFILE
-    }
-    let ofd = oldfd as usize;
-    if ofd >= MAX_FD {
-        return (-9i64) as u64; // -EBADF
-    }
-    // Pipe end: alias into a new fd sharing the same pipe buffer (by id). NOTE the
-    // value MUST be read out of PIPE_FDS before re-locking it below — an `if let
-    // Some(_) = pipe_fds()[..]` would hold the guard across the block and the
-    // inner lock would self-deadlock the spinlock (IF=0 spin forever).
-    let pipe_ent = pipe_fds()[ofd];
-    if let Some(pe) = pipe_ent {
-        if let Some(fd) = alloc_low_fd() {
-            pipe_fds()[fd] = Some(pe);
-            copy_fd_flags(ofd, fd); // dup preserves access mode + O_NONBLOCK
-            return fd as u64;
-        }
-        return (-24i64) as u64;
-    }
-    // Regular VFS file: alias the (file-index, offset).
-    let entry = OPEN_FDS.lock()[ofd];
-    let entry = match entry {
-        Some(e) => e,
-        None => return (-9i64) as u64,
-    };
-    if let Some(fd) = alloc_low_fd() {
-        OPEN_FDS.lock()[fd] = Some(entry);
-        copy_fd_flags(ofd, fd); // dup preserves access mode + O_NONBLOCK (else F_GETFL lies)
-        return fd as u64;
-    }
-    (-24i64) as u64
-}
-
-/// The lowest free fd in the regular (< MAX_FD) number space. A regular file, an
+/// The lowest free object number of the calling task's space. A regular file, an
 /// open directory and a pipe end all share this range, so a free fd must be free in
 /// ALL THREE tables — otherwise dup() could hand back a number that is already an
 /// open pipe/dir fd chrome owns, tripping its "FD ownership violation" CHECK.
@@ -7109,42 +7191,11 @@ fn alloc_low_fd() -> Option<usize> {
     // at >=500 would collide with a socket fd — chrome owns fds across all classes and
     // CHECK-crashes ("FD ownership violation") if the kernel hands out a number it
     // already owns in another table.
-    let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
+    let ceil = (crate::net::SOCK_FD_BASE as usize).min(max_fd());
     let open = OPEN_FDS.lock();
     let pipes = pipe_fds();
     let dirs = OPEN_DIRS.lock();
-    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none()
-        && !fd_is_aliased(fd))
-}
-
-/// dup2(oldfd, newfd)/dup3: point newfd at oldfd's object. Supports the common
-/// regular-fd case (stdio redirection); a same-number dup2 is a no-op. Cross-class
-/// dup2 (placing a 600+ socket at a low fd number) doesn't fit the range-encoded fd
-/// model and is refused.
-/// Low-fd aliases for class-encoded socket fds (unix >= 600, inet >= 500).
-/// Chrome's forked child dup2's its inherited Mojo socketpair end to a FIXED
-/// low fd (e.g. 5) and talks Mojo through that number; the socket layers
-/// address sockets by their high class fds, so the alias resolves on use.
-/// Sparse (low_fd -> real class-fd) aliases. PER-PROCESS: it lives in ChildMem
-/// and is swapped in for a fork child's syscalls. The GLOBAL table is the
-/// browser's and stays empty of child aliases, so a browser syscall on its own
-/// fd 5 is NEVER redirected to a child's Mojo socket (the phase-4 browser fault).
-static FD_ALIAS: Mutex<alloc::vec::Vec<(u16, u64)>> = Mutex::new(alloc::vec::Vec::new());
-
-/// Resolve a possibly-aliased fd to the real (class-encoded) fd.
-pub fn unalias_fd(fd: u64) -> u64 {
-    // IF=0 while the lock is held: blocking waits (pipe/futex/epoll sleeps)
-    // leave their arm at IF=1 afterwards, and ANY ring3 spinlock taken
-    // preemptibly can park its holder forever (the run 26-31 freeze family).
-    // Every helper in this lock family disables interrupts itself.
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        if fd < MAX_FD as u64 {
-            if let Some(&(_, real)) = FD_ALIAS.lock().iter().find(|&&(f, _)| f as u64 == fd) {
-                return real;
-            }
-        }
-        fd
-    })
+    (3..ceil).find(|&fd| open[fd].is_none() && pipes[fd].is_none() && dirs[fd].is_none())
 }
 
 /// Grow a RAM-backed VFS file to `need` bytes, FALLIBLY. Every grow path
@@ -7168,23 +7219,14 @@ pub fn grow_ram_file(v: &mut alloc::vec::Vec<u8>, need: usize) -> bool {
     true
 }
 
-/// Low fds that were OPEN at the moment a still-living fork child was created:
-/// (child main task, the fd numbers it inherited). A parent close of such an fd
-/// is DEFERRED (see close(3)) so the number cannot be reallocated while the
-/// child still owns it. Entries drop when the child exits; the exit path then
-/// really frees every deferred fd no remaining child inherited.
-static FORK_INHERITED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u32>)>> =
-    Mutex::new(alloc::vec::Vec::new());
-/// Fds the parent has closed but whose slot is kept alive for inheriting children.
-static DEFERRED_CLOSE: Mutex<alloc::vec::Vec<u32>> = Mutex::new(alloc::vec::Vec::new());
-
-/// Actually release fd `a1`: epoll, eventfd, socket, AF_UNIX socket, or VFS file.
-/// (The class dispatch that close(3) used to do inline; also called by the
-/// child-exit path to flush deferred closes.)
+/// Close OBJECT `a1`: an epoll instance, an eventfd, a socket, an AF_UNIX
+/// socket, or an open file, directory handle or pipe end of the calling task's
+/// space. Called when the last descriptor that named it is gone (fdtab.rs).
 fn close_fd_now(a1: u64) -> u64 {
     if fd_fi(a1) == Some(SND_PCM_FI) {
         crate::alsa::pcm_close();
     }
+    epoll_forget(a1);
     if is_epoll_fd(a1) {
         if let Some(slot) = EPOLLS.lock().get_mut((a1 - EPOLL_FD_BASE) as usize) {
             *slot = None;
@@ -7199,117 +7241,11 @@ fn close_fd_now(a1: u64) -> u64 {
         crate::net::sock_close(a1)
     } else if crate::net::is_unix_fd(a1) {
         sock_pair_forget(a1);
+        scm_drop_pending_for(a1);
         crate::net::unix_fd_close(a1)
     } else {
         vfs_close(a1 as usize)
     }
-}
-
-/// A fork child exited: drop its inherited-fd record and really free every
-/// deferred parent-close no remaining live child inherited.
-fn fork_child_release_fds(child_task: usize) {
-    let _g = crate::sched::IfOffGuard::new();
-    FORK_INHERITED.lock().retain(|(t, _)| *t != child_task);
-    let flush: alloc::vec::Vec<u32> = {
-        let inh = FORK_INHERITED.lock();
-        let mut d = DEFERRED_CLOSE.lock();
-        let (keep, flush): (alloc::vec::Vec<u32>, alloc::vec::Vec<u32>) =
-            d.iter().partition(|fd| inh.iter().any(|(_, set)| set.contains(fd)));
-        *d = keep;
-        flush
-    };
-    for fd in flush {
-        let _ = close_fd_now(fd as u64);
-    }
-}
-
-/// Is this LOW fd number claimed as an alias in the CURRENT process? (During a
-/// fork child's syscall its aliases are swapped into the global FD_ALIAS, so a
-/// plain lookup is per-process-correct.) An aliased number is OWNED by the
-/// process — chrome registers ScopedFD ownership of e.g. its dup2'd Mojo
-/// channel at fd 5 — so the low-fd allocators must never hand that number out
-/// again. Handing it out is exactly chrome's "Crashing due to FD ownership
-/// violation" CHECK (seen in the multi-process network service, run 3).
-fn fd_is_aliased(fd: usize) -> bool {
-    x86_64::instructions::interrupts::without_interrupts(||
-        FD_ALIAS.lock().iter().any(|&(f, _)| f as usize == fd))
-}
-
-fn fd_alias_set(nfd: usize, real: u64) {
-    let _g = crate::sched::IfOffGuard::new();
-    let mut al = FD_ALIAS.lock();
-    if let Some(e) = al.iter_mut().find(|(f, _)| *f as usize == nfd) {
-        e.1 = real;
-    } else {
-        al.push((nfd as u16, real));
-    }
-}
-
-fn fd_alias_clear(fd: usize) -> bool {
-    let _g = crate::sched::IfOffGuard::new();
-    let mut al = FD_ALIAS.lock();
-    let n = al.len();
-    al.retain(|&(f, _)| f as usize != fd);
-    al.len() != n
-}
-
-fn dup2_fd(oldfd: u64, newfd: u64) -> u64 {
-    if oldfd == newfd {
-        return newfd;
-    }
-    // POSIX: the duplicate does NOT inherit close-on-exec. This is exactly how
-    // a launcher hands a descriptor to its child: open it CLOEXEC, then dup2 it
-    // onto the agreed number so it SURVIVES the exec.
-    fd_set_cloexec(newfd, false);
-    let nfd = newfd as usize;
-    if nfd >= MAX_FD {
-        return (-9i64) as u64; // -EBADF: can't target a class-encoded high fd
-    }
-    // dup2 by a FORK CHILD: NEVER touch the global tables. The tables are shared
-    // with the parent, so clearing slot `newfd` here destroys the PARENT's open
-    // file at that number — run 6: the child dup2'd its Mojo socket 603 onto
-    // fd 5 and wiped the browser's open icudtl.dat at global slot 5; the freed
-    // number was then re-handed to the browser, whose ScopedFD tracker still
-    // owned 5 -> "FD ownership violation" CHECK. The child gets a per-process
-    // ALIAS (resolved at its syscall entry), and its inherited share of the old
-    // number is marked closed so the deferred-close accounting stays exact.
-    if current_is_fork_child() {
-        fork_child_mark_closed(newfd);
-        fd_alias_set(nfd, oldfd);
-        return newfd;
-    }
-    // A socket-class source (unix socketpair / inet socket): register an alias.
-    if crate::net::is_unix_fd(oldfd) || crate::net::is_sock_fd(oldfd) || crate::net::is_eventfd(oldfd) {
-        fd_alias_set(nfd, oldfd);
-        OPEN_FDS.lock()[nfd] = None;
-        OPEN_DIRS.lock()[nfd] = None;
-        pipe_fds()[nfd] = None;
-        return newfd;
-    }
-    if (oldfd as usize) < MAX_FD {
-        // dup2 duplicates the fd: the new fd shares the source's access mode + nonblock,
-        // so a later fcntl(F_GETFL) on it reports the truth (chrome CHECKs this).
-        FD_ACCMODE[nfd].store(FD_ACCMODE[oldfd as usize].load(Ordering::Relaxed), Ordering::Relaxed);
-        FD_NONBLOCK[nfd].store(FD_NONBLOCK[oldfd as usize].load(Ordering::Relaxed), Ordering::Relaxed);
-        // Read the source slot values out FIRST (drop the guard) before writing newfd —
-        // re-locking the same table inside an `if let Some(_) = TABLE.lock()[..]` block
-        // would self-deadlock the spinlock.
-        let pipe_ent = pipe_fds()[oldfd as usize];
-        if let Some(pe) = pipe_ent {
-            OPEN_FDS.lock()[nfd] = None;
-            OPEN_DIRS.lock()[nfd] = None;
-            pipe_fds()[nfd] = Some(pe);
-            return newfd;
-        }
-        let reg_ent = OPEN_FDS.lock()[oldfd as usize];
-        if let Some(entry) = reg_ent {
-            pipe_fds()[nfd] = None;
-            OPEN_DIRS.lock()[nfd] = None;
-            OPEN_FDS.lock()[nfd] = Some(entry);
-            return newfd;
-        }
-    }
-    (-9i64) as u64
 }
 
 /// Is `path` a DIRECTORY in the userspace VFS? A directory has no FILES entry of its own,
@@ -7325,7 +7261,7 @@ static SYMLINKS: Mutex<alloc::vec::Vec<(String, String)>> = Mutex::new(alloc::ve
 /// ftruncate(fd, len): resize the open VFS file to `len` bytes (zero-extend / cut).
 /// SQLite + atomic file writers need this; without it they report a disk-I/O error.
 fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return (-9i64) as u64; // -EBADF
     }
     let fi = match OPEN_FDS.lock()[fd] {
@@ -7552,6 +7488,7 @@ fn is_vfs_dir(path: &[u8]) -> bool {
     // fstats /proc/self/task/<tid>). Serving them as directories makes the
     // fstat report S_IFDIR and the CHECK pass, so the GPU child does not abort.
     if path == b"/proc/self/task"
+        || path == b"/proc/self/fd"
         || path.starts_with(b"/proc/self/task/")
         || path == b"/proc/thread-self"
         || path.starts_with(b"/proc/thread-self/")
@@ -7624,7 +7561,7 @@ fn resolve_at(dirfd: u64, path: alloc::vec::Vec<u8>) -> alloc::vec::Vec<u8> {
     if path.first() == Some(&b'/') || dirfd as i32 == -100 || path.is_empty() {
         return path;
     }
-    let dir = if (dirfd as usize) < MAX_FD {
+    let dir = if (dirfd as usize) < max_fd() {
         OPEN_DIRS.lock()[dirfd as usize].as_ref().map(|(p, _)| p.clone())
     } else { None };
     match dir {
@@ -7646,7 +7583,6 @@ fn diropen(path: &[u8]) -> u64 {
     match alloc_low_fd() {
         Some(fd) => {
             OPEN_DIRS.lock()[fd] = Some((norm, 0));
-            child_note_open(fd);
             fd as u64
         }
         None => u64::MAX,
@@ -7656,7 +7592,7 @@ fn diropen(path: &[u8]) -> u64 {
 /// getdents64(fd, buf, count): fill Linux `linux_dirent64` records from the cursor.
 /// Returns the number of bytes written, 0 at the end.
 fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return (-9i64) as u64; // -EBADF
     }
     // The entire destination buffer is arena-validated once; after that all
@@ -7674,14 +7610,24 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
             return (-20i64) as u64; // -ENOTDIR
         }
     };
-    // "." and ".." first, then the real children.
-    let mut all: alloc::vec::Vec<(String, bool)> =
-        alloc::vec![(String::from("."), true), (String::from(".."), true)];
-    all.extend(dir_children(&path));
+    // "." and ".." first, then the real children. Each entry carries the
+    // cursor that follows it: its position in the list plus one, except in
+    // /proc/self/fd.
+    let mut all: alloc::vec::Vec<(String, bool, usize)> =
+        alloc::vec![(String::from("."), true, 1), (String::from(".."), true, 2)];
+    if path == "/proc/self/fd" || path == "/proc/self/fd/" {
+        // The descriptors of the calling process, by NUMBER: the cursor after
+        // descriptor n is n + 3, so a reader that closes descriptors between
+        // two calls (chrome closes what it does not want in a child while it
+        // walks this directory) still sees every one that is left.
+        all.extend(fdtab::list().into_iter().map(|(n, _)| (alloc::format!("{n}"), false, n + 3)));
+    } else {
+        all.extend(dir_children(&path).into_iter().enumerate().map(|(i, (name, is_dir))| (name, is_dir, i + 3)));
+    }
 
     let mut written = 0usize;
-    while cursor < all.len() {
-        let (name, is_dir) = &all[cursor];
+    let from = cursor;
+    for (name, is_dir, next) in all.iter().filter(|e| e.2 > from) {
         let reclen = (19 + name.len() + 1 + 7) & !7; // 8-byte aligned
         if written + reclen > count {
             break; // no longer fits in this buffer call
@@ -7689,14 +7635,14 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
         let rec = (buf as usize + written) as *mut u8;
         unsafe {
             core::ptr::write_bytes(rec, 0, reclen);
-            (rec as *mut u64).write_unaligned((cursor as u64) + 1); // d_ino
-            (rec.add(8) as *mut i64).write_unaligned((cursor as i64) + 1); // d_off
+            (rec as *mut u64).write_unaligned(*next as u64); // d_ino
+            (rec.add(8) as *mut i64).write_unaligned(*next as i64); // d_off
             (rec.add(16) as *mut u16).write_unaligned(reclen as u16); // d_reclen
             rec.add(18).write(if *is_dir { 4 } else { 8 }); // d_type DT_DIR/DT_REG
             core::ptr::copy_nonoverlapping(name.as_ptr(), rec.add(19), name.len());
         }
         written += reclen;
-        cursor += 1;
+        cursor = *next;
     }
     OPEN_DIRS.lock()[fd] = Some((path, cursor));
     written as u64
@@ -7704,7 +7650,7 @@ fn vfs_getdents64(fd: usize, buf: u64, count: usize) -> u64 {
 
 /// The size (bytes) of the file behind an open fd, or None.
 fn vfs_size(fd: usize) -> Option<usize> {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return None;
     }
     let fds = OPEN_FDS.lock();
@@ -7728,7 +7674,7 @@ fn vfs_size(fd: usize) -> Option<usize> {
 
 /// lseek(fd, offset, whence) -> new offset (u64::MAX on error).
 fn vfs_lseek(fd: usize, offset: i64, whence: u64) -> u64 {
-    if fd >= MAX_FD {
+    if fd >= max_fd() {
         return u64::MAX;
     }
     let size = match vfs_size(fd) {
@@ -10065,28 +10011,6 @@ fn current_is_fork_child() -> bool {
     fork_child_owner(crate::sched::current()).is_some()
 }
 
-/// fds a fork child has "closed" for itself. The fd table is process-global
-/// (that is what makes inheritance work), so a child's post-fork fd cleanup
-/// must NOT tear down the parent's descriptors — chrome's child closes every
-/// inherited fd except its Mojo channel, and with a shared table that killed
-/// the browser's own sockets (the "network service crashed" trail). A close by
-/// a fork child only marks the fd here; lookups by that child treat it as gone.
-static FORK_CHILD_CLOSED: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> =
-    Mutex::new(alloc::vec::Vec::new());
-
-fn fork_child_mark_closed(fd: u64) {
-    let _g = crate::sched::IfOffGuard::new();
-    let cur = crate::sched::current();
-    let mut g = FORK_CHILD_CLOSED.lock();
-    if let Some((_, set)) = g.iter_mut().find(|(t, _)| *t == cur) {
-        if !set.contains(&fd) {
-            set.push(fd);
-        }
-    } else {
-        g.push((cur, alloc::vec![fd]));
-    }
-}
-
 static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
     Mutex::new(alloc::vec::Vec::new());
 
@@ -10121,7 +10045,6 @@ struct ChildMem {
     prot_none: alloc::vec::Vec<(u64, u64)>,
     shared_aliases: alloc::vec::Vec<(u64, u64, usize)>,
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
-    fd_alias: alloc::vec::Vec<(u16, u64)>,
 }
 static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -10141,7 +10064,6 @@ fn child_mem_snapshot(task: usize) {
         prot_none: PROT_NONE_RANGES.lock().clone(),
         shared_aliases: SHARED_ALIASES.lock().clone(),
         shared_maps: SHARED_MAPS.lock().clone(),
-        fd_alias: FD_ALIAS.lock().clone(),
     };
     let mut g = CHILD_MEM.lock();
     if let Some(slot) = g.iter_mut().find(|c| c.task == task) {
@@ -10262,7 +10184,6 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *PROT_NONE_RANGES.lock(), &mut cm.prot_none);
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
-    core::mem::swap(&mut *FD_ALIAS.lock(), &mut cm.fd_alias);
     true
 }
 
@@ -10292,11 +10213,11 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     }
     globals_release_owner(ctask); // never drop state that is loaded
     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
-    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
     child_mem_drop(ctask);
     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
-    fork_child_release_fds(ctask);
-    child_opened_release(ctask);
+    fdtab::exit(fdtab::child_proc(ctask), fdspace::ROOT, &mut |o| {
+        let _ = close_fd_now(o);
+    });
     proc_state_drop(ctask);
     static EXITLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     let exit_log = EXITLOG.fetch_add(1, Ordering::Relaxed) < 4;
@@ -10341,6 +10262,11 @@ fn reap_orphan_fork_children() -> usize {
         x86_64::instructions::interrupts::without_interrupts(|| GLOBALS_OWNER.store(0, Ordering::Relaxed));
     }
     GLIBC_CHILD_EXITS.lock().clear();
+    // The launched process itself is gone by now, however it ended (exit, a
+    // fault, a kill): its descriptors close.
+    fdtab::exit(0, fdspace::ROOT, &mut |o| {
+        let _ = close_fd_now(o);
+    });
     orphans.len()
 }
 
@@ -10373,8 +10299,6 @@ fn read_user_strvec(ptr: u64, max: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>
 /// The child arena + PML4 are reused; only their CONTENTS are rebuilt. Returns
 /// only on error — on success it retargets the current task to the new entry.
 fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
-    // POSIX: close-on-exec descriptors are gone the moment the new image starts.
-    cloexec_do_exec(fork_child_owner(crate::sched::current()).unwrap_or(0));
     let path = user_cstr(path_ptr, 256); // usually "/proc/self/exe"
     let exe_path = CHILD_EXE_PATH.lock().clone();
     if exe_path.is_empty() {
@@ -10412,6 +10336,20 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     if let Some(t) = argv.iter().find(|a| a.starts_with(b"--type=")) {
         crate::serial_println!("[execve] task {} is {}", crate::sched::current(),
             alloc::string::String::from_utf8_lossy(t));
+        // The whole command line of the first few children: its switches say
+        // which descriptors the parent hands over, and under which numbers.
+        static ARGV_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(4);
+        if ARGV_LEFT.load(Ordering::Relaxed) > 0 {
+            ARGV_LEFT.fetch_sub(1, Ordering::Relaxed);
+            let mut line = String::new();
+            for a in argv.iter() {
+                line.push(' ');
+                line.push_str(&alloc::string::String::from_utf8_lossy(a));
+            }
+            for chunk in line.as_bytes().chunks(900) {
+                crate::serial_println!("[execve]   argv:{}", alloc::string::String::from_utf8_lossy(chunk));
+            }
+        }
         // A renderer, GPU or utility child computes for the browser; it never needs
         // to start processes, reach the network or change the file system. The
         // kernel applies that profile here, the child cannot opt out.
@@ -10435,6 +10373,38 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     }
     let nblocks = span >> 21;
     let frames = (nblocks * 512) as usize;
+
+    // POSIX: close-on-exec descriptors are gone the moment the new image starts
+    // (and not when the exec is refused above: the caller then still has them).
+    let closed = fdtab::exec(fdtab::cur_proc(), fdspace::ROOT, &mut |o| {
+        let _ = close_fd_now(o);
+    });
+    if closed > 0 {
+        crate::serial_println!("[execve] closed {closed} close-on-exec descriptor(s)");
+    }
+    // BUG-122. A Chromium child that is told `--enable-crash-reporter` takes
+    // descriptor 3 as its crash-handler socket (GlobalDescriptors:
+    // kCrashDumpSignal + kBaseDescriptor) and wraps it in a ScopedFD, whether
+    // the browser put a socket there or not. Our browser runs without a crash
+    // handler (`--disable-crashpad-for-testing`: the handler is a second
+    // program, and a fork child can only re-exec the browser here), so it
+    // hands nothing over, yet it passes the switch. On Linux the handler runs
+    // and 3 is its socket. Without one, the child's first open() that returns
+    // 3 is "a descriptor it already owns", and Chromium aborts: "Crashing due
+    // to FD ownership violation". With one table for the browser and all its
+    // children no child ever got a number that low, which hid this.
+    // The child gets what the contract promises: descriptor 3 exists. It is
+    // /dev/null, where a crash report went before as well (EBADF).
+    if argv.iter().any(|a| a.starts_with(b"--enable-crash-reporter")) && !fdtab::is_open(3) {
+        let obj = vfs_open(b"/dev/null");
+        if obj != u64::MAX {
+            fdtab::preopen(fdtab::cur_proc(), fdspace::ROOT, 3, obj);
+            static SAID: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+            if !SAID.swap(true, Ordering::Relaxed) {
+                crate::serial_println!("[execve] task {}: descriptor 3 (the crash-handler socket a Chromium child expects) is /dev/null: no handler runs", crate::sched::current());
+            }
+        }
+    }
 
     // Fresh image: wipe the arena, and DROP the child's inherited demand pages.
     // The child forked a COPY of the parent's already-relocated exe/heap pages;
@@ -10581,49 +10551,13 @@ fn do_glibc_fork() -> u64 {
     inherit_profile(crate::sched::current(), child);
     proc_state_inherit(crate::sched::current(), child);
     child_mem_snapshot(child); // the child inherits the parent's demand-state
-    // The child inherits the fd table INCLUDING its close-on-exec flags, so it
-    // inherits the marks too. Without this the marks stayed on the parent and a
-    // child's execve closed nothing (its own opens happen after exec).
-    {
-        let _g = crate::sched::IfOffGuard::new();
-        let parent = fork_child_owner(crate::sched::current()).unwrap_or(0);
-        let mut c = FD_CLOEXEC.lock();
-        let inherited: alloc::vec::Vec<u32> =
-            c.iter().filter(|&&(o, _)| o == parent).map(|&(_, f)| f).collect();
-        for fd in inherited {
-            if !c.iter().any(|&(o, f)| o == child && f == fd) {
-                c.push((child, fd));
-            }
-        }
-    }
-    // Snapshot which LOW fd numbers are open right now: the child inherits these,
-    // so a later parent close of one must not free the number (see close(3)).
-    {
-        let open = OPEN_FDS.lock();
-        let pipes = pipe_fds();
-        let dirs = OPEN_DIRS.lock();
-        let ceil = (crate::net::SOCK_FD_BASE as usize).min(MAX_FD);
-        // A DEFERRED slot is parent-CLOSED: still occupied only for older
-        // children. A new child does NOT inherit it — including it here pinned
-        // every deferred fd forever under respawn churn (each new fork re-listed
-        // it), the table filled up, and dup() died with EMFILE -> chrome CHECK
-        // abort (run 8).
-        let deferred = DEFERRED_CLOSE.lock().clone();
-        let mut set: alloc::vec::Vec<u32> = (3..ceil)
-            .filter(|&fd| (open[fd].is_some() || pipes[fd].is_some() || dirs[fd].is_some())
-                && !deferred.contains(&(fd as u32)))
-            .map(|fd| fd as u32)
-            .collect();
-        // UNIX socket fds (600+) are inherited exactly the same way: chrome's
-        // launcher closes ITS copy of the child's channel end right after fork,
-        // and endpoint-closing it then makes the live child's channel read EOF
-        // (run 21: every service child died on read()=0 the moment the browser
-        // did its routine post-fork close). Defer those too.
-        drop(open); drop(pipes); drop(dirs);
-        set.extend(crate::net::unix_fds_open().into_iter()
-            .filter(|fd| !deferred.contains(&(*fd as u32)))
-            .map(|fd| fd as u32));
-        FORK_INHERITED.lock().push((child, set));
+    // The child's descriptor table is a copy of the parent's: the same open
+    // files, pipes and sockets under the same numbers, each with one more
+    // reference, and the close-on-exec flags with them (fdtab.rs).
+    if !fdtab::fork(fdtab::cur_proc(), fdtab::child_proc(child), fdspace::ROOT, &mut |o| {
+        let _ = close_fd_now(o);
+    }) {
+        crate::serial_println!("[fork] pid {pid}: no memory for the child's descriptor table (it starts with the standard streams only)");
     }
     crate::serial_println!(
         "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
@@ -12500,6 +12434,7 @@ pub fn fdspace_selftest(falloc: &mut FrameAllocator) {
 /// docs/proof/chrome-2026-11b/.
 pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
     let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO | CAP_NET;
+    let before = fdtab::census();
     let fails = |tag: &str, out: &str| {
         for l in out.lines().filter(|l| l.contains("FAIL")) {
             crate::serial_println!("[fdsem]   {tag}: {}", l.trim_end());
@@ -12512,7 +12447,25 @@ pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
     // glibc, with fork.
     let (gout, gexit) = run_glibc(falloc, GFDSEM_ELF, ldlinux_bytes(), &[b"/bin/gfdsem"], &[b"PATH=/bin"], caps);
     fails("glibc", &gout);
-    let gsum = last(&gout, if gexit == 171 { "GFDSEM: PASS" } else { "GFDSEM: FAILED" }).replace("GFDSEM: ", "");
+    // 172: every single-process check passed and fork itself was refused (no
+    // room for a second arena on a small machine); the fork half then runs on
+    // the background path only.
+    // u64::MAX: the launcher started nothing (no arena for a glibc program on
+    // this machine), as for every glibc self-test of such a boot.
+    let gskip = gexit == u64::MAX;
+    let gok = gexit == 171 || gexit == 172 || gskip;
+    let gsum = if gskip {
+        String::from("not run")
+    } else {
+        last(&gout, if gok { "GFDSEM: PASS" } else { "GFDSEM: FAILED" }).replace("GFDSEM: ", "")
+    };
+    let gnote = if gexit == 172 {
+        ", fork refused: no memory for a second arena"
+    } else if gskip {
+        ": no arena for a glibc program on this machine"
+    } else {
+        ""
+    };
     // musl libc, one process, in the foreground.
     let (mexit, mout) = x86_64::instructions::interrupts::without_interrupts(||
         run_args(falloc, MFDSEM_ELF, &[b"/bin/mfdsem"], caps, true));
@@ -12543,11 +12496,14 @@ pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
     selftest_wait(200, &|| false);
     reap_dead(falloc);
     reap_dead(falloc);
-    let balanced = fd_spaces_in_use() <= spaces;
-    let ok = gexit == 171 && mexit == 171 && ended && bpass && balanced;
+    let after = fdtab::census();
+    // Nothing is left behind: no table of a process that is gone, no object
+    // that still has a reference, no fd space.
+    let balanced = after.0 <= before.0 && after.2 <= before.2 && fd_spaces_in_use() <= spaces;
+    let ok = gok && mexit == 171 && ended && bpass && balanced;
     crate::serial_println!(
-        "[fdsem] descriptor tables per process: glibc with fork {gsum} (exit {gexit}, want 171) | musl libc {msum} (exit {mexit}, want 171) | background path with fork and exec {bsum} (ended={ended}) | fd spaces {spaces} -> {} → {}",
-        fd_spaces_in_use(),
+        "[fdsem] descriptor tables per process: glibc with fork {gsum} (exit {}, want 171{gnote}) | musl libc {msum} (exit {mexit}, want 171) | background path with fork and exec {bsum} (ended={ended}) | tables/descriptors/objects {}/{}/{} -> {}/{}/{} → {}",
+        gexit as i64, before.0, before.1, before.2, after.0, after.1, after.2,
         if ok { "OK ✓" } else { "FAILED" }
     );
 }
@@ -13037,6 +12993,9 @@ pub fn run_glibc(
         // "TIMEOUT" on its own sends the next reader back to guessing.
         let (n, a, r) = last_syscall(main_task);
         crate::serial_println!("[glibc] TIMEOUT waiting for the process to exit | main t{main_task} last={n}(a1={a:#x})->{r:#x}");
+        // ...and the call it is IN (the ring keeps a call that has not returned
+        // with result 0xffff...: that is the one it waits in).
+        dump_main_syscalls();
         for &t in GLIBC_THREADS.lock().iter() {
             let (n2, a2, r2) = last_syscall(t);
             crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
@@ -13376,28 +13335,9 @@ pub fn syscall_profile_lines() -> alloc::vec::Vec<alloc::string::String> {
     out
 }
 
-/// Syscall dispatcher (ring 0). Returns the return value in rax.
-#[no_mangle]
-pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    let _prof = SyscallProfile::start(num);
-    // Does this syscall come from the scheduled background daemon? Then a separate
-    // dispatcher + output buffer (independent of the global foreground state).
-    let cur = crate::sched::current();
-    if cur == DAEMON_TASK.load(Ordering::Relaxed) {
-        return daemon_dispatch(num, a1, a2, a3);
-    }
-    // Userspace drivers (e1000d, nvmed, bcm5720d, megaraidd): one entry,
-    // udrv::syscall, which knows the driver from the caller's grant. Served
-    // WITHOUT the BG lock, so a driver can run while task 0 waits on it. Exit
-    // and profile kills (None here) take the ordinary route below.
-    if task_profile(cur) == eurosandbox::Profile::Driver {
-        if let Some(r) = crate::udrv::syscall(cur, num, a1, a2, a3) {
-            return r;
-        }
-    }
-    // Preemptive per-process (PCB): route to the right background musl process
-    // state (own heap/output/pid). A THREAD shares the PCB of its process, so
-    // we match on the main task OR on one of the thread tasks.
+/// A system call of a background process, behind the descriptor gate: the
+/// fd arguments are object numbers of the process's fd space.
+fn bg_syscall(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     {
         let mut bg = BG.lock();
         if let Some(pos) = bg.iter().position(|p| p.task == cur || p.threads.contains(&cur)) {
@@ -13511,6 +13451,36 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
             ARENA_SPAN_DYN.store(prev_span, Ordering::Relaxed);
             return r;
         }
+    }
+    (-38i64) as u64 // the process went away between the gate and here
+}
+
+/// Syscall dispatcher (ring 0). Returns the return value in rax.
+#[no_mangle]
+pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    let _prof = SyscallProfile::start(num);
+    // Does this syscall come from the scheduled background daemon? Then a separate
+    // dispatcher + output buffer (independent of the global foreground state).
+    let cur = crate::sched::current();
+    if cur == DAEMON_TASK.load(Ordering::Relaxed) {
+        return daemon_dispatch(num, a1, a2, a3);
+    }
+    // Userspace drivers (e1000d, nvmed, bcm5720d, megaraidd): one entry,
+    // udrv::syscall, which knows the driver from the caller's grant. Served
+    // WITHOUT the BG lock, so a driver can run while task 0 waits on it. Exit
+    // and profile kills (None here) take the ordinary route below.
+    if task_profile(cur) == eurosandbox::Profile::Driver {
+        if let Some(r) = crate::udrv::syscall(cur, num, a1, a2, a3) {
+            return r;
+        }
+    }
+    // Preemptive per-process (PCB): route to the right background musl process
+    // state (own heap/output/pid). A THREAD shares the PCB of its process, so
+    // we match on the main task OR on one of the thread tasks.
+    // A THREAD shares the process of its main task. Descriptors become
+    // objects at the gate (fdtab.rs), as on the Linux path below.
+    if BG.lock().iter().any(|p| p.task == cur || p.threads.contains(&cur)) {
+        return fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
     }
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
@@ -13691,7 +13661,7 @@ fn system_lib_exempt(num: u64, a1: u64, a2: u64, a3: u64) -> bool {
         4 | 21 => system_lib_path(&user_cstr(a1, 256)),  // stat / access
         0 | 3 | 5 | 8 | 17 | 19 | 217 => {
             let fd = a1 as usize;
-            if fd >= MAX_FD {
+            if fd >= max_fd() {
                 return false;
             }
             let fi = match OPEN_FDS.lock()[fd] {
@@ -14039,29 +14009,13 @@ fn linux_dispatch_inner_traced(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
     linux_dispatch_swapped(num, a1, a2, a3, a4, a5)
 }
 
+/// Descriptors become objects here (fdtab.rs): everything behind this gate,
+/// every handler of the dispatcher, works with object numbers.
 fn linux_dispatch_swapped(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    // Resolve low-fd ALIASES (dup2 of a socket-class fd, see FD_ALIAS) before
-    // dispatch, for every syscall whose fd argument the socket layers must see
-    // as the real class-encoded fd. close() is intentionally excluded: closing
-    // the alias only clears the alias slot (the real fd stays open — POSIX dup
-    // semantics: the object lives until all descriptors are closed).
-    let a1 = match num {
-        // EVERY fd-taking syscall resolves aliases, not just the socket set: a
-        // fork child's dup2 is alias-only now, and chrome fstat'ed its dup2'd V8
-        // snapshot fd -> EBADF -> "Error mapping V8 startup snapshot file"
-        // FATAL (run 10), because fstat(5) was not in this list. read/write,
-        // stat/lseek/pread/readv, dup/dup2(old), sendfile, socket ops, fcntl/
-        // ioctl, sync/truncate ops, getdents, statfs, fadvise, fallocate.
-        0 | 1 | 5 | 8 | 16 | 17 | 18 | 19 | 20 | 32 | 33 | 40
-        | 44 | 45 | 46 | 47 | 48 | 51 | 52 | 54 | 55
-        | 72 | 73 | 74 | 75 | 77 | 91 | 93 | 138 | 187 | 217 | 221 | 285 => unalias_fd(a1),
-        _ => a1,
-    };
-    let a3 = if num == 233 { unalias_fd(a3) } else { a3 }; // epoll_ctl(epfd, op, FD, ev)
-    let a5 = if num == 9 { unalias_fd(a5) } else { a5 }; // mmap(addr,len,prot,flags,FD,off)
-    if num == 3 && (a1 as usize) < MAX_FD && fd_alias_clear(a1 as usize) {
-        return 0; // close(alias): drop only the alias, keep the socket (POSIX dup)
-    }
+    fdtab::syscall(num, a1, a2, a3, a4, a5, &mut linux_dispatch_objs)
+}
+
+fn linux_dispatch_objs(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let chk = SCM_CHECK_ADDR.swap(0, Ordering::Relaxed);
     if chk != 0 {
         let owner = SCM_CHECK_OWNER.load(Ordering::Relaxed);
@@ -14183,44 +14137,13 @@ pub fn dump_main_syscalls() {
     }
 }
 
-/// Every descriptor a FORK CHILD creates must be on its own list, or its close()
-/// only marks the descriptor closed for that child and the underlying object is
-/// never freed. open/openat/creat and pipes were on the list; sockets, accepts,
-/// eventfds, epoll sets, memfds, dups, inotify and timerfds were not. The network
-/// service is a fork child that opens a UDP socket per lookup and closes it, so
-/// the AF_INET table filled up regardless of its size (16 slots in five minutes,
-/// 96 slots in under five minutes, run 26), and from then on every socket() was
-/// EPERM to chrome: net::ERR_ACCESS_DENIED on the live-site navigation. One hook
-/// after the dispatch covers every creating syscall on every trace path.
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
-    // RLIMIT_NOFILE: a new descriptor number at or above the soft limit is closed
-    // again and the call fails with EMFILE, exactly as Linux reports it.
-    let returns_fd = matches!(num,
-        2 | 257 | 85 | 32 | 33 | 292 | 41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
-    // Only the low descriptor table counts: sockets, eventfds and epoll instances
-    // carry kernel-internal numbers from 500 up and are not what NOFILE bounds.
-    if returns_fd && (r as i64) >= 0 && r < MAX_FD as u64 {
-        let key = proc_key(crate::sched::current());
-        if proc_limits(key).fd_exceeds(r) {
-            let _ = linux_dispatch_inner_raw(3, r, 0, 0, 0, 0);
-            return (-24i64) as u64; // -EMFILE
-        }
-    }
-    // NOT dup/dup2/dup3: those alias an object that other holders share, and a
-    // child's close on the alias must stay a mark, as the fd-ownership work
-    // decided. Registering them (run 28) freed objects out from under NSS's
-    // initialisation in a utility process, which then aborted (nss_error -5925).
-    let creates_fd = matches!(num,
-        41 | 43 | 288 | 290 | 284 | 291 | 213 | 319 | 253 | 294 | 283 | 282 | 289);
-    if creates_fd && (r as i64) >= 0 && r < 1000 {
-        child_note_open(r as usize);
-    }
     // `fstrace N` (shell): the next N positioned reads and writes, whatever the file.
     if matches!(num, 17 | 18) && FSTRACE_LEFT.load(Ordering::Relaxed) > 0 {
         FSTRACE_LEFT.fetch_sub(1, Ordering::Relaxed);
         let (fi, path) = {
-            let fi = if (a1 as usize) < MAX_FD { OPEN_FDS.lock()[a1 as usize].map(|(fi, _)| fi) } else { None };
+            let fi = if (a1 as usize) < max_fd() { OPEN_FDS.lock()[a1 as usize].map(|(fi, _)| fi) } else { None };
             let path = fi.and_then(|fi| FILES.lock().get(fi).map(|(q, _)| q.clone())).unwrap_or_default();
             (fi, path)
         };
@@ -14228,7 +14151,7 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
             crate::sched::current_lockfree(), if num == 17 { "pread" } else { "pwrite" }, vfs_size(a1 as usize));
     }
     // Profile-directory file ops that failed or came up short (see FSDIAG_BITS).
-    if a1 < 1024 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
+    if a1 < ROOT_FDS as u64 && matches!(num, 0 | 1 | 17 | 18 | 8 | 77 | 5 | 74 | 75 | 3) && fsdiag_is(a1) {
         let err = (r as i64) < 0;
         let short = !err && matches!(num, 0 | 1 | 17 | 18) && r < a3 && a3 <= 64;
         if (err || short) && fsdiag_budget() {
@@ -14237,13 +14160,6 @@ fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
         }
         if num == 3 {
             fsdiag_mark(a1, false);
-        }
-    }
-    if num == 53 && r == 0 {
-        // socketpair writes its two descriptors into the caller's sv[2].
-        if let (Some(a), Some(b)) = (read_user::<i32>(a4), read_user::<i32>(a4 + 4)) {
-            if a >= 0 { child_note_open(a as usize); }
-            if b >= 0 { child_note_open(b as usize); }
         }
     }
     r
@@ -14409,7 +14325,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     None => return EFAULT,
                 };
                 crate::net::unix_fd_send(a1, &bytes)
-            } else if (a1 as usize) < MAX_FD && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
+            } else if (a1 as usize) < max_fd() && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
                 // a pipe write end (chrome SandboxHost/IPC signalling). A real open
                 // file on this fd number always wins over a stale global pipe marker.
                 let bytes = match copy_from_user(a2, a3 as usize) {
@@ -14669,11 +14585,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
                     globals_release_owner(ctask); // parent state back BEFORE the drop
                     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
-                    FORK_CHILD_CLOSED.lock().retain(|(t, _)| *t != ctask);
                     child_mem_drop(ctask);
                     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
-                    fork_child_release_fds(ctask); // flush deferred parent closes
-                    child_opened_release(ctask);   // free the fds the child opened
+                    // Its descriptors close; what it was the last holder of goes
+                    // (the parent then reads end-of-file on the child's pipes).
+                    fdtab::exit(fdtab::child_proc(ctask), fdspace::ROOT, &mut |o| {
+                        let _ = close_fd_now(o);
+                    });
                     proc_state_drop(ctask);
                     // Give the child's COMMITTED demand pages back: without this every
                     // dead child leaked its pages and the pool ran dry at ~524 MiB
@@ -14736,6 +14654,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     free_thread_kstack(t); // recycle any leftover worker kstacks
                     crate::sched::mark_dead(t);
                 }
+                // The process is gone: its descriptors close (its children keep theirs).
+                fdtab::exit(0, fdspace::ROOT, &mut |o| {
+                    let _ = close_fd_now(o);
+                });
                 free_thread_kstack(cur); // recycle the main thread's kstack
                 GLIBC_DONE.store(true, Ordering::Relaxed);
                 crate::sched::mark_dead(cur);
@@ -14745,6 +14667,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 switch_away_dead();
             }
             // Foreground run_args (musl) excursion: the synchronous EXITED model.
+            fdtab::exit(0, fdspace::ROOT, &mut |o| {
+                let _ = close_fd_now(o);
+            });
             unsafe {
                 EXIT_CODE = a1;
                 EXITED = 1;
@@ -14926,13 +14851,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // buffers became private zero pages: a page's bytes never reached its
             // renderer and every document came up EMPTY, with no error anywhere.
             let a5 = a5 as u32 as u64; // truncate exactly like the kernel ABI defines
-            // Re-resolve the per-process alias HERE too. mmap's fd argument arrives in
-            // r8 and is truncated to 32 bits only at this point, so an alias resolved on
-            // the untruncated value at dispatch entry can miss: a child that dup2'd its
-            // shared-memory segment onto fd 6 then mapped pack-file bytes as shared
-            // memory ("Corruption detected in shared-memory segment").
-            let a5 = unalias_fd(a5);
-            let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < MAX_FD && a5 != 0xFFFF_FFFF;
+            let file_backed = a4 & MAP_ANONYMOUS == 0 && (a5 as usize) < max_fd() && a5 != 0xFFFF_FFFF;
 
             // MAP_SHARED of an in-RAM file (memfd/tmpfs) = SHARED memory: every mapping
             // of that file must be ONE memory, so a write through one is visible through
@@ -15583,7 +15502,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             } else if crate::net::is_unix_fd(a1) {
                 // A blocking fd WAITS; only a fd that asked for O_NONBLOCK gets
                 // -EAGAIN. That distinction only became possible once O_NONBLOCK was
-                // tracked for socket fd numbers at all (they sit above MAX_FD and
+                // tracked for socket fd numbers at all (they sit above the tables and
                 // fell outside the flag table, so every socket read back "blocking"
                 // and was served as if it were not).
                 // Same boundary as recvmsg: a read must not swallow the bytes a
@@ -15610,7 +15529,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     return EFAULT;
                 }
                 data.len() as u64
-            } else if (a1 as usize) < MAX_FD && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
+            } else if (a1 as usize) < max_fd() && OPEN_FDS.lock()[a1 as usize].is_none() && is_pipe_fd(a1 as usize) {
                 // a pipe read end (chrome SandboxHost/IPC/shutdown-detector). A real
                 // open file on this fd number always wins over a stale pipe marker.
                 // Blocking pipes park the caller until a write (POSIX default).
@@ -15708,35 +15627,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             total
         }
         3 => {
-            // close(fd) by a FORK CHILD: the fd table is shared with the parent,
-            // so only mark it closed for this child (see FORK_CHILD_CLOSED).
-            if current_is_fork_child() {
-                if !child_close_own(a1) {
-                    fork_child_mark_closed(a1); // inherited: mark-only
-                }
-                return 0;
-            }
-            // close(fd) by the PARENT of a fd a live fork child INHERITED: freeing
-            // the slot now lets the allocator hand that NUMBER out again while the
-            // child still owns it — chrome's per-process ScopedFD tracker then sees
-            // open() return an fd it owns and CHECK-crashes ("FD ownership
-            // violation", run 4: browser closed its fd 5, slot freed, the service
-            // child's next openat got 5 back). POSIX semantics: the description
-            // lives until EVERY holder closes it. Defer: keep the slot occupied,
-            // remember the fd, and really free it when the last inheriting child
-            // exits. The parent itself closed it and never touches it again, so
-            // the number staying resolvable costs nothing.
-            if FORK_INHERITED.lock().iter().any(|(_, set)| set.contains(&(a1 as u32))) {
-                let mut d = DEFERRED_CLOSE.lock();
-                if !d.contains(&(a1 as u32)) {
-                    d.push(a1 as u32);
-                }
-                return 0;
-            }
+            // The last descriptor of this object was closed (fdtab.rs counts
+            // them, across processes): the object itself goes.
             close_fd_now(a1)
         }
-        32 => dup_fd(a1),                 // dup(oldfd)
-        33 | 292 => dup2_fd(a1, a2),       // dup2(old,new) / dup3(old,new,flags)
+        // dup, dup2, dup3 are answered by the descriptor table and never get here.
+        32 | 33 | 292 => (-9i64) as u64,
         57 | 58 => {
             crate::serial_println!("[fork] {} syscall -> do_glibc_fork", if num == 57 { "fork" } else { "vfork" });
             let cur = crate::sched::current();
@@ -15824,7 +15720,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // is ignored — we only ever grow (never shrink/punch).
             let need = a3.saturating_add(a4) as usize;
             let fd = a1 as usize;
-            if fd >= MAX_FD {
+            if fd >= max_fd() {
                 return (-9i64) as u64;
             }
             let fi = match OPEN_FDS.lock()[fd] {
@@ -15973,7 +15869,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
                 let fd = match read_user::<i32>(ent) { Some(v) => v as i64 as u64, None => return EFAULT };
-                let fd = unalias_fd(fd); // dup2'd socket alias (Mojo child channel)
+                // The descriptor's object; a number that is not open is POLLNVAL.
+                let Some(fd) = fdtab::resolve(fd) else {
+                    if (fd as i64) >= 0 {
+                        let _ = write_user(ent + 6, 0x020u16); // POLLNVAL
+                        ready += 1;
+                    } else {
+                        let _ = write_user(ent + 6, 0u16); // a negative fd is ignored
+                    }
+                    continue;
+                };
                 let events = read_user::<u16>(ent + 4).unwrap_or(0);
                 let mut re = 0u16;
                 // Use the SAME readiness logic as epoll (event fds/pipes/sockets report
@@ -15988,12 +15893,19 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 if epoll_fd_writable(fd) {
                     re |= events & POLLOUT;
                 }
+                let (hup, err) = fd_hangup(fd);
+                if hup {
+                    re |= 0x010; // POLLHUP
+                }
+                if err {
+                    re |= 0x008; // POLLERR
+                }
                 let is_evt = crate::net::is_eventfd(fd)
                     || crate::net::is_unix_fd(fd)
                     || crate::net::is_sock_fd(fd)
                     || is_epoll_fd(fd)
-                    || ((fd as usize) < MAX_FD && is_pipe_fd(fd as usize));
-                if !is_evt && (fd < 3 || ((fd as usize) < MAX_FD && OPEN_FDS.lock()[fd as usize].is_some())) {
+                    || ((fd as usize) < max_fd() && is_pipe_fd(fd as usize));
+                if !is_evt && (fd < 3 || ((fd as usize) < max_fd() && OPEN_FDS.lock()[fd as usize].is_some())) {
                     // stdin/out/err + regular files never block.
                     re = events & (POLLIN | POLLOUT);
                 }
@@ -16012,7 +15924,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     let fd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
                     let ev = read_user::<u16>(ent + 4).unwrap_or(0);
                     let re = read_user::<u16>(ent + 6).unwrap_or(0);
-                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},re={re:#x})", fd_kind(fd)));
+                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},re={re:#x})", fd_kind(fdtab::resolve(fd).unwrap_or(u64::MAX))));
                 }
                 crate::serial_println!("[pollset] t{} {:?} n={nfds} to={timeout_ms} ready={ready}:{desc}",
                     crate::sched::current(), thread_name(crate::sched::current()));
@@ -16023,7 +15935,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let mut has_x = false;
             for i in 0..nfds {
                 let fd = read_user::<i32>(a1 + (i as u64) * 8).unwrap_or(-1) as i64 as u64;
-                if crate::net::x_fd_queued(fd).is_some() {
+                if fdtab::resolve(fd).is_some_and(|o| crate::net::x_fd_queued(o).is_some()) {
                     has_x = true;
                 }
             }
@@ -16032,9 +15944,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let mut desc = String::new();
                 for i in 0..nfds {
                     let ent = a1 + (i as u64) * 8;
-                    let fd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
+                    let ufd = read_user::<i32>(ent).unwrap_or(-1) as i64 as u64;
+                    let fd = fdtab::resolve(ufd).unwrap_or(u64::MAX);
                     let ev = read_user::<u16>(ent + 4).unwrap_or(0);
-                    desc.push_str(&alloc::format!(" fd{fd}({},ev={ev:#x},in={},out={}{})",
+                    desc.push_str(&alloc::format!(" fd{ufd}({},ev={ev:#x},in={},out={}{})",
                         fd_kind(fd), epoll_fd_ready(fd), epoll_fd_writable(fd),
                         match crate::net::x_fd_queued(fd) {
                             Some(q) => alloc::format!(",queued={q}"),
@@ -16169,9 +16082,6 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             match crate::net::unix_socketpair() {
                 Some((a, b)) => {
-                    if !write_user(a4, a as i32) || !write_user(a4 + 4, b as i32) {
-                        return EFAULT;
-                    }
                     SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
                     if a2 & 0x800 != 0 { // SOCK_NONBLOCK on both ends
                         fd_set_nonblock(a, true);
@@ -16181,7 +16091,23 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         fd_set_cloexec(a, true);
                         fd_set_cloexec(b, true);
                     }
-                    0
+                    // The two ends become descriptors of the calling process.
+                    let r = match fdtab::install_pair(a, b) {
+                        Ok((da, db)) => {
+                            if write_user(a4, da as i32) && write_user(a4 + 4, db as i32) {
+                                return 0;
+                            }
+                            // The caller gave no place to put them: they are closed
+                            // again, through the table, like any other descriptor.
+                            let _ = fdtab::syscall(3, da, 0, 0, 0, 0, &mut linux_dispatch_objs);
+                            let _ = fdtab::syscall(3, db, 0, 0, 0, 0, &mut linux_dispatch_objs);
+                            return EFAULT;
+                        }
+                        Err(e) => e,
+                    };
+                    let _ = close_fd_now(a);
+                    let _ = close_fd_now(b);
+                    r
                 }
                 None => (-24i64) as u64, // -EMFILE
             }
@@ -16364,14 +16290,14 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                             let n = (clen - 16) / 4;
                             for i in 0..n {
                                 let fd = read_user::<i32>(control + off as u64 + 16 + (i * 4) as u64).unwrap_or(-1);
-                                if fd >= 0 {
-                                    let dup = dup_fd(fd as u64);
-                                    if (dup as i64) >= 0 {
-                                        SCM_PENDING.lock().push((peer, dup, msg_id));
-                                        if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
-                                            crate::serial_println!("[scm] fd{fd} ({}) sent on fd{a1} -> arrives as fd{dup} on fd{peer}",
-                                                fd_kind(fd as u64));
-                                        }
+                                // The OBJECT travels, with a reference of its own:
+                                // the sender may close its descriptor at once.
+                                if let Some(obj) = fdtab::scm_send(fd) {
+                                    let _g = crate::sched::IfOffGuard::new();
+                                    SCM_PENDING.lock().push((peer, obj, msg_id));
+                                    if CACHE_DIR_DIAG.load(Ordering::Relaxed) {
+                                        crate::serial_println!("[scm] fd{fd} ({}, object {obj}) sent on object {a1} -> queued for {peer:#x}",
+                                            fd_kind(obj));
                                     }
                                 }
                             }
@@ -16419,22 +16345,25 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // buffer where the caller expects them. Without this the bytes arrive and
             // the handle they refer to does not, so the receiver waits for a resource
             // it was never given.
-            // Re-home the arriving descriptors into numbers free in THE RECEIVER'S
-            // view. They were allocated when the SENDER dup'd them, and the
-            // allocator's alias check only ever sees the CURRENT process - so a
-            // number free for the sender could collide with an alias the receiver
-            // owns, and chrome's descriptor-ownership check aborts the child.
-            // A dup here runs in the receiver's context, which is the whole point.
-            let fds: alloc::vec::Vec<u64> = scm_take(a1).into_iter().map(|f| {
-                let re = dup_fd(f);
-                if (re as i64) > 0 && re != f {
-                    let _ = close_fd_now(f); // drop the sender-side placeholder
-                    child_note_open(re as usize);
-                    re
-                } else { f }
-            }).collect();
+            // The objects that travelled with this message become descriptors of
+            // the RECEIVER: the lowest free numbers of its own table. Without room
+            // in the control buffer they are dropped, as Linux drops them
+            // (MSG_CTRUNC), and their references with them.
             let control = read_user::<u64>(a2 + 32).unwrap_or(0);
             let controllen = read_user::<u64>(a2 + 40).unwrap_or(0) as usize;
+            let arrived = scm_take(a1);
+            let room = if control != 0 && controllen >= 16 { (controllen - 16) / 4 } else { 0 };
+            let cmsg_cloexec = a3 & 0x4000_0000 != 0; // MSG_CMSG_CLOEXEC
+            let mut fds: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+            for (i, obj) in arrived.into_iter().enumerate() {
+                if i < room {
+                    if let Some(fd) = fdtab::scm_receive(obj, cmsg_cloexec) {
+                        fds.push(fd);
+                    }
+                } else {
+                    fdtab::unref_obj(obj);
+                }
+            }
             // Trace only calls that actually CARRY descriptors. The unconditional
             // entry trace was written to catch a control message being stomped; that
             // bug is fixed, and what it leaves behind is 55 000 lines per run of
@@ -16692,7 +16621,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let empty_at_fd = num == 262 && a4 & 0x1000 != 0 && user_cstr(a2, 2).is_empty();
             let stat_fd = if num == 5 { a1 } else { a1 };
             let stat_buf = if num == 5 { a2 } else { a3 };
-            if (num == 5 || empty_at_fd) && (stat_fd as usize) < MAX_FD
+            if (num == 5 || empty_at_fd) && (stat_fd as usize) < max_fd()
                 && OPEN_DIRS.lock()[stat_fd as usize].is_some()
             {
                 if !in_user_arena(stat_buf, 144) {
@@ -16953,7 +16882,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // an AF_INET socket answers 0 (not needed by anything so far).
             let n: usize = if crate::net::is_unix_fd(a1) {
                 crate::net::unix_fd_available(a1)
-            } else if (a1 as usize) < MAX_FD && is_pipe_fd(a1 as usize) {
+            } else if (a1 as usize) < max_fd() && is_pipe_fd(a1 as usize) {
                 match pipe_fds()[a1 as usize] {
                     Some((id, false)) => pipes_lock()[id].len(),
                     _ => 0,
@@ -17224,7 +17153,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             match a2 {
                 3 => { // F_GETFL: the fd's real access mode + tracked O_NONBLOCK.
                     let fd = a1 as usize;
-                    let acc = if fd < MAX_FD { FD_ACCMODE[fd].load(Ordering::Relaxed) as u64 } else { 2 };
+                    let acc = if fd < max_fd() { FD_ACCMODE[fd].load(Ordering::Relaxed) as u64 } else { 2 };
                     acc | if fd_is_nonblock(a1) { 0x800 } else { 0 }
                 }
                 4 => { // F_SETFL: remember O_NONBLOCK for ANY fd (pipe, file, SOCKET).
@@ -17498,6 +17427,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             crate::serial_println!(
                 "[abort] t{} {:?} tgkill(tgid={a1}, tid={a2}, sig={a3}) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump",
                 crate::sched::current(), thread_name(crate::sched::current()));
+            // What its descriptors were doing: chrome's own abort over them
+            // ("FD ownership violation") names no descriptor.
+            static FDX_DUMPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(6);
+            if a3 == 6 && FDX_DUMPS.load(Ordering::Relaxed) > 0 {
+                FDX_DUMPS.fetch_sub(1, Ordering::Relaxed);
+                fdtab::dump_current(120);
+            }
             // A fatal signal to the calling thread ends the PROCESS, as on Linux
             // (SIGABRT/SIGKILL/SIGSEGV/SIGTERM default to termination). Returning 0
             // let glibc's abort() fall through to its hlt, a #GP in ring 3 with the

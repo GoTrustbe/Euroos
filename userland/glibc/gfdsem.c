@@ -257,6 +257,28 @@ static void t_proc_self_fd(void) {
     }
     check("/proc/self/fd lists this process's descriptors", d && saw_x && !saw_y && saw_std == 3,
           "opendir %s, %d entries, open fd %d listed=%d, closed fd %d listed=%d, std=%d", d ? "ok" : "failed", n, x, saw_x, y, saw_y, saw_std);
+    /* Close while reading, a small buffer at a time: what a browser does in a
+       child before exec. The directory is read by number, so no descriptor is
+       skipped because an earlier one went away. */
+    for (int i = 0; i < 40; i++) fcntl(x, F_DUPFD, 100);
+    int dfd = open("/proc/self/fd", O_RDONLY | O_DIRECTORY);
+    char buf[256];
+    long got;
+    int closed = 0, calls = 0;
+    while (dfd >= 0 && (got = syscall(SYS_getdents64, dfd, buf, sizeof buf)) > 0 && calls++ < 200) {
+        for (long off = 0; off < got;) {
+            struct { uint64_t ino; int64_t off; unsigned short reclen; unsigned char type; char name[1]; } *de = (void *)(buf + off);
+            int v = atoi(de->name);
+            if (de->name[0] != '.' && v >= 100 && v != dfd) { close(v); closed++; }
+            if (de->reclen == 0) break;
+            off += de->reclen;
+        }
+    }
+    int left = 0;
+    for (int fd = 100; fd < 140; fd++) if (fcntl(fd, F_GETFD) != -1) { left++; close(fd); }
+    check("/proc/self/fd read in small pieces while closing: no descriptor is skipped", dfd >= 0 && closed == 40 && left == 0,
+          "%d of 40 closed from the listing in %d calls, %d still open", closed, calls, left);
+    close(dfd);
     close(x);
 }
 
@@ -590,6 +612,18 @@ int main(int argc, char **argv) {
     t_close_range();
     t_limit();
 #ifndef NOFORK
+    /* Can this process fork at all? A glibc fork copies the whole arena, and a
+       small machine has no room for a second one: the fork half is then not
+       run, and the exit code says so (172). */
+    pid_t probe = fork();
+    if (probe == 0) _exit(0);
+    if (probe < 0) {
+        printf(TAG ": fork is not possible here (errno %d): the fork half was not run\n", errno);
+        printf(TAG ": %s %d/%d (one process only)\n", fails ? "FAILED" : "PASS", total - fails, total);
+        fflush(stdout);
+        return fails ? (fails > 100 ? 100 : fails) : 172;
+    }
+    reap(probe);
     t_fork_offset();
     t_fork_close();
     t_fork_pipe_eof();

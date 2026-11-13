@@ -29,6 +29,7 @@ static long sys(long n, long a1, long a2, long a3) {
 #define L_EXIT 60
 #define L_WAIT4 61
 #define L_FCNTL 72
+#define L_CLOCK_GETTIME 228
 #define L_DUP3 292
 #define L_PIPE2 293
 #define L_CLOSE_RANGE 436
@@ -82,19 +83,28 @@ static void check(const char *name, int ok, long a, long b, long c) {
     flush();
 }
 static void nap(void) { sys(L_NANOSLEEP, 0, 0, 0); }
+/* Milliseconds of the kernel's clock. Every wait below is bounded by TIME: a
+ * nap gives the CPU away at the next tick, it does not last a known while. */
+static long now_ms(void) {
+    long ts[2] = { 0, 0 };
+    sys(L_CLOCK_GETTIME, 1, (long)ts, 0);
+    return ts[0] * 1000 + ts[1] / 1000000;
+}
 
-/* Read with a bound: -2 when nothing came in about `tries` naps. */
-static long read_to(int fd, char *buf, long n, int tries) {
-    for (int i = 0;; i++) {
+/* Read with a bound: -2 when nothing came within `ms` milliseconds. */
+static long read_to(int fd, char *buf, long n, long ms) {
+    long end = now_ms() + ms;
+    for (;;) {
         long r = sys(L_READ, fd, (long)buf, n);
         if (r != -EAGAIN) return r;
-        if (i >= tries) return -2;
+        if (now_ms() >= end) return -2;
         nap();
     }
 }
 static long reap(void) {
     int st = -1;
-    for (int i = 0; i < 400; i++) {
+    long end = now_ms() + 20000;
+    while (now_ms() < end) {
         long w = sys(L_WAIT4, -1, (long)&st, 0);
         if (w > 0) return (st >> 8) & 0xff;
         nap();
@@ -177,20 +187,20 @@ static void across_fork(void) {
         sys(L_WRITE, back[1], (long)rep, 2);
         sys(L_WRITE, p[1], (long)"xy", 2);
         sys(L_CLOSE, p[1], 0, 0);
-        read_to(hold[0], c, 1, 600); /* alive, with the write end closed */
+        read_to(hold[0], c, 1, 30000); /* alive, with the write end closed */
         quit(0);
     }
     sys(L_CLOSE, p[1], 0, 0);
     sys(L_CLOSE, back[1], 0, 0);
     sys(L_CLOSE, hold[0], 0, 0);
     char rep[2] = { 0, 0 };
-    long got = read_to(back[0], rep, 2, 400);
+    long got = read_to(back[0], rep, 2, 15000);
     for (int i = 0; i < 8; i++) b[i] = 0;
     long r = sys(L_READ, fd, (long)b, 3);
     check("fork shares the offset", got == 2 && rep[0] == 'y' && r == 3 && b[0] == 'd' && b[2] == 'f', got, r, b[0]);
     check("a close in the child closes nothing in the parent; the child reuses the number", rep[1] == 'y' && r == 3, rep[1], r, 0);
-    long d1 = read_to(p[0], b, 2, 400);
-    long d2 = read_to(p[0], b, 2, 200);
+    long d1 = read_to(p[0], b, 2, 15000);
+    long d2 = read_to(p[0], b, 2, 5000);
     check("pipe across fork: data, then end-of-file when the child closed the last write end (child alive)",
           d1 == 2 && d2 == 0, d1, d2, 0);
     sys(L_WRITE, hold[1], (long)"h", 1);
@@ -209,8 +219,8 @@ static void across_fork(void) {
     }
     sys(L_CLOSE, q[1], 0, 0);
     st = reap();
-    long e1 = read_to(q[0], b, 1, 100);
-    long e2 = read_to(q[0], b, 1, 200);
+    long e1 = read_to(q[0], b, 1, 5000);
+    long e2 = read_to(q[0], b, 1, 5000);
     check("exit closes the descriptors of the process", st == 0 && e1 == 1 && e2 == 0, st, e1, e2);
     sys(L_CLOSE, q[0], 0, 0);
 

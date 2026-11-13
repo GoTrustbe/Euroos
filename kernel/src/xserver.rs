@@ -12,9 +12,9 @@
 use alloc::vec::Vec;
 use spin::Mutex;
 
-/// X-connection fds live in their own space so they don't collide with VFS (small),
-/// AF_INET (500+) or AF_UNIX (600+) fds.
-pub const XCONN_FD_BASE: u64 = 700;
+/// X connections are a class of objects of their own, beside the AF_INET and
+/// AF_UNIX classes (net.rs) and above the file tables.
+pub const XCONN_FD_BASE: u64 = 0x1_2000;
 const MAX_XCONN: usize = 8;
 
 /// Default screen geometry reported in the setup (refined to the real framebuffer
