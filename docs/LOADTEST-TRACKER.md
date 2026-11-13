@@ -2157,6 +2157,30 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   cache, the PDF viewer): 214 of 256 live tasks (a1); thread kernel stacks: 224.
 - **Next:** more slots and thread kernel stacks without static memory on small machines (stacks from the heap past 224).
 
+### BUG-160 — Chromium's audio output fails: every clip with sound stops at t=0 (`AUDIO_RENDERER_ERROR`) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for criterion 3 (YouTube picture and sound) · found by `chrome-smoke.py --only localvideo` (`proof/chrome-harness/`)
+- **Reproduction:** `scripts/mk-test-video.sh DIR`; `chrome-smoke.py --only localvideo --media-dir DIR` (image `pub`, KVM, 2 vCPU, intel-hda + hda-duplex with `-audiodev wav`).
+  The page `vp9.html` (VP9 + Opus) is served from the host to `http://10.0.2.2:PORT/`, the PLAY button is clicked with the tablet.
+- **Actual:**   `video.error.code` 3 (MEDIA_ERR_DECODE), `currentTime` stays 0.00, `readyState` 4, QEMU's wav has RMS 0 in every window. Serial log:
+  `PipelineStatus::AUDIO_RENDERER_ERROR` and `services/audio/sync_reader.cc:154] ASR: No room in socket buffer.: Broken pipe (32)`;
+  the kernel's `[alsa]` trace shows the stream opened, three `writei` (peak 0), then `drop/drain` and `close` ~5 s later.
+- **Isolated:** the same clip split in two (`scripts/mk-test-video.sh`): VP9 **without** audio plays (14 of 14 screendumps differ, `currentTime` 3.0 -> 32.4 in 31.4 s, no error), Opus **alone** fails
+  as above. So the video decoder and the renderer are fine; the audio service's stream to the renderer breaks (EPIPE on the sync socket: the peer's end was closed or never handed over).
+- **Candidates:** the descriptor hand-over of the audio stream (`SCM_RIGHTS` / the socket pair of `CancelableSyncSocket`) in the per-process fd spaces of BUG-098; the shared-memory region of the stream. Not attributed.
+- **Not fixed here** (kernel; other teams). The YouTube "no sound / frames stop" of `chrome-2026-11b` has the same signature.
+
+### BUG-161 — this Chromium build has no H.264/AAC ⬜ OPEN (build, not kernel)
+- **Actual:**   `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')` is empty, an `.mp4` fails with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (`error 4`). VP9/Opus/VP8 are supported.
+  YouTube serves VP9/AV1 + Opus to such a browser, so it does not block criterion 3; sites that only offer H.264 will not play.
+- **Next:**     decide whether `proprietary_codecs`/`ffmpeg_branding=Chrome` is wanted (licence); otherwise document it.
+
+### BUG-162 — a click on a page link is sometimes not followed ⬜ OPEN (unconfirmed)
+- **Actual:**   `chrome-smoke.py --only interact`: the click on the "Download" link in the euro-os.eu header (a real tablet click, `interact-rerun-report.txt`) did not navigate in 1 of 2 fresh boots (the other boot followed it, `#download`); the history step that follows failed with it.
+- **Next:**     repeat the step 20 times on a fresh boot; check whether the click came while the page was still loading (the harness waits 1.5 s of unchanged picture) before it is called an input bug.
+
+### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
+- **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).
+
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
   ≥ 2 GiB after BUG-016**; on 813e627 most were killed at their first instruction and the boot

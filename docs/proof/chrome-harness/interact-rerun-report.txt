@@ -1,0 +1,27 @@
+chrome-smoke: FAIL (2 step(s))
+kvm smp=2 mem=6144M input=usb nic=virtio-net-pci, 195 s, max console latency 50 ms; desktop loop while the browser ran: slowest console answer 303 ms, median 12 ms over 631 echoes
+
+ok   boot: desktop after 4 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 13.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+ok   omnibox: Ctrl+L, a URL, Enter: file:///tmp/input-test.html after 0.7 s
+ok   form: typed text arrives in the field (US): state ('Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', '', '-', 0)
+ok   clipboard: Ctrl+A, Ctrl+C in field A, Ctrl+V in field B: state ('Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', 'Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', 'paste', 0)
+ok   selection: double click selects a word on the page, copy, paste: field B = 'select'
+ok   selection: a drag with the button held selects text, copy, paste: field B = 'select-this-word '
+ok   scroll: wheel down, PageDown, End, Home, wheel down and up again: scrollY 335 -> 928 -> 1388 -> 0 -> 0
+ok   reload: F5 loads the page again: field A 'Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.jx' -> title 'A=[] B=[] clip=- y=0'
+ok   form: be-azerty with AltGr characters: field A = 'azerty AZERTY 0123456789 m,;:=?./+ @#{}[]|€'
+ok   tabs: Ctrl+T, a page in the new tab, Ctrl+PageUp to the first, Ctrl+PageDown, Ctrl+W: two tabs ok, second loaded ok, typing in the first tab ok, the first tab is left ok
+ok   browser UI: the menu opens on a click at its button, Esc closes it: menu region: 239 colours while open
+ok   window: drag by the title bar, input lands in the moved window: frame at (289, 179), state ('moved', 'tab one', '-', 0)
+ok   window: maximise, chrome lays out for the new size, input lands: X window 1518x1008, menu button drawn at the new right edge: True, state ('maximised', 'tab one', '-', 0)
+ok   window: restore, input still lands: X window 800x600, frame at (289, 179), state ('maximised', 'restored', '-', 0)
+FAIL link: a click on a link in the page navigates: [('https://euro-os.eu/en/', 'EuroOS: A sovereign operating system for Europe')] | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL history: Alt+Left goes back, the toolbar's forward button goes forward: back no, forward no: [('https://euro-os.eu/en/', 'EuroOS: A sovereign operating system for Europe')] | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+
+memory_start: no [cpu] heartbeat line yet
+
+consent_clicks: []
+
+memory_end: heap 118 MiB used, 393 MiB free; big 82/429 MiB (peak 88); files 99 MiB; demand 1493 MiB free

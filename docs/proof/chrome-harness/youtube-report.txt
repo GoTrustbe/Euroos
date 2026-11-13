@@ -1,0 +1,126 @@
+chrome-smoke: FAIL (4 step(s))
+kvm smp=2 mem=6144M input=usb nic=virtio-net-pci, 777 s, max console latency 50 ms; desktop loop while the browser ran: slowest console answer 158 ms, median 12 ms over 2841 echoes
+
+ok   boot: desktop after 4 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 13.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.4, renderer 8.0), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+ok   youtube: the front page (or its consent dialog) loads: https://www.youtube.com/ after 1.5 s, 247 colours
+ok   consent youtube-front: accept button clicked: clicked 'accept all' (accept) at (669, 640), banner  [matches of the reject labels, (label, n, at, looked like a button): [('reject', 0, (350, 707), False), ('reject', 1, (547, 639), False), ('reject', 2, (350, 402), False), ('reject', 3, (547, 639), False), ('reject', 4, (350, 402), False), ('reject', 5, (547, 639), False), ('reject', 6, (350, 402), False), ('reject', 7, (547, 639), False)]]gone
+ok   youtube: the watch page loads (aqz-KE-bpKQ): https://www.youtube.com/watch?v=aqz-KE-bpKQ after 1.5 s
+ok   consent youtube-watch-1: no banner button found: find-in-page matched none of 17 labels
+ok   consent youtube-watch-1-recheck: no banner button found: find-in-page matched none of 17 labels
+FAIL youtube: aqz-KE-bpKQ is not behind a bot check: the page shows YouTube's 'Sign in to confirm you're not a bot' (find-in-page matched 'confirm you'; screenshot youtube-botcheck-1.png); reported as it is, not bypassed | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   youtube: the watch page loads (YE7VzlLtp-4): https://www.youtube.com/watch?v=YE7VzlLtp-4 after 0.9 s
+ok   consent youtube-watch-2: no banner button found: find-in-page matched none of 17 labels
+ok   consent youtube-watch-2-recheck: no banner button found: find-in-page matched none of 17 labels
+FAIL youtube: YE7VzlLtp-4 is not behind a bot check: the page shows YouTube's 'Sign in to confirm you're not a bot' (find-in-page matched 'confirm you'; screenshot youtube-botcheck-2.png); reported as it is, not bypassed | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   youtube: the watch page loads (eRsGyueVLvQ): https://www.youtube.com/watch?v=eRsGyueVLvQ after 1.4 s
+ok   consent youtube-watch-3: no banner button found: find-in-page matched none of 17 labels
+ok   consent youtube-watch-3-recheck: no banner button found: find-in-page matched none of 17 labels
+FAIL youtube: eRsGyueVLvQ is not behind a bot check: the page shows YouTube's 'Sign in to confirm you're not a bot' (find-in-page matched 'confirm you'; screenshot youtube-botcheck-3.png); reported as it is, not bypassed | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   youtube: the watch page loads (R6MlUcmOul8): https://www.youtube.com/watch?v=R6MlUcmOul8 after 2.6 s
+ok   consent youtube-watch-4: no banner button found: find-in-page matched none of 17 labels
+ok   consent youtube-watch-4-recheck: no banner button found: find-in-page matched none of 17 labels
+FAIL youtube: R6MlUcmOul8 is not behind a bot check: the page shows YouTube's 'Sign in to confirm you're not a bot' (find-in-page matched 'confirm you'; screenshot youtube-botcheck-4.png); reported as it is, not bypassed | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+
+memory_start: no [cpu] heartbeat line yet
+
+youtube: {
+ "blocked_by_bot_check": [
+  "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+  "https://www.youtube.com/watch?v=YE7VzlLtp-4",
+  "https://www.youtube.com/watch?v=eRsGyueVLvQ",
+  "https://www.youtube.com/watch?v=R6MlUcmOul8"
+ ]
+}
+
+consent_clicks: [
+ {
+  "button": "accept all",
+  "kind": "accept",
+  "at": [
+   669,
+   640
+  ],
+  "gone": true,
+  "label_still_found": false,
+  "pixels_changed": true,
+  "find_trace": [
+   [
+    "reject",
+    0,
+    [
+     350,
+     707
+    ],
+    false
+   ],
+   [
+    "reject",
+    1,
+    [
+     547,
+     639
+    ],
+    false
+   ],
+   [
+    "reject",
+    2,
+    [
+     350,
+     402
+    ],
+    false
+   ],
+   [
+    "reject",
+    3,
+    [
+     547,
+     639
+    ],
+    false
+   ],
+   [
+    "reject",
+    4,
+    [
+     350,
+     402
+    ],
+    false
+   ],
+   [
+    "reject",
+    5,
+    [
+     547,
+     639
+    ],
+    false
+   ],
+   [
+    "reject",
+    6,
+    [
+     350,
+     402
+    ],
+    false
+   ],
+   [
+    "reject",
+    7,
+    [
+     547,
+     639
+    ],
+    false
+   ]
+  ],
+  "site": "youtube-front"
+ }
+]
+
+memory_end: heap 121 MiB used, 390 MiB free; big 164/347 MiB (peak 224); files 152 MiB; demand 1125 MiB free
