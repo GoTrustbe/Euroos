@@ -824,6 +824,21 @@ fn fd_is_nonblock(fd: u64) -> bool {
         SOCK_NONBLOCK.lock().iter().any(|&(f, nb)| f == fd && nb))
 }
 
+/// BUG-170: the object `o` is gone (its last descriptor closed): its O_NONBLOCK
+/// goes with it. The flag is kept per object number, and the numbers are handed
+/// out again: Chromium's audio sync socket was created where a non-blocking
+/// socket had been, so its blocking reads in the renderer answered EAGAIN at
+/// once, the renderer's audio thread gave up and closed its end, and the
+/// browser's next write on the other end was EPIPE (AUDIO_RENDERER_ERROR).
+fn nonblock_forget(o: u64) {
+    if (o as usize) < max_fd() {
+        FD_NONBLOCK[o as usize].store(false, Ordering::Relaxed);
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    SOCK_NONBLOCK.lock().retain(|&(f, _)| f != o);
+}
+
 fn fd_set_nonblock(fd: u64, nb: bool) {
     if (fd as usize) < max_fd() {
         FD_NONBLOCK[fd as usize].store(nb, Ordering::Relaxed);
@@ -852,6 +867,7 @@ fn fd_set_nonblock(fd: u64, nb: bool) {
 /// program reaches it, and it says so on the serial line when it does.
 fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
     let deadline = crate::interrupts::ticks() + 3000; // ~30 s of guest time
+    let mut tries = 0u32;
     loop {
         let d = crate::net::unix_fd_recv(fd, cap);
         if !d.is_empty() || crate::net::unix_fd_at_eof(fd) || scm_pending_for(fd) {
@@ -860,9 +876,19 @@ fn unix_recv_blocking(fd: u64, cap: usize) -> Option<alloc::vec::Vec<u8>> {
         if fd_is_nonblock(fd) || !syscall_yield_ok() {
             return None;
         }
-        if crate::interrupts::ticks() > deadline {
+        if crate::interrupts::ticks() > deadline || tries >= 6000 {
             crate::serial_println!("[unix] blocking recv on fd{fd} gave up after 30 s");
             return None;
+        }
+        // BUG-171: wait, do not spin. A yield alone does not charge the waiter
+        // any vruntime, so with interrupts off in the system call it was picked
+        // again at once: the renderer's audio thread, the first real user of a
+        // blocking read on a socket (BUG-170), held the CPU between two audio
+        // periods and the desktop stopped answering. Two quick yields for an
+        // answer that is on its way, then a tick of sleep per look, as poll does.
+        tries += 1;
+        if tries > 2 {
+            crate::sched::sleep_ticks(1);
         }
         yield_reacquire();
     }
@@ -7386,6 +7412,7 @@ pub fn grow_ram_file(v: &mut alloc::vec::Vec<u8>, need: usize) -> bool {
 /// socket, or an open file, directory handle or pipe end of the calling task's
 /// space. Called when the last descriptor that named it is gone (fdtab.rs).
 fn close_fd_now(a1: u64) -> u64 {
+    nonblock_forget(a1);
     if fd_fi(a1) == Some(SND_PCM_FI) {
         crate::alsa::pcm_close();
     }
@@ -16646,10 +16673,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             match crate::net::unix_socketpair() {
                 Some((a, b)) => {
                     SOCK_PAIRS.lock().push((a, b)); // so SCM_RIGHTS knows the other end
-                    if a2 & 0x800 != 0 { // SOCK_NONBLOCK on both ends
-                        fd_set_nonblock(a, true);
-                        fd_set_nonblock(b, true);
-                    }
+                    // SOCK_NONBLOCK on both ends, or blocking: set either way. An
+                    // object number is used again after its last close, and a flag
+                    // left by the previous object made a fresh blocking socket answer
+                    // EAGAIN (BUG-170).
+                    fd_set_nonblock(a, a2 & 0x800 != 0);
+                    fd_set_nonblock(b, a2 & 0x800 != 0);
                     if a2 & 0x8_0000 != 0 { // SOCK_CLOEXEC on both ends
                         fd_set_cloexec(a, true);
                         fd_set_cloexec(b, true);
