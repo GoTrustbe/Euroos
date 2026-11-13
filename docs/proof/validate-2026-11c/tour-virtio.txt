@@ -1,0 +1,25 @@
+# The first-run tour with virtio input: gui-smoke.py, smoke pass only (smp 2, 2 GiB, restrict=on), 5 times on the public image of f98da76 and 5 times on the base (c6f033f plus the probe).
+== f98da76
+run 1 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 2 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 3 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 4 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 5 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+done
+== base
+run 1 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 2 rc=1 66 ok, FAIL first-run tour: shown on the first desktop, Esc closes , [tour] closed by a click at 776,170 outside the card (the click goes to the desk
+run 3 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+run 4 rc=1 66 ok, FAIL first-run tour: shown on the first desktop, Esc closes , [tour] closed by a click at 776,170 outside the card (the click goes to the desk
+run 5 rc=0 67 ok, ok   first-run tour: shown on the first desktop, Esc closes , [tour] closed at step 1 of 6: skipped (Esc or Skip)
+done
+== the failed monkey run (f98da76, seed 20261115): the tour lines and the input around them
+319:[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+330:[vinput] Key { extended: false, code: 1, pressed: true } → cursor 960,540
+331:[vinput] Key { extended: false, code: 1, pressed: false } → cursor 960,540
+342:[tour] closed by a click at 776,170 outside the card (the click goes to the desktop)
+== a failed base run: final/tour-base-2/serial.log
+319:[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+330:[vinput] Key { extended: false, code: 1, pressed: true } → cursor 960,540
+331:[vinput] Key { extended: false, code: 1, pressed: false } → cursor 960,540
+341:[tour] closed by a click at 776,170 outside the card (the click goes to the desktop)

@@ -1,0 +1,92 @@
+# f98da76: app run hello-x11 three times (a key; a click; the close button), then cdiag, fstrace, ctabs, xtrace
+wait 'interactive loop started': True
+scon $ keymap us
+   keyboard layout → US QWERTY (us)
+click 1100,171
+typed 'app run hello-x11\\n'
+shot x1-drawn.png
+scon $ cdiag
+   cdiag: written to the serial console
+scon $ xtrace on
+   xtrace: on
+key x
+scon $ xtrace off
+   xtrace: off
+shot x1-after-key.png
+click 170,111
+shot x1-closed.png
+click 1100,171
+typed 'app run hello-x11\\n'
+shot x2-drawn.png
+scon $ xtrace on
+   xtrace: on
+click 500,600
+scon $ xtrace off
+   xtrace: off
+shot x2-after-click.png
+click 170,111
+click 1100,171
+typed 'app run hello-x11\\n'
+shot x3-drawn.png
+scon $ cdiag
+   cdiag: written to the serial console
+click 170,111
+shot x3-closed.png
+click 1100,171
+typed 'uname\\n'
+scon $ cdiag
+   cdiag: written to the serial console
+scon $ fstrace 3
+   fstrace: the next 3 positioned reads and writes go to the serial console
+scon $ ctabs
+   ctabs: no hosted browser is running
+scon $ xtrace on
+   xtrace: on
+scon $ xtrace off
+   xtrace: off
+typed 'uname\\n'
+shot end.png
+serial lines: 9905; fault lines: 0
+--- serial lines of the app, the X server's input and the Terminal:
+[e2e] $ app run hello-x11
+[e2e] Hello (window): launched in a window (task 34; caps 'console,file,proc', profile utility)
+[xin] state: modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x0 shown=0x400001 E0-pending=false
+[xin] connection 0: 0 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(400001, 3c, 3c, 320, 258, true)]
+[xserver] key sc=0x2d ext=false -> keycode 53 press state=0x0
+[xserver] -> input kind=2 detail=53 window=0x400001 at(1039,110) queued=32 B
+[xserver] DestroyWindow id=0x400001
+[glibc] persistent app (task 34) terminated + arena freed
+[e2e] $ app run hello-x11
+[e2e] Hello (window): launched in a window (task 34; caps 'console,file,proc', profile utility)
+[glibc] persistent app (task 34) terminated + arena freed
+[xserver] a hosted app starts: 1 connection(s) of clients that are gone were forgotten
+[e2e] $ app run hello-x11
+[e2e] Hello (window): launched in a window (task 34; caps 'console,file,proc', profile utility)
+[xin] state: modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x0 shown=0x400001 E0-pending=false
+[xin] connection 0: 0 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(400001, 3c, 3c, 1e0, f0, true)]
+[glibc] persistent app (task 34) terminated + arena freed
+[e2e] $ uname
+[e2e] EuroOS
+[xin] state: modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x0 shown=0x400001 E0-pending=false
+[xin] connection 0: 32 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(400001, 3c, 3c, 1e0, f0, true)]
+[e2e] $ uname
+[e2e] EuroOS
+
+# f98da76, one more start: a click in the window (X trace on)
+wait 'interactive loop started': True
+scon $ keymap us
+   keyboard layout → US QWERTY (us)
+click 1100,171
+typed 'app run hello-x11\\n'
+shot drawn.png
+scon $ xtrace on
+   xtrace: on
+click 500,600
+scon $ xtrace off
+   xtrace: off
+shot after-click.png
+serial lines: 9041; fault lines: 0
+[xserver] -> input kind=6 detail=0 window=0x400001 at(349,465) queued=32 B
+[xserver] -> input kind=6 detail=0 window=0x400001 at(349,465) queued=32 B
+[xserver] -> input kind=4 detail=1 window=0x400001 at(349,465) queued=32 B
+[xserver] DestroyWindow id=0x400001

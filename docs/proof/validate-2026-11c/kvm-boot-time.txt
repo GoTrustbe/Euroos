@@ -1,0 +1,33 @@
+# Boot time of the public image, R630 KVM, boot-time.py --pin 38-39 --hold 5 (SATA medium, smp 2, 2 GiB, restrict=on).
+== round 1: public image of 7be30cb, 5 boots, while the soak, the short boots and the scenarios below were starting
+final-1: kernel-entry 1.70s desktop 2.55s
+final-2: kernel-entry 2.10s desktop 3.11s
+final-3: kernel-entry 1.81s desktop 2.65s
+final-4: kernel-entry 1.88s desktop 2.70s
+final-5: kernel-entry 1.90s desktop 2.74s
+final-1: desktop after 844 ms
+final-2: desktop after 1013 ms
+final-3: desktop after 835 ms
+final-4: desktop after 820 ms
+final-5: desktop after 835 ms
+== round 2: base (c6f033f plus the probe in /bin) and the public image of f98da76, alternating
+base-1: kernel-entry 1.72s desktop 2.63s
+final-1: kernel-entry 1.77s desktop 2.67s
+base-2: kernel-entry 2.01s desktop 2.91s
+final-2: kernel-entry 1.73s desktop 2.68s
+base-3: kernel-entry 1.81s desktop 2.76s
+final-3: kernel-entry 2.09s desktop 3.05s
+base-4: kernel-entry 1.88s desktop 2.80s
+final-4: kernel-entry 1.98s desktop 2.88s
+base-5: kernel-entry 2.01s desktop 2.93s
+final-5: kernel-entry 1.84s desktop 2.76s
+base-1: desktop after 902 ms
+base-2: desktop after 891 ms
+base-3: desktop after 953 ms
+base-4: desktop after 919 ms
+base-5: desktop after 919 ms
+final-1: desktop after 894 ms
+final-2: desktop after 943 ms
+final-3: desktop after 956 ms
+final-4: desktop after 901 ms
+final-5: desktop after 916 ms
