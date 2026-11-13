@@ -123,6 +123,33 @@ pub fn fork_thread_churn(alloc: &mut FrameAllocator) {
     );
 }
 
+/// BUG-170: the audio stream of Chromium between two processes (gsyncsock.c):
+/// a socketpair and a shared-memory region made in the parent, one end and the
+/// region handed to a fork child with SCM_RIGHTS, the parent's copies closed at
+/// once; then 4-byte signals both ways, non-blocking on the parent's side, and
+/// end of file for the child when the parent closes. Exit 77 = every check;
+/// 78 = fork refused for memory (not run).
+pub fn sync_socket_test(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    // Demand paging on, as for the browser: shared memory of in-RAM files is then
+    // the file's own frames in every process (SHARED_ALIASES).
+    let prev = crate::ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gsyncsock_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gsyncsock"], &[b"PATH=/bin"], caps);
+    crate::ring3::DEMAND_ENABLED.store(prev, core::sync::atomic::Ordering::Relaxed);
+    for l in out.lines().filter(|l| l.contains("FAIL ")) {
+        crate::serial_println!("[syncsock]   {}", l.trim_end());
+    }
+    let line = out.lines().rev().find(|l| l.contains("GSYNCSOCK:") && l.contains(" -> "))
+        .map(|l| l.trim_end().replace("GSYNCSOCK: ", "")).unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == 78 || exit == u64::MAX;
+    crate::serial_println!(
+        "[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: {line} (exit {}) → {}",
+        if exit == u64::MAX { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { "OK (not run: no room for a second process)" } else if exit == 77 { "OK ✓" } else { "FAILED" });
+}
+
 /// Filesystem lifecycle: create / write / rename / read back / remove, several
 /// rounds on the live root; every op must succeed, data must read back intact,
 /// the directory must be empty and removable after each round, a sentinel file
