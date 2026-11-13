@@ -1136,6 +1136,50 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
     (unmapped, freed)
 }
 
+/// madvise(MADV_DONTNEED): in [`start`, `end`) of the demand region of `pml4`,
+/// unmap and free every page for which `owned(va, writable)` says the process
+/// owns the frame alone (private anonymous memory); every other page stays as
+/// it is. A page of the range that is swapped out loses its slot the same way.
+/// The next touch of such a page faults in a fresh zero page, which is what
+/// the call promises. Returns the frames freed.
+pub fn discard_demand_range(pml4: u64, start: u64, end: u64, owned: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    let mut freed = 0usize;
+    let mut va = start & !0xFFF;
+    // SAFETY: identity-mapped table chain of the calling process (IF=0 syscall).
+    unsafe {
+        while va < end {
+            let i4 = ((va >> 39) & 0x1FF) as usize;
+            let i3 = ((va >> 30) & 0x1FF) as usize;
+            let i2 = ((va >> 21) & 0x1FF) as usize;
+            let e4 = (pml4 as *const u64).add(i4).read_volatile();
+            if e4 & PRESENT == 0 { va = ((va >> 39) + 1) << 39; continue; }
+            let e3 = ((e4 & ADDR_MASK) as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 { va = ((va >> 30) + 1) << 30; continue; }
+            let e2 = ((e3 & ADDR_MASK) as *const u64).add(i2).read_volatile();
+            if e2 & PRESENT == 0 { va = ((va >> 21) + 1) << 21; continue; }
+            let pt = e2 & ADDR_MASK;
+            let table_end = (((va >> 21) + 1) << 21).min(end);
+            while va < table_end {
+                let slot = (pt as *mut u64).add(((va >> 12) & 0x1FF) as usize);
+                let e1 = slot.read_volatile();
+                if e1 & PRESENT != 0 {
+                    if owned(va, e1 & WRITABLE != 0) {
+                        slot.write_volatile(0);
+                        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+                        crate::procpool::demand_free(e1 & ADDR_MASK);
+                        freed += 1;
+                    }
+                } else if e1 & SWAPPED_PTE != 0 && owned(va, true) {
+                    crate::swapmgr::free_slot(((e1 >> 12) & 0xFFFFF) as usize);
+                    slot.write_volatile(0);
+                }
+                va += 4096;
+            }
+        }
+    }
+    freed
+}
+
 /// Free a demand-paged region: walk PML4[`idx`] and return every committed data page
 /// AND every page-table frame to the process pool, then clear the PML4 entry. Mirrors
 /// [`map_demand_4k`]. Called when a process that used demand paging exits.

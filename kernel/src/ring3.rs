@@ -10993,6 +10993,8 @@ static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 /// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
 static MADVISE_ZEROED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static MADVISE_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Frames madvise gave back to the pool so far (BUG-152).
+pub static MADVISE_FREED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// madvise(addr, len, advice). MADV_DONTNEED (4) and MADV_FREE (8) over private
 /// anonymous demand pages must make those pages read as ZEROS afterwards. Linux
@@ -11007,10 +11009,15 @@ static MADVISE_CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 /// (`addl $1,0x8(%r13)`, runs 14/21/32) or blocked forever on a garbage mutex word
 /// (run 31), always at tick ~6779 = the first reclaim.
 ///
-/// The frames stay committed (nothing goes back to the pool): the contract is the
-/// zero contents, and leaving the PTEs alone needs no TLB shootdown. Shared frames
-/// (MAP_SHARED, disk cache) and file-backed private pages keep their bytes, as on
-/// Linux where DONTNEED re-reads them from the file.
+/// The frames go back to the pool (BUG-152): the page is unmapped and its next
+/// touch faults in a fresh zero page. They used to stay committed, zeroed in
+/// place, so that a process held the peak of everything it had ever touched:
+/// PartitionAlloc and V8 give memory back with exactly this call and with
+/// nothing else, and a browser that sat on a page for an hour kept every page
+/// of every earlier navigation (the census counted 30-40% of the anonymous
+/// pages of the renderers as all zeros). Ring 3 runs on one core, so the
+/// unmap needs no shootdown. Shared frames (MAP_SHARED, disk cache) and
+/// file-backed private pages keep their bytes, as before.
 fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     if advice != 4 && advice != 8 {
         return 0; // every other advice is a hint we may ignore
@@ -11030,27 +11037,21 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     // test, no sorted frame list: shared_phys_sorted() collects and sorts the whole
     // disk page cache, and a reclaim issues madvise a thousand times with
     // interrupts off), and file-backed private pages.
-    let in_shared = |page: u64| {
-        SHARED_MAPS.lock().iter().any(|&(_, b, l)| page >= b && page < b + l as u64)
-            || SHARED_ALIASES.lock().iter().any(|&(b, l, _)| page >= b && page < b + l)
-    };
-    let mut zeroed = 0u64;
-    let mut page = start;
-    while page < end {
-        if let Some((phys, writable)) = crate::paging::demand_pte(pml4, page) {
-            if writable && !in_shared(page) && !demand_file_backed(page, 4096) {
-                // SAFETY: `phys` is an identity-mapped 4 KiB frame owned by this process alone.
-                unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
-                zeroed += 1;
-            }
-        }
-        page += 4096;
-    }
+    // The windows of this process that overlap the range, taken once.
+    let overlap = |b: u64, l: u64| b < end && start < b + l;
+    let mut keep: alloc::vec::Vec<(u64, u64)> = alloc::vec::Vec::new();
+    keep.extend(SHARED_MAPS.lock().iter().filter(|&&(_, b, l)| overlap(b, l as u64)).map(|&(_, b, l)| (b, b + l as u64)));
+    keep.extend(SHARED_ALIASES.lock().iter().filter(|&&(b, l, _)| overlap(b, l)).map(|&(b, l, _)| (b, b + l)));
+    keep.extend(DEMAND_FILE_MAPS.lock().iter()
+        .filter(|&&(b, l, fi, _, _)| fi != usize::MAX && overlap(b, l)).map(|&(b, l, _, _, _)| (b, b + l)));
+    let mut owned = |va: u64, writable: bool| writable && !keep.iter().any(|&(b, e)| va >= b && va < e);
+    let zeroed = crate::paging::discard_demand_range(pml4, start, end, &mut owned) as u64;
+    MADVISE_FREED.fetch_add(zeroed, Ordering::Relaxed);
     let calls = MADVISE_CALLS.fetch_add(1, Ordering::Relaxed);
     let total = MADVISE_ZEROED.fetch_add(zeroed, Ordering::Relaxed) + zeroed;
     if calls < 4 || (calls + 1) % 256 == 0 {
         crate::serial_println!(
-            "[madvise] #{} advice={advice} [{start:#x},{end:#x}) zeroed {zeroed} of {} pages (total {total})",
+            "[madvise] #{} advice={advice} [{start:#x},{end:#x}) gave back {zeroed} of {} pages (total {total})",
             calls + 1, (end - start) / 4096
         );
     }
