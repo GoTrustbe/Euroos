@@ -4246,6 +4246,8 @@ fn main() -> Status {
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
+        // BUG-140: the scheduler slots of the tasks of ended fork children ([churn-forkthreads]).
+        churn::fork_thread_churn(&mut allocator);
         churn::fs_churn(&mut vfs);
         churn::net_churn();
         churn::surface_churn();

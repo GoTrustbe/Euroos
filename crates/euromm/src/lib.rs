@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod arena;
 pub mod bulk;
 pub mod frame;
 pub mod swap;
