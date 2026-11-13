@@ -547,6 +547,45 @@ Three runs of three; the page renders. The deadman of BUG-085 prints
 `WATCHDOG TRIPPED`. Not located (the NMI after the fact shows a
 Chrome_ChildIOThread in the kernel after `ftruncate`).
 
+### Round of 2026-11-13 (`proof/chrome-2026-11b/`, branch `feature/chrome-fdspace`)
+
+**W20 removed** (BUG-098, `6de8770`): one descriptor table per process, reference
+counts per object, `SCM_RIGHTS` between tables, `close_range`, `/proc/self/fd`,
+RLIMIT_NOFILE 4096. 186, 214, 220 of 4096 file objects after euro-os.eu, Wikipedia,
+GitHub. On the way: BUG-122 (every child aborted on descriptor 3).
+
+**W21 removed** (BUG-131 to BUG-133, `3c1892c`): the failing allocation was a 512 KiB
+anonymous mmap from the never-freed arena window (`[mm-fail]`); the GitHub panic came
+from 633 MiB of nameless shared-memory files that were never freed. Anonymous mappings
+from 64 KiB live in the demand region with address reuse; nameless RAM files are
+freed at their last descriptor or mapping in any process; 128 MiB arenas. No V8 OOM
+since; the site matrix passes at 4, 8 and 16 GiB (one round). Open: RAM-file bytes in
+the kernel heap.
+
+**W22 removed** (BUG-123 to BUG-129, `a7d6f62`; BUG-130 `2374531`): the stall was the
+serial console (a megabyte of per-event lines with interrupts off, and the harness's
+own reader), a desktop loop that halted with work waiting, and fork/exec copies with
+interrupts off. GitHub: slowest console answer 91-149 ms (was 6.8-18 s), the kernel's
+own stopwatch 70-104 ms. BUG-130: the virtio-net transmit buffer was overwritten while
+the device held it (TLS hellos lost).
+
+**The walls now:**
+
+### W23. after the PDF viewer a new renderer aborts at its start (BUG-134), and typed URLs stop navigating (BUG-135)
+
+Every full three-round matrix (a8, d1, d2) and the two-hour soak fail in round 2 here;
+one round, and PDF/euro-os/Wikipedia for two rounds, pass.
+
+### W24. YouTube from the test network
+
+The watch page loads, no V8 OOM. The video is not reachable: "Sign in to confirm
+you're not a bot" (y8c), or the consent dialog stays (f-yt). Needs a network YouTube
+serves, not a workaround.
+
+### W25. key to screen 292-335 ms (median), p90 406-605 ms
+
+The harness step registers again. Not yet broken down by hop.
+
 ## Exit criteria
 
 1. Every site of the matrix loads and renders (screendump), three runs in a
@@ -558,6 +597,19 @@ Chrome_ChildIOThread in the kernel after `ftruncate`).
    memory growth beyond the pools (the [mm] lines).
 5. Page load of the reference site under 3 s after navigate; the interaction
    latency (key to screen) under 100 ms measured on the screendump clock.
+
+### Status of the exit criteria on 2026-11-13 (`proof/chrome-2026-11b/`)
+
+1. Sites, three rounds in one session: **not met** (W23). One round: 6/6 at 4, 8 and
+   16 GiB guest RAM.
+2. Interaction matrix: **not met in the long session** (W23); 20 fresh starts with
+   typing, omnibox and menu: 20/20.
+3. YouTube video two minutes: **not met** (W24).
+4. Two-hour run: **not met.** The guest stays up 2 h; the browser is killed in round 4
+   (~74 min) when the demand pool is empty (BUG-137), and from round 2 the steps after
+   the PDF site fail (W23).
+5. Reference site under 3 s: **met** (median 1.33 s and 1.66 s). Key to screen under
+   100 ms: **not met**, 292 and 335 ms (W25).
 
 ### Status of the exit criteria on 2026-11-12
 

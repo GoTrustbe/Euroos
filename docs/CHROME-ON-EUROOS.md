@@ -4,6 +4,26 @@
 bewijs-screenshots staan in `docs/proof/`, de logbestanden en methodiek in de
 sprintdocumenten (`SPRINT-PLAN-CHROME-*.md`).*
 
+## Stand 2026-11-13: alle sites in een sessie, geen stilstand meer
+
+Bewijs en cijfers: `proof/chrome-2026-11b/README.md`; bugs BUG-098, BUG-120 t/m
+BUG-137 in `LOADTEST-TRACKER.md`. Kort:
+
+- Elk proces heeft een eigen descriptortabel (BUG-098): euro-os.eu, Wikipedia,
+  GitHub, YouTube, OpenStreetMap en een pdf in EEN sessie, bij 4, 8 en 16 GiB
+  gastgeheugen.
+- Geen `V8 process OOM` en geen kernel-heap-panic meer: anonieme mappings vanaf
+  64 KiB krijgen adressen die terugkomen, naamloze RAM-bestanden worden vrijgegeven
+  (BUG-131/132).
+- De desktop staat niet meer 12-17 s stil tijdens GitHub: traagste console-antwoord
+  91-149 ms (BUG-123 t/m 129). De browser start in 13 s in plaats van 37.
+- Niet: drie rondes achter elkaar (na de pdf-viewer crasht een nieuwe renderer en
+  komen getypte URL's niet meer aan, BUG-134/135); YouTube-video vanaf het
+  testnetwerk (YouTube vraagt om in te loggen); toets-tot-scherm 292-335 ms.
+- Nieuw in de shell: `fds` (descriptors per proces), `ramfiles` (RAM-bestanden),
+  `deskstat` (de stopwatch van de desktoplus), `chatter on|off` (alle
+  diagnoseregels weer op de seriele console; bootoptie `serial.chatter=on`).
+
 ## Stand 2026-11-12: de browser wordt met echte invoer bediend
 
 Na twee maanden kernelwerk startte chrome niet meer (venster leeg). Dat is
@@ -202,10 +222,11 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
   geen stack-eigenschap.
 - **Browser-UI-input** (omnibox, menu): werkt sinds BUG-090, 20 van 20 starts
   (`proof/chrome-2026-11/starts20.txt`).
-- **Een fd-ruimte voor de hele browser** (BUG-098): een derde zware site in
-  dezelfde sessie eindigt in "Too many open files".
-- **YouTube** rendert niet verder dan zijn laadskelet (V8 OOM in de renderer);
-  video en geluid op YouTube zijn dus niet gemeten.
+- **Een fd-ruimte voor de hele browser** (BUG-098): opgelost op 2026-11-13.
+- **YouTube**: de kijkpagina laadt (geen V8 OOM meer); video en geluid zijn niet
+  gemeten, YouTube vraagt het testnetwerk om in te loggen.
+- **Tweede ronde van de sitematrix**: na de pdf-viewer crasht een nieuwe renderer
+  en navigeren getypte URL's niet meer (BUG-134/135).
 - Een ingedrukte toets herhaalt niet; een popup wordt afgekapt op de rand van
   het browservenster; plakken uit een ANDERE X-client is leeg.
 - De start-URL van de boot-run staat in `kernel/src/main.rs` (chrome-boot-

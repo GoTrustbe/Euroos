@@ -1,0 +1,4 @@
+# repeats of two configurations (same image)
+rep-m1rel: desktop=1 watchdog-tripped=1 fault-lines=0
+rep-kernel-smp1: desktop=1 watchdog-tripped=0 fault-lines=0
+rep2-kernel-smp1: desktop=1 watchdog-tripped=0 fault-lines=0

@@ -1,0 +1,9 @@
+== base-soak.markers  vs  soak-boot.markers
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   fuzz: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 3
+   3g2-wire: OKx1 FAILx1
+   fdsem: OKx1
+   scon: OKx1

@@ -1,0 +1,33 @@
+ltstat samples: 1437, t = 2 .. 7509 s (125.1 min)
+heap_used first / at 10 min / last: 151 020 848 / 149 842 560 / 149 875 840
+heap slope after 10 min (least squares): +0.24 kB/min, range 1262 kB
+tasks: first 66, at 10 min 66, last 66, min 66, max 66 (after 10 min)
+files: first 1672, at 10 min 1672, last 1672, min 1672, max 1672 (after 10 min)
+kstacks: first 0, at 10 min 0, last 0, min 0, max 0 (after 10 min)
+procpool_free: first 887296, at 10 min 887296, last 887296, min 887296, max 887296 (after 10 min)
+frames_free: first 2963882, at 10 min 2981042, last 2981042, min 2964402, max 2981042 (after 10 min)
+bg_zombie: first 0, at 10 min 0, last 0, min 0, max 6 (after 10 min)
+bg_live: first 36, at 10 min 3, last 3, min 3, max 35 (after 10 min)
+commands: 3741
+by status: {'ok': 3741}
+churn proc commands: 479
+serial: loadtest-serial-20261113-081938.log 4410569 bytes
+  'GLIBC-DYNAMIC-OK': 24
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  [churn-proc] verdict lines: 2760, with FAILED: 0
+  [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+FAILED lines (all of the run):
+  1 x [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED
+  1 x [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; re
+  2 x [conn] TCP handshake FAILED to 172.66.147.243:80
+  1 x [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 44 ticks: "GNET: connect(172.66.147.243:80) failed" exit=
+  1 x [3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+[loadtest] host HTTP server served 431 request(s)

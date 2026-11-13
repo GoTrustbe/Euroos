@@ -1,0 +1,48 @@
+[matrix] image=/opt/euroos/chrome2-runs/q35-image.img legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,scan,printer,power,hwprobe work=/opt/euroos/chrome2-runs/tmp/ek-matrix-6w6gx8lo
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: scan
+  [scan] FAIL: marker missing: '[m72] EuroScan eSCL ✓'
+  [scan] FAIL: marker missing: 'EuroScan Virtual 3000'
+  [scan] FAIL: marker missing: 'NextDocument'
+  [scan] FAIL ✗
+[matrix] leg: printer
+  [printer] FAIL: marker missing: '[bb4] EuroPrint IPP-over-TCP'
+  [printer] FAIL: marker missing: 'Print-Job status=0x0000 (ok=true)'
+  [printer] FAIL: marker missing: 'IPP round-trip to 10.0.2.2:6631'
+  [printer] FAIL ✗
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] PASS ✓
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbaudio PASS
+  usbnet   PASS
+  scan     FAIL
+  printer  FAIL
+  power    PASS
+  hwprobe  PASS

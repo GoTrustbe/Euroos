@@ -626,9 +626,17 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   shell or file-system command delays them (1 h soak with 4 clients: 4 384 ok, 641 failed, during
   `churn fs`/`truncate`/`sha256sum`). → BUG-034, fixed by the network worker.
 
-### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
+### BUG-020 — `[fuzz]` fails under KVM: the fuzzer stops and run_glibc times it out ✅ FIXED
+- **Status:**   FIXED (`75f254f`, 2026-11-13) · **Severity:** MEDIUM (also on 813e627 → not a regression of this branch; the
   kernel keeps running)
+- **Cause:**    the fuzzer does not stop. With the syscall ring of its main thread dumped at the launcher's
+  deadline it was seen making calls while the deadline message was printed: about 6 300 of its 20 000 calls were
+  done when its 30 s were over. It spent them on one serial line per unknown syscall
+  (`[linux-abi] ENOSYS Linux syscall N`, about 16 000 of its calls); under KVM such a line costs milliseconds of
+  guest time (BUG-123), under TCG it does not.
+- **Fix:**      an unknown syscall is logged at its first call per number and run, and counted (`LINUX_ENOSYS`).
+  `[fuzz] … kernel-survived=true (exit 171) → OK` under KVM on every self-test boot since (R630, 4 GiB and 1 GiB;
+  the 100 short boots of `proof/chrome-2026-11b/`).
 - **Actual:**   `[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)`. The fuzzer prints "5000 syscalls
   so far", then makes no further syscall:
   `[glibc] TIMEOUT waiting for the process to exit | main t27 last=106(a1=0x7fffffff)->...ffda`
@@ -1790,8 +1798,22 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Open:**     a popup is clipped to the browser window.
 - **Regression:** the frame then also showed the windows of X clients that were gone: BUG-113, fixed.
 
-### BUG-098 — one fd space for the browser and all its children: "Too many open files" on the third site ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for a browsing session (the site matrix does not pass in one session)
+### BUG-098 — one fd space for the browser and all its children: "Too many open files" on the third site ✅ FIXED
+- **Status:**   FIXED (`6484b85` the tests, `6de8770` the fix; 2026-11-13) · **Severity:** HIGH for a browsing session
+  (the site matrix does not pass in one session)
+- **Fix:**      one descriptor table per process (`kernel/src/fdtab.rs`, `crates/eurofdspace`: `ProcTab`, `Refs`):
+  descriptor → object with close-on-exec per descriptor, a reference count per object. One gate in front of both
+  dispatchers answers close, dup, dup2, dup3, `F_DUPFD(_CLOEXEC)`, `F_GETFD/F_SETFD`, `close_range`; fork copies the
+  table (every object one reference more), exec closes the close-on-exec descriptors, the last close ends a pipe
+  (EOF, EPIPE, POLLHUP), a socket, an eventfd, an epoll instance; `SCM_RIGHTS` moves an object with a reference of
+  its own into the receiver's lowest free descriptor; `/proc/self/fd`; `RLIMIT_NOFILE` 4096/4096; lowest number
+  first for every kind of object. The overlays `FD_ALIAS`, `FORK_INHERITED`, `DEFERRED_CLOSE`, `CHILD_OPENED`,
+  `FORK_CHILD_CLOSED` are gone.
+- **Proof:**    `[fdsem]` (glibc with fork 49 checks, musl 25, background path 16; on Linux 6.x the same programs
+  pass 49 and 24): before the fix 12/47, exit 139, 3/16; after: PASS in every boot (KVM 4 GiB and 1 GiB, TCG 1 GiB
+  and 512 MiB, every TCG matrix boot that reached the desktop and the short boots of `proof/chrome-2026-11b/`). Chromium: 186 of 4096
+  file objects after euro-os.eu, 214 after Wikipedia, 220 in GitHub (before: 245 and 380 of 500, then EMFILE).
+- **Found with it:** BUG-120, BUG-121, BUG-122.
 - **Found:**    2026-11-12 · `chrome-smoke.py --only sites`, R630.
 - **Actual:**   a census of the descriptor table (a temporary addition to `cdiag`, not in the tree;
   `proof/chrome-2026-11/fd-usage-b22.txt`) counts 245 open files in the browser's fd space after euro-os.eu, 380 after
@@ -1904,6 +1926,146 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   only, virtio input, five times each: the base failed 2 of 5, `f98da76` 0 of 5; `f98da76` failed it once in the
   virtio monkey soak (`proof/validate-2026-11c/tour-virtio.txt`). Not seen with USB input.
 - **Next:**     where the desktop loop takes the Esc of a virtio keyboard while the tour is up.
+
+### BUG-120 — a foreground program after a glibc program got that program's brk region ✅ FIXED
+- **Status:**   FIXED (`75f254f`) · **Severity:** MEDIUM (a musl program started from the shell after the browser
+  died in its first larger allocation)
+- **Actual:**   `[isolation] foreground exec page fault at 0xe282000 -> clean exit (code 139)`, in opendir's calloc.
+- **Cause:**    `run_args` did not reset `BRK_CUR`/`BRK_END`: brk(0) answered an address in an arena that was gone.
+- **Fix:**      an empty brk region at every foreground start; musl then takes its memory from mmap.
+
+### BUG-121 — a foreground musl program that waits in poll() on a pipe faults at its next instruction ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (seen once, on the tree before BUG-098's fix)
+- **Actual:**   the musl half of `[fdsem]` ended after its sixth check with `[isolation] foreground exec page fault
+  at 0x208df0`; the program was in poll() with a 50 ms timeout on a pipe end that was not ready.
+- **Note:**     with the descriptor tables the same poll answers at once (POLLHUP), so the path is no longer taken by
+  the test. A foreground wait that times out has not been looked at.
+
+### BUG-122 — every Chromium child aborted: "Crashing due to FD ownership violation" ✅ FIXED
+- **Status:**   FIXED (`6de8770`) · **Severity:** HIGH (with per-process tables no child process ran)
+- **Cause:**    a child told `--enable-crash-reporter` takes descriptor 3 as its crash-handler socket and wraps it in a
+  ScopedFD whether the browser handed one over or not. Our browser runs without a handler and hands nothing over;
+  with one table for all processes no child ever got a number that low. Seen in the child's own descriptor events
+  (`[fdx]`): nothing at 3 after exec, then `new 3` from open, abort.
+- **Fix:**      the child's exec gives it descriptor 3 (`/dev/null`) when the switch is there and 3 is free. No crash
+  handler runs, as before.
+
+### BUG-123 — the serial console cost two exits to the host per byte ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH under a hypervisor with a talkative log (BUG-020, BUG-126)
+- **Fix:**      with a 16550A FIFO (found at init) the UART is written in loads of 16 bytes after one status read
+  (`rep outsb`).
+
+### BUG-124 — an NMI that landed in ring 3 livelocked the machine ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH for diagnosis (the probe made the hang it looked at)
+- **Actual:**   runs g3, g4: `[demand] the same page faults again and again: … 262144 times in a row, write=false
+  present=true`, every vruntime frozen.
+- **Cause:**    the NMI probe read the interrupted code bytes and stack directly. In ring 3 that is user memory: with
+  SMAP a page fault inside the NMI handler, which the demand-paging handler "handled" by mapping the same present
+  page again, for ever, with interrupts off.
+- **Fix:**      user code is read through the page walk, a user stack is not scanned; a present, non-write fault that
+  repeats 64 times is no longer handled again (the line now gives the error code, rip and page walk).
+
+### BUG-125 — `gui-smoke.py`: the serial reader copied the whole log for every chunk ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH for every long run (the harness made part of the stall it measured)
+- **Cause:**    `self.text += chunk` on one growing string; late in a session megabytes per 16 bytes. The reader fell
+  behind, the socket filled, the guest waited in its UART writes.
+- **Fix:**      chunks in a list with absolute positions; `since(pos)` joins only what lies after `pos`.
+
+### BUG-126 — the desktop loop stood for up to 18 s while GitHub loaded: per-event lines on the UART ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH (W22: the desktop stalled 12-17 s)
+- **Actual:**   run g8: slowest console answer 18 117 ms in GitHub; every NMI probe found task 0 preempted in
+  `serial::__print`; a GitHub load wrote ~1 MB of `[linux-abi]`, `[cst]`, `[cdp] <-`, `[scm]`, … lines.
+- **Fix:**      from the start of the desktop loop these per-event tags go to the kernel log only (`dmesg`); boot
+  option `serial.chatter=on` and the shell command `chatter on|off` bring them back.
+
+### BUG-127 — the desktop loop halted with other tasks ready, then waited a round of all of them ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH (30 ready threads: 300 ms per pass)
+- **Fix:**      the loop yields when others are ready; a timer tick that ends another task's turn gives the CPU to the
+  loop first when it asked for more (not when it halted idle).
+
+### BUG-128 — fork and the child's exec ran 90-340 ms with interrupts off ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`, smaller arena in `3c1892c`) · **Severity:** HIGH (no timer tick, no desktop)
+- **Cause:**    the 256 MiB arena copy, the copy of every demand page, and the 256 MiB wipe at exec were each one piece
+  (`[tick-late] +9..+12 ticks`).
+- **Fix:**      2 MiB pieces (demand pages: per four page tables) with a window for the timer between pieces; `[fork]`
+  and `[execve]` say how long each part took. Remaining late ticks during a site matrix: at most +5 (50 ms), in
+  `do_child_execve`.
+
+### BUG-129 — the desktop loop waited for the UART for its own lines ✅ FIXED
+- **Status:**   FIXED (`a7d6f62`) · **Severity:** HIGH (one pass of 570 ms in the DevTools pump, run g12)
+- **Fix:**      the loop's lines go into a 256 KiB queue; it sends up to 256 bytes at the end of a pass, a kernel task
+  sends the rest with interrupts on between loads. Panics, faults, the NMI probe and `write_raw` send the queue first.
+  (A variant that ran the sender right after every pass made things worse, g15/g16, and was not kept.)
+
+### BUG-130 — TLS connections whose first two segments were never acknowledged ✅ FIXED
+- **Status:**   FIXED (`2374531`) · **Severity:** HIGH (sites that do not load: `net::ERR_CONNECTION_CLOSED`)
+- **Actual:**   `[conn] … closed …: rx 0 B, tx 1772 B, open=false, unacked=2`, 4 to 23 times per run (s3 onwards).
+- **Cause:**    virtio-net sent every frame from one buffer through one descriptor and went on after a bounded wait
+  whether the device had taken it or not. QEMU transmits from a bottom half: the next send wrote over the frame.
+  A ClientHello in two segments reached the network as the second one twice; every retransmission round did the same.
+- **Fix:**      32 transmit buffers, one per descriptor, reused only after the device gave them back.
+- **Proof:**    0 of 83 closed connections with unacknowledged data (a4, a8, a16), all six sites at 4, 8, 16 GiB.
+
+### BUG-131 — the demand region never gave addresses back; anonymous mappings under 16 MiB came from the arena ✅ FIXED
+- **Status:**   FIXED (`3c1892c`) · **Severity:** HIGH (YouTube: `V8 process OOM (Zone)`)
+- **Actual:**   `[mm-fail] … mmap(len 512 KiB, PROT_RW, anon) = ENOMEM | arena mmap window 468 KiB left of 253 MiB |
+  demand addresses 403 of 480 GiB handed out`.
+- **Fix:**      anonymous mappings from 64 KiB go to the demand region; munmap gives addresses back to a per-process list
+  (`euromm::FreeRanges`, host-tested against a page-bitmap model), an anonymous mmap takes them from there first.
+- **Proof:**    no `V8 OOM` in any run since; y4: 128 of 480 GiB handed out, 16 GiB given back, 11.6 GiB reused.
+
+### BUG-132 — RAM files without a name were never freed while a mapping had ever existed ✅ FIXED
+- **Status:**   FIXED (`3c1892c`) · **Severity:** HIGH (kernel heap panic in GitHub: "memory allocation of 1105728
+  bytes failed")
+- **Actual:**   `ramfiles`: 633 MiB in 542 files without a name (Chromium's shared memory, 2 MiB each).
+- **Cause:**    a shared mapping counted as a reference for ever (the file's own frame list was taken for one); only
+  the calling process's mappings were looked at; nothing ran at the last close or unmap.
+- **Fix:**      a sweep (desktop loop, interrupts off) frees bytes and shared frames of every nameless file that no
+  descriptor in any space and no mapping in any process names; due after a close of such a file, an munmap of a
+  shared window, a process exit. A RAM file may not grow into the last 32 MiB of kernel memory (ENOSPC).
+- **Proof:**    RAM files after GitHub 95-122 MiB (was 633-748); no heap panic since.
+- **Open:**     the bytes of RAM files still live in the kernel heap (≤ 512 MiB at any guest size); a file that is
+  only mapped is held twice (heap bytes and frames). Frames per file with a guest-RAM-dependent limit is the next step.
+
+### BUG-133 — every Chromium process carried a 256 MiB arena ✅ FIXED
+- **Status:**   FIXED (`3c1892c`) · **Severity:** HIGH on 4 GiB (`[fork] arena alloc FAILED (256 MiB, pool has 131 MiB)`)
+- **Fix:**      128 MiB (the browser uses 80-86 MiB of it, `[fork]` line); fork copy 49-116 ms, exec wipe 50-101 ms.
+
+### BUG-134 — after the PDF viewer a new renderer aborts at its start ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for criterion 1 (the second round of the site matrix fails)
+- **Actual:**   `[abort] tN "CrRendererMain" tgkill(tgid=1, tid=N, sig=6)`, a 20-frame stack without symbols (the
+  same top seven frames every time), crash keys without a reason, child exit 134, "Aw, Snap! Error code 34304".
+  Runs a8, d1, d2 (round 2, the navigation away from the PDF), the browser soak (7 times). The renderer dies before
+  its V8 reservations (no `[mm-fail]` line of it).
+- **Ruled out:** the address reuse of BUG-131 alone (image with reuse disabled, run x1: the same abort). e1/e2 (PDF,
+  euro-os, Wikipedia, two rounds) pass without it: it needs the heavier sites before.
+- **Next:**     symbolise the stack against the chrome pack; RAM-file sweep disabled over a full matrix (x2 did not get
+  that far: BUG-135).
+
+### BUG-135 — typed URLs do not navigate any more (after BUG-134, once after GitHub) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for criteria 1 and 2
+- **Actual:**   Ctrl+L, a URL, Enter: the tab stays on its page. After BUG-134 in a8, d1, d2 and the soak; once without
+  any abort, after GitHub (x2, RAM-file sweep disabled). Once two characters were lost (a8: a Google search for
+  `tps://www.openstreetmap.org/`). `cdiag` at the moment: the browser's main thread idle in poll, the X server's queues
+  empty, focus on the browser window: the keys were read and had no effect.
+- **Next:**     where the browser sends the key events (to the dead renderer's widget?); X event timestamps.
+
+### BUG-136 — a TCG boot (smp 4, 512 MiB) wedged on the scheduler lock in a page fault ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (1 of 10 matrix boots; a repeat reached the desktop)
+- **Actual:**   `user-smp4-iommu`: silent after `[glibc] spawned scheduled task 20` (gsdl with the 64 MiB fallback arena,
+  whose mmap window starts past its end). NMI: `Mutex<Scheduler>::lock`, IF=0, CR2 0x1000; the probe then stopped in
+  its own `sched::current()`.
+- **Next:**     the NMI probe and the repeated-fault line must use `current_lockfree`; find who holds SCHED when a
+  fault at 0x1000 is taken (the `idle_tick` read of `*(rip-1)` under SCHED is one candidate).
+
+### BUG-137 — the demand pool drains during a long browser session ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for criterion 4 (the browser is killed after ~74 min)
+- **Actual:**   two-hour soak (`proof/chrome-2026-11b/`, 8 GiB): demand pool 2 834 MiB free at the start, 1 059 after
+  round 1, 415 after round 2, 62 after round 3, 0 in round 4; then `[isolation] ring-3 page fault … (task 1)
+  TERMINATED`: the browser's main thread faulted on a page the pool could not give. The guest kept running.
+- **Candidates:** the disk page cache (`DISK_PAGE_CACHE`, never evicted); shared frames of named RAM files. Not
+  attributed.
+- **Next:**     a census of demand frames by owner (process pages, shared frames, page cache) after every round.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

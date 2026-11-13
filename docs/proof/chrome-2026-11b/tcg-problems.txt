@@ -1,0 +1,2 @@
+user-smp4-iommu: no desktop (silent 900s) 09:30:28
+user-smp4-iommu: NMI sent

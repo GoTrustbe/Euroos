@@ -1,0 +1,73 @@
+== 20 starts (reg/starts, fpub)
+[chrome-smoke] start 1/20: PASS
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: PASS
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: PASS
+[chrome-smoke] start 11/20: PASS
+[chrome-smoke] start 12/20: PASS
+[chrome-smoke] start 13/20: PASS
+[chrome-smoke] start 14/20: PASS
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: PASS
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: PASS
+[chrome-smoke] start 20/20: PASS
+[chrome-smoke] starts: 20/20 PASS
+
+== first batch before the harness fix (reg/starts-run1)
+[chrome-smoke] start 1/20: FAIL (1 step(s))
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: FAIL (1 step(s))
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: FAIL (2 step(s))
+[chrome-smoke] start 11/20: FAIL (1 step(s))
+[chrome-smoke] start 12/20: FAIL (1 step(s))
+[chrome-smoke] start 13/20: FAIL (1 step(s))
+[chrome-smoke] start 14/20: FAIL (1 step(s))
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: FAIL (1 step(s))
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: PASS
+[chrome-smoke] start 20/20: FAIL (1 step(s))
+[chrome-smoke] starts: 11/20 PASS
+[gui-smoke] FAIL page input right after start: typed text arrives: field A = 'first-ke' | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x40000
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-01
+[chrome-smoke] start 1/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.7 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-07
+[chrome-smoke] start 7/20: FAIL (1 step(s))
+[gui-smoke] FAIL page input right after start: typed text arrives: field A = 'first-ke' | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x40000
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.6 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (2 step(s)) - 3/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-10
+[chrome-smoke] start 10/20: FAIL (2 step(s))
+[gui-smoke] FAIL page input right after start: typed text arrives: field A = 'first-ke' | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x40000
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-11
+[chrome-smoke] start 11/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.9 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-12
+[chrome-smoke] start 12/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.7 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-13
+[chrome-smoke] start 13/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.8 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-14
+[chrome-smoke] start 14/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.8 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-16
+[chrome-smoke] start 16/20: FAIL (1 step(s))
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: https://euro-os.eu/en/ after 1.8 s, 273 colours | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focu
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/chrome2-runs/reg/starts/start-20
+[chrome-smoke] start 20/20: FAIL (1 step(s))

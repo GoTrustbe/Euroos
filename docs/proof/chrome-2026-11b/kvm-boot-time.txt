@@ -1,0 +1,5 @@
+final-1: kernel-entry 1.93s desktop 2.75s
+final-2: kernel-entry 1.89s desktop 2.67s
+final-3: kernel-entry 1.65s desktop 2.47s
+final-4: kernel-entry 1.72s desktop 2.53s
+final-5: kernel-entry 1.87s desktop 2.68s
