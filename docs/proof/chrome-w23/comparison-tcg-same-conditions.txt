@@ -1,0 +1,73 @@
+# markers-compare.py, same conditions (R630, TCG, restrict=on): fix0b (bb2e7d8, the tree before with the tests) against w23g (7b0629c)
+
+== user-smp4-iommu
+== tcg/mx0/user-smp4-iommu.log  vs  tcg/mx1/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== user-smp4-noiommu
+== tcg/mx0/user-smp4-noiommu.log  vs  tcg/mx1/user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== kernel-smp4
+== tcg/mx0/kernel-smp4.log  vs  tcg/mx1/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== storage-smp4-iommu-1g
+== tcg/mx0/storage-smp4-iommu-1g.log  vs  tcg/mx1/storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== combined-smp4-iommu-1g
+== tcg/mx0/combined-smp4-iommu-1g.log  vs  tcg/mx1/combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== user-smp1-iommu
+== tcg/mx0/user-smp1-iommu.log  vs  tcg/mx1/user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   3g2-wire: base OKx1 FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+
+== user-smp1-noiommu
+== tcg/mx0/user-smp1-noiommu.log  vs  tcg/mx1/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   3g2-wire: base OKx1 FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+
+== kernel-smp1
+== tcg/mx0/kernel-smp1.log  vs  tcg/mx1/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== storage-smp1-iommu-1g
+== tcg/mx0/storage-smp1-iommu-1g.log  vs  tcg/mx1/storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== combined-smp1-iommu-1g
+== tcg/mx0/combined-smp1-iommu-1g.log  vs  tcg/mx1/combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

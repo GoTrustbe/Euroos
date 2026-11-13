@@ -1,0 +1,119 @@
+# TCG boots of self-test images on the R630 (qemu64 +smep +smap, restrict=on, each pinned): watchdog trips and the longest gap between two passes of the desktop loop
+# before = images with the hlt-byte idle test: fix0b (40f853a + tests), w23a/c/d/f (BUG-140/142 fixes + stopwatch steps and samples); after = w23g (7b0629c)
+k1a/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2345ms
+k1a/kernel-smp1-2 desktop=1 watchdog-trips=1 longest-gap=31581ms
+k1a/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2364ms
+k1a/kernel-smp1-4 desktop=1 watchdog-trips=0 longest-gap=2164ms
+k1a/kernel-smp1-5 desktop=1 watchdog-trips=0 longest-gap=2345ms
+k1b/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2355ms
+k1b/kernel-smp1-2 desktop=1 watchdog-trips=1 longest-gap=21835ms
+k1b/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2173ms
+k1b/kernel-smp1-4 desktop=1 watchdog-trips=0 longest-gap=2085ms
+k1b/kernel-smp1-5 desktop=1 watchdog-trips=1 longest-gap=40151ms
+k1c/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2345ms
+k1c/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2165ms
+k1c/kernel-smp1-3 desktop=1 watchdog-trips=1 longest-gap=34566ms
+k1d/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2365ms
+k1d/kernel-smp1-2 desktop=1 watchdog-trips=1 longest-gap=35199ms
+k1d/kernel-smp1-3 desktop=1 watchdog-trips=1 longest-gap=27750ms
+k1e/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2185ms
+k1e/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=10707ms
+k1e/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2363ms
+k1e/kernel-smp1-4 desktop=0 watchdog-trips=0 longest-gap=?ms
+k1f/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=1946ms
+k1f/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=6701ms
+k1f/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=1965ms
+k1f/kernel-smp1-4 desktop=1 watchdog-trips=0 longest-gap=?ms
+k2a/kernel-smp1-1 desktop=1 watchdog-trips=1 longest-gap=30715ms
+k2a/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2265ms
+k2a/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2005ms
+k2b/kernel-smp1-1 desktop=1 watchdog-trips=1 longest-gap=43619ms
+k2b/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2070ms
+k2b/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2124ms
+k2c/kernel-smp1-1 desktop=1 watchdog-trips=1 longest-gap=36366ms
+k2c/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=1865ms
+k2c/kernel-smp1-3 desktop=1 watchdog-trips=1 longest-gap=35028ms
+k2c/kernel-smp1-4 desktop=0 watchdog-trips=0 longest-gap=?ms
+k2d/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=1925ms
+k2d/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=1845ms
+k2d/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2125ms
+k3a/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2544ms
+k3a/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2451ms
+k3a/kernel-smp1-3 desktop=1 watchdog-trips=1 longest-gap=37827ms
+k3a/kernel-smp1-4 desktop=0 watchdog-trips=0 longest-gap=?ms
+k3b/kernel-smp1-1 desktop=1 watchdog-trips=1 longest-gap=20034ms
+k3b/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2432ms
+k3b/kernel-smp1-3 desktop=1 watchdog-trips=1 longest-gap=17883ms
+k3c/kernel-smp1-1 desktop=1 watchdog-trips=1 longest-gap=28052ms
+k3c/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2465ms
+k3c/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2410ms
+k3c/kernel-smp1-4 desktop=0 watchdog-trips=0 longest-gap=?ms
+k3d/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2265ms
+k3d/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=8112ms
+k3d/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2285ms
+u4a/user-smp4-iommu-1 desktop=1 watchdog-trips=1 longest-gap=27179ms
+u4a/user-smp4-iommu-2 desktop=1 watchdog-trips=0 longest-gap=2091ms
+u4a/user-smp4-iommu-3 desktop=1 watchdog-trips=0 longest-gap=2180ms
+u4a/user-smp4-iommu-4 desktop=1 watchdog-trips=0 longest-gap=2230ms
+u4a/user-smp4-iommu-5 desktop=1 watchdog-trips=0 longest-gap=2391ms
+u4a/user-smp4-iommu-6 desktop=1 watchdog-trips=1 longest-gap=41411ms
+u4b/user-smp4-iommu-1 desktop=1 watchdog-trips=0 longest-gap=2350ms
+u4b/user-smp4-iommu-2 desktop=1 watchdog-trips=1 longest-gap=32109ms
+u4b/user-smp4-iommu-3 desktop=1 watchdog-trips=0 longest-gap=2178ms
+u4b/user-smp4-iommu-4 desktop=1 watchdog-trips=0 longest-gap=2231ms
+u4b/user-smp4-iommu-5 desktop=1 watchdog-trips=0 longest-gap=2099ms
+u4b/user-smp4-iommu-6 desktop=1 watchdog-trips=1 longest-gap=36062ms
+n4b/user-smp4-noiommu-1 desktop=1 watchdog-trips=0 longest-gap=2379ms
+n4b/user-smp4-noiommu-2 desktop=1 watchdog-trips=0 longest-gap=3310ms
+n4b/user-smp4-noiommu-3 desktop=1 watchdog-trips=0 longest-gap=2240ms
+n4b/user-smp4-noiommu-4 desktop=1 watchdog-trips=1 longest-gap=34223ms
+n4b/user-smp4-noiommu-5 desktop=1 watchdog-trips=0 longest-gap=2311ms
+n4b/user-smp4-noiommu-6 desktop=1 watchdog-trips=0 longest-gap=2170ms
+u4c/user-smp4-iommu-1 desktop=1 watchdog-trips=0 longest-gap=2171ms
+u4c/user-smp4-iommu-2 desktop=1 watchdog-trips=0 longest-gap=2250ms
+u4c/user-smp4-iommu-3 desktop=1 watchdog-trips=0 longest-gap=2191ms
+u4c/user-smp4-iommu-4 desktop=1 watchdog-trips=1 longest-gap=33262ms
+u4c/user-smp4-iommu-5 desktop=1 watchdog-trips=0 longest-gap=2230ms
+u4c/user-smp4-iommu-6 desktop=1 watchdog-trips=0 longest-gap=2191ms
+w1/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2144ms
+w1/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2045ms
+w1/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2545ms
+w2/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=3427ms
+w2/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=3010ms
+w2/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2085ms
+w3/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=2288ms
+w3/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=3961ms
+w3/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=3270ms
+w4/kernel-smp1-1 desktop=1 watchdog-trips=0 longest-gap=3283ms
+w4/kernel-smp1-2 desktop=1 watchdog-trips=0 longest-gap=2523ms
+w4/kernel-smp1-3 desktop=1 watchdog-trips=0 longest-gap=2530ms
+
+# The long passes of the sampling images (w23d k2*, w23f k3*): where their ticks went
+-: [desk] #3 the desktop loop was away 37827 ms: its pass took 37823 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 37823, hosted window and console 0), then 3 ms without the CPU (5 other tasks were ready); longest step: repaint: status panel 36143 ms; ticks of the loop at rip 0x1045827a x1, 0x10456610 x2, 0x10458323 x1, 0x1045802b x6, 0x1015cf31 x1, 0x1015cce7 x1; ticks of other tasks: t9 x709, t10 x709, t11 x708, t7 x708, t8 x708, t4 x73; the loop meanwhile: Ready x3628, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1015c814 0x1630c5f0 0x10181f01 0x1046913f 0x102b9c75 0x10192db2 0x1035f3e2 0x1035f3e2 0x10500fa1 0x10351065
+-: [desk] #2 the desktop loop was away 20034 ms: its pass took 20026 ms (network and DevTools 2, devices and windows 0, menus 0, keys and drawing 20024, hosted window and console 0), then 7 ms without the CPU (5 other tasks were ready); longest step: repaint: status panel 16836 ms; ticks of the loop at rip 0x10192701 x1, 0x104579ce x3, 0x10457015 x8, 0x10456f76 x6, 0x1045709e x2, 0x10458035 x3; ticks of other tasks: t10 x343, t11 x343, t7 x343, t8 x343, t9 x342, t4 x38; the loop meanwhile: Ready x1759, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1035f3e2 0x1035f3e2 0x141ac6e8 0x141ac6e8 0x141bab19 0x1045f470 0x10351065 0x104f811e 0x10502395 0x141a8bc8
+-: [desk] #3 the desktop loop was away 17883 ms: its pass took 17879 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 17879, hosted window and console 0), then 4 ms without the CPU (5 other tasks were ready); longest step: repaint: sidebar 16774 ms; ticks of the loop at rip 0x10457015 x5, 0x104570c0 x2, 0x1015cd21 x1, 0x10458035 x1, 0x10456610 x2, 0x101926c3 x2; ticks of other tasks: t9 x312, t10 x312, t11 x312, t7 x311, t8 x311, t4 x34; the loop meanwhile: Ready x1599, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1015cd40 0x101921a5 0x1035f3e2 0x1035f3e2 0x141ac6e8 0x141ac6e8 0x141bab19 0x141a8bc8 0x1035e7ca 0x1035e7ca
+-: [desk] #1 the desktop loop was away 28052 ms: its pass took 28047 ms (network and DevTools 2, devices and windows 0, menus 0, keys and drawing 28043, hosted window and console 0), then 5 ms without the CPU (5 other tasks were ready); longest step: repaint: windows 26623 ms; ticks of the loop at rip 0x1045825a x1, 0x1045802b x1, 0x1015c7be x1, 0x1015c7f6 x2, 0x10456f76 x8, 0x1015c7b2 x1; ticks of other tasks: t10 x517, t11 x517, t7 x517, t8 x517, t9 x517, t4 x54; the loop meanwhile: Ready x2649, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1015c814 0x1630c5f0 0x10181f01 0x1046913f 0x102b9c75 0x10192db2 0x1035f3e2 0x1035f3e2 0x10500fa1 0x10351065
+-: [desk] #2 the desktop loop was away 7971 ms: its pass took 7963 ms (network and DevTools 1, devices and windows 0, menus 0, keys and drawing 7962, hosted window and console 0), then 8 ms without the CPU (5 other tasks were ready); longest step: repaint: status panel 6342 ms; ticks of the loop at rip 0x1015c76f x1, 0x1045740c x1, 0x10456fb4 x1, 0x1015d749 x2, 0x10458114 x1, 0x1015cd7a x1; ticks of other tasks: t9 x126, t10 x126, t11 x126, t7 x125, t8 x125, t4 x14; the loop meanwhile: Ready x646, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1630c5f0 0x10181f01 0x1046913f 0x102b9c75 0x10192db2 0x1035f3e2 0x1035f3e2 0x10500fa1 0x10351065 0x104f811e
+-: [desk] #37 the desktop loop was away 8112 ms: its pass took 8111 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 8111, hosted window and console 0), then 0 ms without the CPU (5 other tasks were ready); longest step: drawing 8111 ms; ticks of the loop at rip 0x10457015 x1, 0x1045795c x1, 0x10457175 x1; ticks of other tasks: t11 x139, t7 x139, t8 x139, t9 x139, t10 x138, t4 x14; the loop meanwhile: Ready x708, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x1028b132; loop stack: 0x1015cd40 0x1035d032 0x10501112 0x10501126 0x10182b7b 0x1035f3e2 0x101cbfaa 0x141ac6e8 0x141bab19 0x141a8bc8
+
+# TCG matrix, before (mx0 = fix0b) and after (mx1 = w23g = 7b0629c)
+mx0/combined-smp1-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2093ms
+mx0/combined-smp4-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2096ms
+mx0/kernel-smp1 desktop=1 watchdog-trips=0 longest-gap=2190ms
+mx0/kernel-smp4 desktop=1 watchdog-trips=0 longest-gap=3730ms
+mx0/storage-smp1-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2215ms
+mx0/storage-smp4-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2250ms
+mx0/user-smp1-iommu desktop=1 watchdog-trips=1 longest-gap=18371ms
+mx0/user-smp1-noiommu desktop=1 watchdog-trips=1 longest-gap=33474ms
+mx0/user-smp4-iommu desktop=1 watchdog-trips=0 longest-gap=2419ms
+mx0/user-smp4-noiommu desktop=1 watchdog-trips=0 longest-gap=2459ms
+mx1/combined-smp1-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2115ms
+mx1/combined-smp4-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2451ms
+mx1/kernel-smp1 desktop=1 watchdog-trips=0 longest-gap=2105ms
+mx1/kernel-smp4 desktop=1 watchdog-trips=0 longest-gap=2101ms
+mx1/storage-smp1-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2094ms
+mx1/storage-smp4-iommu-1g desktop=1 watchdog-trips=0 longest-gap=2151ms
+mx1/user-smp1-iommu desktop=1 watchdog-trips=0 longest-gap=2295ms
+mx1/user-smp1-noiommu desktop=1 watchdog-trips=0 longest-gap=2314ms
+mx1/user-smp4-iommu desktop=1 watchdog-trips=0 longest-gap=2260ms
+mx1/user-smp4-noiommu desktop=1 watchdog-trips=0 longest-gap=2351ms

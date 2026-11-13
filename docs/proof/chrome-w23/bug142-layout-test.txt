@@ -1,0 +1,18 @@
+# cargo test -p euromm arena: the host test of BUG-142 on the layout before (bb2e7d8) and after (7b0629c)
+== before
+test arena::tests::an_arena_without_room_is_refused ... FAILED
+test arena::tests::every_arena_size_the_launchers_take ... FAILED
+test arena::tests::large_arenas_keep_their_layout ... ok
+thread 'arena::tests::an_arena_without_room_is_refused' (2058738) panicked at crates/euromm/src/arena.rs:97:9:
+thread 'arena::tests::every_arena_size_the_launchers_take' (2058739) panicked at crates/euromm/src/arena.rs:75:13:
+64 MiB Slides { brk: 0, mmap: 0, stack: 0 }: mmap window 0xa200000..0xa000000 under 8 MiB
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+== after
+
+running 3 tests
+test arena::tests::every_arena_size_the_launchers_take ... ok
+test arena::tests::an_arena_without_room_is_refused ... ok
+test arena::tests::large_arenas_keep_their_layout ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+
