@@ -518,6 +518,26 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             for l in out.iter() {
                 crate::serial_println!("[ramfiles] {}", l.trim_start());
             }
+            // The census with it: a harness that asks for `ramfiles` after a
+            // site gets the memory by owner at that moment too.
+            let lines = crate::ring3::mem_census_lines();
+            crate::serial_println!("[mem] {}", lines[0]);
+            for l in lines.iter().skip(1) {
+                crate::serial_println!("[memstat] {l}");
+            }
+            out
+        }
+        // `memstat`: who holds the memory. The demand pool by owner (page
+        // cache, shared RAM files, per process: anonymous pages, private file
+        // pages, page tables), the kernel heap and the RAM-file bytes in it.
+        "memstat" => {
+            let lines = crate::ring3::mem_census_lines();
+            crate::serial_println!("[mem] {}", lines[0]);
+            for l in lines.iter().skip(1) {
+                crate::serial_println!("[memstat] {l}");
+            }
+            let mut out = vec![format!("mem: {}", lines[0])];
+            out.extend(lines.iter().skip(1).map(|l| format!("  {l}")));
             out
         }
         "cdiag" => {

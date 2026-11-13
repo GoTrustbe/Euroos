@@ -29,6 +29,13 @@ impl FreeRanges {
         &self.r
     }
 
+    /// Is `addr` inside one of the ranges? (The list doubles as an interval
+    /// set for the memory census: binary search, the ranges are disjoint.)
+    pub fn contains(&self, addr: u64) -> bool {
+        let i = self.r.partition_point(|&(_, e)| e <= addr);
+        i < self.r.len() && self.r[i].0 <= addr
+    }
+
     /// Bytes in all ranges.
     pub fn total(&self) -> u64 {
         self.r.iter().map(|&(s, e)| e - s).sum()
@@ -122,6 +129,20 @@ mod tests {
         f.insert(0x3000, 0x5000); // bridges
         assert_eq!(f.ranges(), &[(0x1000, 0x7000)]);
         assert_eq!(f.total(), 0x6000);
+    }
+
+    #[test]
+    fn contains_is_the_page_bitmap() {
+        let mut f = FreeRanges::new();
+        assert!(!f.contains(0));
+        f.insert(0x1000, 0x3000);
+        f.insert(0x8000, 0x9000);
+        f.insert(0x2000, 0x4000); // overlapping input, as file mappings do
+        for a in (0..0xb000u64).step_by(0x800) {
+            let want = (0x1000..0x4000).contains(&a) || (0x8000..0x9000).contains(&a);
+            assert_eq!(f.contains(a), want, "{a:#x}");
+        }
+        assert!(f.contains(0x3fff) && !f.contains(0x4000) && !f.contains(0xfff));
     }
 
     #[test]

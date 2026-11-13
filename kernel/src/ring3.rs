@@ -1773,6 +1773,13 @@ fn cdp_pump_inner() {
                     line.push_str(&alloc::format!(" t{t} {:?} {d}", if t == 0 { String::from("desktop/idle") } else { thread_name(t) }));
                 }
                 crate::serial_println!("{line}");
+                {
+                    let lines = mem_census_lines();
+                    crate::serial_println!("[mem] {}", lines[0]);
+                    for l in lines.iter().skip(1) {
+                        crate::serial_println!("[memstat] {l}");
+                    }
+                }
                 // The profiled task of the interval that just ended: where its samples
                 // landed (code pages, named by what backs them: the exe or a library
                 // with the offset, or anon = JIT), its last syscall and how many it
@@ -5643,6 +5650,23 @@ fn free_thread_kstack_slot(slot: usize) {
 }
 
 /// Return the kernel-stack slot owned by `task` to the pool (idempotent).
+/// Thread kernel stacks in use, and how many there are.
+pub fn thread_kstacks() -> (usize, usize) {
+    (THREAD_KSTACK_USED.iter().filter(|u| u.load(Ordering::Relaxed)).count(), MAX_THREADS)
+}
+
+/// A thread or a process could not be made: say why, the first times and then
+/// every 64th (a browser retries, and each silent refusal looked like a hang).
+fn spawn_refused(what: &str, why: &str) {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+    if n <= 16 || n % 64 == 0 {
+        let (ku, kt) = thread_kstacks();
+        crate::serial_println!("[spawn-refused] #{n} {what}: {why} (thread kernel stacks {ku}/{kt}, tasks {}/{}) task {} {:?}",
+            crate::sched::live_tasks(), crate::sched::MAX_TASKS, crate::sched::current(), thread_name(crate::sched::current()));
+    }
+}
+
 fn free_thread_kstack(task: usize) {
     let mut owners = THREAD_KSTACK_OWNER.lock();
     if let Some(pos) = owners.iter().position(|&(t, _)| t == task) {
@@ -6152,7 +6176,10 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             let (slot, kstack_top) = match alloc_thread_kstack() {
                 Some(s) => s,
-                None => return (-11i64) as u64, // -EAGAIN: thread-kstack pool exhausted
+                None => {
+                    spawn_refused("clone (thread)", "no thread kernel stack left");
+                    return (-11i64) as u64; // -EAGAIN: thread-kstack pool exhausted
+                }
             };
             let user_rip = unsafe { USER_RIP };
             let sel = crate::gdt::selectors();
@@ -10780,7 +10807,10 @@ fn do_glibc_fork() -> u64 {
     // frames via the arena copy).
     let (slot, kstack_top) = match alloc_thread_kstack() {
         Some(s) => s,
-        None => return (-11i64) as u64, // -EAGAIN
+        None => {
+            spawn_refused("fork", "no thread kernel stack left");
+            return (-11i64) as u64; // -EAGAIN
+        }
     };
     let (urip, ursp, sregs) = unsafe { (USER_RIP, USER_RSP, SAVED_REGS) };
     let fs = unsafe { Msr::new(0xC000_0100).read() };
@@ -10791,6 +10821,7 @@ fn do_glibc_fork() -> u64 {
     set_task_caps(child, effective_caps()); // fork child: inherits the parent's rights
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
+        spawn_refused("fork", "the task table is full");
         return (-11i64) as u64;
     }
     register_thread_kstack(child, slot);
@@ -14559,6 +14590,242 @@ fn ram_files_census_inner() -> alloc::vec::Vec<String> {
     out
 }
 
+// -- Memory census (BUG-137, BUG-150) -----------------------------------------
+// Who holds the frames of the demand pool: the page cache of the packs, the
+// frames of shared RAM files, and per process its private pages (anonymous or
+// a private copy of a file page) and page tables. What is left over after
+// that sum is a leak in the ownership model and is printed as such.
+
+/// What one process holds, in 4 KiB pages unless said otherwise.
+#[derive(Default, Clone)]
+pub struct ProcMem {
+    pub pid: u64,
+    pub task: usize,
+    pub name: String,
+    /// Private anonymous pages (the process owns the frame).
+    pub anon: usize,
+    /// ... of which inside a PROT_NONE range: the program cannot reach them.
+    pub anon_noaccess: usize,
+    /// One anonymous page in 16 is read: how many were, how many held only zeros.
+    pub sampled: usize,
+    pub sampled_zero: usize,
+    /// Private pages inside a file mapping (a written copy, or an unaligned page).
+    pub file_private: usize,
+    /// Mappings of frames others own: page cache (read-only), shared RAM files.
+    pub maps_cache: usize,
+    pub maps_shared: usize,
+    pub swapped: usize,
+    /// Page-table frames of the demand slot.
+    pub tables: usize,
+    /// The identity arena (process pool, not the demand pool).
+    pub arena: usize,
+    /// Addresses of the demand region: handed out and not given back, bytes.
+    pub reserved: u64,
+    /// ... of which PROT_NONE (V8 cages, PartitionAlloc pools, guards), bytes.
+    pub noaccess: u64,
+}
+
+#[derive(Default, Clone)]
+pub struct MemTotals {
+    pub tick: u64,
+    pub pool_total: usize,
+    pub pool_free: usize,
+    pub pcache: usize,
+    pub shm_frames: usize,
+    pub shm_named_frames: usize,
+    pub shm_files: usize,
+    pub heap_used: usize,
+    pub heap_free: usize,
+    pub big_used_mib: usize,
+    pub big_free_mib: usize,
+    pub ramfile_bytes: usize,
+    pub ramfiles: usize,
+    pub procpool_total: usize,
+    pub procpool_free: usize,
+    pub tasks: usize,
+    pub kstacks: usize,
+}
+
+/// The counters that cost nothing to read.
+pub fn mem_totals() -> MemTotals {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut t = MemTotals { tick: crate::interrupts::ticks(), ..Default::default() };
+    t.pool_total = crate::procpool::demand_total_frames();
+    t.pool_free = crate::procpool::demand_free_frames();
+    t.pcache = DISK_PAGE_CACHE.lock().len();
+    let per_file: alloc::vec::Vec<(usize, usize)> = SHARED_FRAMES.lock().iter()
+        .map(|(fi, v)| (*fi, v.iter().filter(|&&p| p != 0).count())).collect();
+    {
+        let files = FILES.lock();
+        for &(fi, n) in per_file.iter() {
+            t.shm_frames += n;
+            t.shm_files += 1;
+            if files.get(fi).map(|f| !f.0.is_empty()).unwrap_or(false) {
+                t.shm_named_frames += n;
+            }
+        }
+        for (_, d) in files.iter() {
+            if matches!(d, alloc::borrow::Cow::Owned(_)) {
+                t.ramfile_bytes += d.len();
+                t.ramfiles += 1;
+            }
+        }
+    }
+    let (hu, hf) = crate::allocator::stats();
+    let (bu, bf, _) = crate::allocator::big_stats();
+    t.heap_used = hu;
+    t.heap_free = hf;
+    t.big_used_mib = bu;
+    t.big_free_mib = bf;
+    t.procpool_total = crate::procpool::total_frames();
+    t.procpool_free = crate::procpool::free_frames();
+    t.tasks = crate::sched::live_tasks();
+    t.kstacks = thread_kstacks().0;
+    t
+}
+
+/// The demand state of the process whose main task is `owner` (0: the launched
+/// process), as interval sets: (file mappings, shared windows, PROT_NONE,
+/// addresses handed out and not given back).
+fn proc_mem_ranges(owner: usize) -> Option<(euromm::FreeRanges, euromm::FreeRanges, euromm::FreeRanges, u64)> {
+    let loaded = GLOBALS_OWNER.load(Ordering::Relaxed);
+    let (mut file, mut shared, mut none) = (euromm::FreeRanges::new(), euromm::FreeRanges::new(), euromm::FreeRanges::new());
+    let floor = DEMAND_FLOOR.load(Ordering::Relaxed);
+    let reserved;
+    if owner == loaded {
+        for &(b, l, fi, _, _) in DEMAND_FILE_MAPS.lock().iter() {
+            if fi != usize::MAX { file.insert(b, b + l); }
+        }
+        for &(b, l, _) in SHARED_ALIASES.lock().iter() { shared.insert(b, b + l); }
+        for &(s, e) in PROT_NONE_RANGES.lock().iter() { none.insert(s, e); }
+        reserved = DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(floor).saturating_sub(DEMAND_FREE.lock().total());
+    } else {
+        // The state of the launched process sits in the slot of whoever is loaded.
+        let key = if owner == 0 { loaded } else { owner };
+        let g = CHILD_MEM.lock();
+        let cm = g.iter().find(|c| c.task == key)?;
+        for &(b, l, fi, _, _) in cm.file_maps.iter() {
+            if fi != usize::MAX { file.insert(b, b + l); }
+        }
+        for &(b, l, _) in cm.shared_aliases.iter() { shared.insert(b, b + l); }
+        for &(s, e) in cm.prot_none.iter() { none.insert(s, e); }
+        reserved = cm.demand_next.saturating_sub(floor).saturating_sub(cm.free.total());
+    }
+    Some((file, shared, none, reserved))
+}
+
+/// The full census: the totals, and one entry per process of the tree of the
+/// browser. Each process is walked with interrupts off (ring 3 runs on this
+/// core only, so its tables cannot go away under the walk); between two
+/// processes the timer may run.
+pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
+    let mut procs: alloc::vec::Vec<ProcMem> = alloc::vec::Vec::new();
+    let mut ids: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
+    {
+        let _g = crate::sched::IfOffGuard::new();
+        if GLIBC_PML4.load(Ordering::Relaxed) != 0 && DEMAND_ENABLED.load(Ordering::Relaxed) {
+            ids.push((1, 0));
+        }
+        ids.extend(GLIBC_FORK_CHILDREN.lock().iter().map(|&(pid, t, _, _, _)| (pid, t)));
+    }
+    for (pid, owner) in ids {
+        let _g = crate::sched::IfOffGuard::new();
+        // Still there? (The timer ran since the list was taken.)
+        let (pml4, task, arena) = if owner == 0 {
+            (GLIBC_PML4.load(Ordering::Relaxed), GLIBC_MAIN_TASK.load(Ordering::Relaxed),
+             (GLIBC_ARENA_MIB.load(Ordering::Relaxed) as usize) * 256)
+        } else {
+            match GLIBC_FORK_CHILDREN.lock().iter().find(|c| c.0 == pid && c.1 == owner) {
+                Some(&(_, t, p, _, fr)) => (p, t, fr),
+                None => continue,
+            }
+        };
+        if pml4 == 0 {
+            continue;
+        }
+        let Some((file, shared, none, reserved)) = proc_mem_ranges(owner) else { continue };
+        let mut m = ProcMem { pid, task, name: thread_name(task), arena, reserved, ..Default::default() };
+        m.noaccess = none.ranges().iter()
+            .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
+        let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
+            (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+        m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
+            if pte & 1 == 0 {
+                sw += 1;
+            } else if pte & 2 == 0 {
+                mc += 1;
+            } else if shared.contains(va) {
+                ms += 1;
+            } else if file.contains(va) {
+                fpriv += 1;
+            } else {
+                anon += 1;
+                if none.contains(va) {
+                    anon_na += 1;
+                }
+                if (va >> 12).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60 == 0 {
+                    sampled += 1;
+                    let phys = pte & 0x000F_FFFF_FFFF_F000;
+                    // SAFETY: a present PTE of the demand slot names an identity-mapped pool frame.
+                    let words = unsafe { core::slice::from_raw_parts(phys as *const u64, 512) };
+                    if words.iter().all(|&w| w == 0) {
+                        zero += 1;
+                    }
+                }
+            }
+        });
+        m.anon = anon;
+        m.anon_noaccess = anon_na;
+        m.sampled = sampled;
+        m.sampled_zero = zero;
+        m.file_private = fpriv;
+        m.maps_cache = mc;
+        m.maps_shared = ms;
+        m.swapped = sw;
+        procs.push(m);
+    }
+    (mem_totals(), procs)
+}
+
+fn mib(pages: usize) -> usize { pages / 256 }
+
+/// The `[mem]` line: one per heartbeat, every figure in MiB.
+pub fn mem_line(t: &MemTotals) -> String {
+    let held = t.pool_total.saturating_sub(t.pool_free);
+    alloc::format!(
+        "tick={} pool={} free={} pagecache={} shm={} (named {}, {} files) processes={} | kernel heap used={} free={} big={}/{} ramfile-bytes={} in {} files | process pool={} free={} | tasks={}/{} thread-kstacks={}/{}",
+        t.tick, mib(t.pool_total), mib(t.pool_free), mib(t.pcache), mib(t.shm_frames), mib(t.shm_named_frames), t.shm_files,
+        mib(held.saturating_sub(t.pcache + t.shm_frames)),
+        t.heap_used >> 20, t.heap_free >> 20, t.big_used_mib, t.big_used_mib + t.big_free_mib, t.ramfile_bytes >> 20, t.ramfiles,
+        mib(t.procpool_total), mib(t.procpool_free), t.tasks, crate::sched::MAX_TASKS, t.kstacks, MAX_THREADS)
+}
+
+/// The `[memstat]` lines: one per process and the sum against the pool.
+pub fn mem_census_lines() -> alloc::vec::Vec<String> {
+    let (t, procs) = mem_census();
+    let mut out = alloc::vec![mem_line(&t)];
+    let (mut anon, mut fpriv, mut tables, mut noacc, mut zero_est) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    for p in procs.iter() {
+        let z = if p.sampled > 0 { p.anon * p.sampled_zero / p.sampled } else { 0 };
+        out.push(alloc::format!(
+            "pid={} task={} name={:?} anon={} (zero~{} no-access={}) file-private={} tables={} maps: pagecache={} shm={} swapped={} | arena={} | addresses: reserved={} GiB, no-access={} GiB",
+            p.pid, p.task, p.name, mib(p.anon), mib(z), mib(p.anon_noaccess), mib(p.file_private), mib(p.tables),
+            mib(p.maps_cache), mib(p.maps_shared), mib(p.swapped), mib(p.arena), p.reserved >> 30, p.noaccess >> 30));
+        anon += p.anon;
+        fpriv += p.file_private;
+        tables += p.tables;
+        noacc += p.anon_noaccess;
+        zero_est += z;
+    }
+    let held = t.pool_total.saturating_sub(t.pool_free);
+    let named = t.pcache + t.shm_frames + anon + fpriv + tables;
+    out.push(alloc::format!(
+        "sum tick={} processes={} anon={} (zero~{} no-access={}) file-private={} tables={} pagecache={} shm={} free={} pool={} unattributed={} KiB",
+        t.tick, procs.len(), mib(anon), mib(zero_est), mib(noacc), mib(fpriv), mib(tables), mib(t.pcache), mib(t.shm_frames),
+        mib(t.pool_free), mib(t.pool_total), (held as i64 - named as i64) * 4));
+    out
+}
+
 /// Budget of the positioned-I/O trace (`fstrace N` in the shell).
 pub static FSTRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
@@ -15206,7 +15473,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let child_stack = stack + stack_size;
             let (slot, kstack_top) = match alloc_thread_kstack() {
                 Some(s) => s,
-                None => return (-11i64) as u64,
+                None => {
+                    spawn_refused("clone3 (thread)", "no thread kernel stack left");
+                    return (-11i64) as u64;
+                }
             };
             let user_rip = unsafe { USER_RIP };
             let sel = crate::gdt::selectors();

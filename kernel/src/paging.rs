@@ -1179,6 +1179,47 @@ pub fn demand_phys_sorted(pml4: u64, idx: usize) -> alloc::vec::Vec<u64> {
     v
 }
 
+/// Census walk of the demand slot `idx` of `pml4`: `f(va, pte)` for every
+/// entry that is present or swapped out. Returns the table frames behind the
+/// slot (one PDPT, its PDs, their PTs). Read-only.
+pub fn walk_demand_region(pml4: u64, idx: usize, f: &mut dyn FnMut(u64, u64)) -> usize {
+    let mut tables = 0usize;
+    // SAFETY: identity-mapped table chain, read-only walk; the caller keeps
+    // the address space alive (interrupts off on the BSP, where ring 3 runs).
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return 0;
+        }
+        tables += 1;
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            tables += 1;
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                tables += 1;
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & (PRESENT | SWAPPED_PTE) != 0 {
+                        let va = ((idx as u64) << 39) | ((i3 as u64) << 30) | ((i2 as u64) << 21) | ((i1 as u64) << 12);
+                        f(va, e1);
+                    }
+                }
+            }
+        }
+    }
+    tables
+}
+
 pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
     // SAFETY: identity-mapped table chain; called single-threaded at teardown.
     unsafe {

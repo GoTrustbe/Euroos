@@ -1219,6 +1219,12 @@ pub fn task_count() -> usize {
     SCHED.lock().count
 }
 
+/// Tasks that are not Dead (the table holds MAX_TASKS).
+pub fn live_tasks() -> usize {
+    let s = SCHED.lock();
+    (0..s.count).filter(|&i| s.tasks[i].state != State::Dead).count()
+}
+
 /// Pick a task slot: first reuse a RECLAIMED slot (a finished task whose resources
 /// were freed and which has no pending BgProc — see [`reclaim_task`]), otherwise
 /// grow the table. Returns None only if the table is full AND nothing is reclaimable.
