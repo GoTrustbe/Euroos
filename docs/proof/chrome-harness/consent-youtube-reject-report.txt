@@ -1,0 +1,47 @@
+chrome-smoke: PASS
+kvm smp=2 mem=6144M input=usb nic=virtio-net-pci, 137 s, max console latency 50 ms; desktop loop while the browser ran: slowest console answer 214 ms, median 12 ms over 408 echoes
+
+ok   boot: desktop after 5 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 14.1 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.6, renderer 8.4), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.1 s, load finished 19.0 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 214 ms; fds: 6 processes, 396 descriptors, 356 objects, 236/4096 file objects; RAM files: 493 files, 35 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 530 ms, 14 over 100 ms, console output queued at most -1 ms
+
+memory_start: no [cpu] heartbeat line yet
+
+consent_clicks: [
+ {
+  "button": "reject all",
+  "kind": "reject",
+  "at": [
+   558,
+   640
+  ],
+  "gone": true,
+  "label_still_found": false,
+  "pixels_changed": true,
+  "find_trace": [
+   [
+    "reject all",
+    0,
+    [
+     360,
+     708
+    ],
+    false
+   ],
+   [
+    "reject all",
+    1,
+    [
+     558,
+     640
+    ],
+    true
+   ]
+  ],
+  "site": "youtube"
+ }
+]
+
+memory_end: heap 119 MiB used, 392 MiB free; big 62/449 MiB (peak 159); files 78 MiB; demand 1390 MiB free

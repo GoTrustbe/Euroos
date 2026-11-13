@@ -1,0 +1,133 @@
+chrome-smoke: FAIL (12 step(s))
+kvm smp=2 mem=6144M input=usb nic=virtio-net-pci, 238 s, max console latency 100 ms; desktop loop while the browser ran: slowest console answer 226 ms, median 12 ms over 794 echoes
+
+ok   boot: desktop after 5 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 14.1 s (seconds after Enter: launched 3.1, window on screen 3.9, X connection 5.1, first child process 5.7, renderer 8.3), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+FAIL local video h264+aac: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/h264.html; state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': 'none', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video h264+aac: the picture advances for 40 s: 0 of 19 consecutive screendumps of the player differ | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video h264+aac: the video's time increases: currentTime 0.0 -> 0.0 s in 41.8 s of wall clock | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video h264+aac: sound reaches the audio device for 40 s: 0 of 8 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [0, 0, 0, 0, 0, 0, 0, 0]) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video h264+aac: no media error: last state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+FAIL local video vp9+opus: the picture advances for 40 s: 0 of 19 consecutive screendumps of the player differ | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video vp9+opus: the video's time increases: currentTime 0.0 -> 0.0 s in 41.8 s of wall clock | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video vp9+opus: sound reaches the audio device for 40 s: 0 of 8 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [0, 0, 0, 0, 0, 0, 0, 0]) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video vp9+opus: no media error: last state {'st': 'playing', 't': 0.0, 'rs': 4, 'err': '3', 'can': 'probably'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   local video vp9 video only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9v.html; state {'st': 'paused', 't': 0.01, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9 video only: the picture advances for 40 s: 18 of 18 consecutive screendumps of the player differ
+ok   local video vp9 video only: the video's time increases: currentTime 3.04 -> 39.54 s in 40.1 s of wall clock
+ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 39.54, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video opus audio only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/opus.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+FAIL local video opus audio only: the video's time increases: currentTime 0.0 -> 0.0 s in 41.7 s of wall clock | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video opus audio only: sound reaches the audio device for 40 s: 0 of 8 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [0, 0, 0, 0, 0, 0, 0, 0]) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+FAIL local video opus audio only: no media error: last state {'st': 'playing', 't': 0.0, 'rs': 4, 'err': '3', 'can': 'probably'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+
+memory_start: no [cpu] heartbeat line yet
+
+localvideo: {
+ "h264+aac": {
+  "samples": 20,
+  "changed": 0,
+  "wall_s": 41.8,
+  "audio_rms_5s": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "loud_windows": 0,
+  "page_clock_start": 0.0,
+  "page_clock_end": 0.0,
+  "last_state": {
+   "st": "paused",
+   "t": 0.0,
+   "rs": 0,
+   "err": "4",
+   "can": "no"
+  }
+ },
+ "vp9+opus": {
+  "samples": 20,
+  "changed": 0,
+  "wall_s": 41.8,
+  "audio_rms_5s": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "loud_windows": 0,
+  "page_clock_start": 0.0,
+  "page_clock_end": 0.0,
+  "last_state": {
+   "st": "playing",
+   "t": 0.0,
+   "rs": 4,
+   "err": "3",
+   "can": "probably"
+  }
+ },
+ "vp9 video only": {
+  "samples": 19,
+  "changed": 18,
+  "wall_s": 40.1,
+  "audio_rms_5s": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "loud_windows": 0,
+  "page_clock_start": 3.04,
+  "page_clock_end": 39.54,
+  "last_state": {
+   "st": "playing",
+   "t": 39.54,
+   "rs": 4,
+   "err": "none",
+   "can": "probably"
+  }
+ },
+ "opus audio only": {
+  "samples": 20,
+  "changed": 0,
+  "wall_s": 41.7,
+  "audio_rms_5s": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "loud_windows": 0,
+  "page_clock_start": 0.0,
+  "page_clock_end": 0.0,
+  "last_state": {
+   "st": "playing",
+   "t": 0.0,
+   "rs": 4,
+   "err": "3",
+   "can": "probably"
+  }
+ }
+}
+
+consent_clicks: []
+
+memory_end: heap 117 MiB used, 394 MiB free; big 53/458 MiB (peak 71); files 70 MiB; demand 1539 MiB free
