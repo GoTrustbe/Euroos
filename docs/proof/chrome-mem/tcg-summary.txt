@@ -1,0 +1,10 @@
+user-smp4-iommu: desktop=yes fault-lines=0 kernel-to-desktop=66598 ms | [memt] memory self-test: not run on this machine → OK ✓
+user-smp4-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=62024 ms | [memt] memory self-test: not run on this machine → OK ✓
+kernel-smp4: desktop=yes fault-lines=0 kernel-to-desktop=53511 ms | [memt] memory self-test: not run on this machine → OK ✓
+storage-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=354584 ms | [memt] memory self-test, 5 modes → OK ✓
+combined-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=386206 ms | [memt] memory self-test, 5 modes → OK ✓
+user-smp1-iommu: desktop=yes fault-lines=0 kernel-to-desktop=67027 ms | [memt] memory self-test: not run on this machine → OK ✓
+user-smp1-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=85156 ms | [memt] memory self-test: not run on this machine → OK ✓
+kernel-smp1: desktop=yes fault-lines=0 kernel-to-desktop=53981 ms | [memt] memory self-test: not run on this machine → OK ✓
+storage-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=346636 ms | [memt] memory self-test, 5 modes → OK ✓
+combined-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=383876 ms | [memt] memory self-test, 5 modes → OK ✓

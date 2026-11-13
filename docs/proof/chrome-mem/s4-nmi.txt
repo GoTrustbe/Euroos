@@ -1,0 +1,9 @@
+[scon] cs-probe-747
+[scon-ready]
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] interrupted RIP=0x0000000071c007f9 CS=0x8 RSP=0x00000000773b3560 RFLAGS=0x40002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x0000000071b79658
+[nmi] CR2 (address of the last page fault) = 0x0000011c030d9000
+[nmi] code rip-16..: [81, fa, ff, 01, 00, 00, 0f, 87, 3c, 02, 00, 00, 48, 6b, c1, 68]
+[nmi] code rip..   : [48, 83, 3c, 03, 00, 75, b3, 48, 01, d8, 48, 8b, 40, 30, 48, 39]
+[mem] tick=21006 pool=1296 free=572 pagecache=234 shm=35 (named 1, 217 files) processes=453 | kernel heap used=120 free=391 big=48/63 ramfile-bytes=16 in 410 files | process pool=1668 free=387 | tasks=153/512 thread-kstacks=149/448

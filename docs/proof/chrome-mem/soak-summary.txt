@@ -1,0 +1,13 @@
+loadtest.py --kvm --smp 4 --pin 22-23,26-27 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hostfwd 18795 --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 7500 (self-test image of f9a8870)
+[loadtest] completed clean · results → /srv/euroos/mem-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/mem-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 846387, "err": 0, "p50_ms": 5.4, "p99_ms": 154.8, "max_ms": 7539.6, "busy_windows": 444, "busy_s": 6177, "busy": {"ok": 722531, "err": 0, "p50_ms": 5.3, "p99_ms": 135.4, "max_ms": 6491.7}, "idle": {"ok": 123856, "err": 0, "p50_ms": 6.1, "p99_ms": 217.0, "max_ms": 7539.6}}
+[loadtest] host HTTP server served 413 request(s)
+last command id 3575, every result line ok (loadtest.py: completed clean); [churn-proc] OK verdicts: 460
+kernel heap after 10 min: first 149 777 536, last 149 780 096 bytes, range 1 294 512 bytes, slope +0.30 kB/min (1377 ltstat samples)
+crash lines (panic, GP, page fault, NMI): 0
+FAILED lines:
+      1 [3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+      2 [conn] TCP handshake FAILED to 172.66.147.243:80
+      1 [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP
+      1 [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 39 ticks: "GNET: connect(172.66.147.243:80) failed" exit=2; its waits gave the CPU away 1 time(s), 1 woken 
+      1 [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED

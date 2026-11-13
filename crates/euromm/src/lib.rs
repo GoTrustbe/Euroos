@@ -12,9 +12,14 @@ extern crate alloc;
 pub mod arena;
 pub mod bulk;
 pub mod frame;
+pub mod oom;
+pub mod pagecache;
+pub mod ramfile;
 pub mod swap;
 pub mod vaspace;
 
 pub use frame::{FrameAllocator, MemoryRegion, PAGE_SIZE};
 pub use swap::{Clock, SwapArea};
+pub use pagecache::{PageCache, PageState, Use};
+pub use ramfile::{Budget, PageFile};
 pub use vaspace::FreeRanges;

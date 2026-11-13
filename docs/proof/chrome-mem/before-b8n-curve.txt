@@ -1,0 +1,67 @@
+226 census samples over 97 min; pool 3237 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    0   1 euro-os        ok     441    +0    95    19     0    90    5    217   31  2796  118   50     6
+    1   1 wikipedia      ok     492   +51   147    38     4    90    5    223   24  2745  118   46     6
+    2   1 github         ok     635  +143   253    65     5   105    7    230   37  2602  120   64     7
+    2   1 youtube        ok     820  +185   403   102     7   135   10    232   38  2417  119   82     9
+    3   1 openstreetmap  ok     711  -109   301   103     8   135    9    234   29  2526  119   68     9
+   10   2 euro-os        FAIL   857  +146   317   129     8   150   10    236   21  2380  119   57    10
+   12   2 wikipedia      FAIL   889   +32   159    66     4   104    6    236   18  2348  119   41     7
+   15   2 github         FAIL  1124  +235   159    66     4   104    6    236   15  2113  119   37     7
+   17   2 youtube        FAIL  1246  +122   159    66     3   104    6    236   15  1991  119   37     7
+   19   2 openstreetmap  FAIL  1424  +178   117    47     0    89    5    236   12  1813  118   30     6
+   26   3 euro-os        FAIL  1972  +548   120    48     2    89    6    236   10  1265  118   29     6
+   28   3 wikipedia      FAIL  2203  +231   120    48     2    89    6    236   10  1034  119   29     6
+   29   3 github         FAIL  2433  +230   120    49     2    89    6    236   10   804  118   29     6
+   31   3 youtube        FAIL  2548  +115   120    49     2    89    6    236   11   689  119   30     6
+   33   3 openstreetmap  FAIL  2662  +114   120    49     2    89    6    236   11   575  119   30     6
+   39   4 euro-os        FAIL  2864  +202   121    49     1    89    6    236   11   373  119   30     6
+   41   4 wikipedia      FAIL  2864    +0   121    49     1    89    6    236   11   373  119   29     6
+   43   4 github         FAIL  2864    +0   121    50     1    89    6    236   11   373  119   29     6
+   44   4 youtube        FAIL  2865    +1   121    49     1    89    6    236   11   372  119   30     6
+   46   4 openstreetmap  FAIL  2865    +0   121    49     1    89    6    236   11   372  119   30     6
+   53   5 euro-os        FAIL  2865    +0   122    50     2    89    7    236   11   372  119   29     6
+   54   5 wikipedia      FAIL  2866    +1   122    50     2    89    7    236   11   371  119   29     6
+   56   5 github         FAIL  2865    -1   122    50     2    89    7    236   10   372  119   29     6
+   59   5 youtube        FAIL  3233  +368    85    33     0    30   14    237    9     4  119   28     2
+   62   5 openstreetmap  FAIL  3237    +4    85    31     0    30   14    237   13     0  119   32     2
+   77   6 euro-os        FAIL  3237    +0    85    31     0    30   14    237   13     0  119   32     2
+   80   6 wikipedia      FAIL  3237    +0    85    31     0    30   14    237   13     0  119   32     2
+   83   6 github         FAIL  3237    +0    85    31     0    30   14    237   13     0  119   32     2
+   86   6 youtube        FAIL  3237    +0    85    31     0    30   14    237   13     0  119   32     2
+   89   6 openstreetmap  FAIL  3237    +0    85    31     0    30   14    237   13     0  119   32     2
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later +146 +548 +202 +0 +0   mean +179
+  wikipedia      first   +51   later +32 +231 +0 +1 +0   mean +53
+  github         first  +143   later +235 +230 +0 -1 +0   mean +93
+  youtube        first  +185   later +122 +115 +1 +368 +0   mean +121
+  openstreetmap  first  -109   later +178 +114 +0 +4 +0   mean +59
+
+after the warm-up (15 min): 187 samples over 82 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)     1246   3237   1246   3237  +1163.8
+anon                      159     85     85    160    -43.7
+zero                       66     31     31     66    -21.0
+noaccess                    3      0      0      3     -1.8
+fileprivate               104     30     30    104    -66.7
+tables                      6     14      4     14     +9.0
+pagecache                 236    237    236    237     +1.1
+shm                        15     13      9     26     +0.1
+heap_used                 119    119    118    119     +0.4
+big_used                   65     63     56     77     +3.3
+ramfile_bytes              37     32     28     47     -0.6
+
+lowest free: 0 MiB of 3237; largest unattributed: 2923916 KiB
+verdict: NOT flat (in use +1163.8 MiB/h = +36.0% of the pool per hour; 5 kill/exhaustion lines; 2855 MiB without an owner at the worst)
+  kill line near minute 59: [isolation] ring-3 page fault addr=0x115a44e5000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 25) TERMINATED
+  kill line near minute 59: [isolation] ring-3 page fault addr=0x115a47f9000 code=PageFaultErrorCode(USER_MODE) -> process pid 0 (task 1) TERMINATED
+  kill line near minute 71: [demand] POOL EXHAUSTED at addr=0x1080031f000 (committed=1133102 pages ~4426 MiB)
+  kill line near minute 71: [isolation] ring-3 page fault addr=0x1080031f000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 31) TERMINATED
+  kill line near minute 92: [isolation] ring-3 page fault addr=0x10c06b22010 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 45) TERMINATED
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                69    26     0
+   1017 CrRendererMain        15     4     0

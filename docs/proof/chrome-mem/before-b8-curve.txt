@@ -1,0 +1,60 @@
+210 census samples over 98 min; pool 3237 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    0   1 euro-os        ok     432    +0    95    19     0    89    4    212   29  2805  118   47     6
+    1   1 wikipedia      ok     487   +55   147    38     4    90    5    218   25  2750  118   47     6
+    2   1 github         ok     626  +139   254    72     5   105    7    224   33  2611  120   60     7
+    2   1 youtube        ok     818  +192   392    99     5   150   10    228   35  2419  120  126    10
+    3   1 openstreetmap  ok     708  -110   303   104     8   134    9    229   30  2529  119   70     9
+    3   1 pdf            ok     822  +114   356   114     8   179   12    232   40  2415  120   88    12
+   14   2 euro-os        FAIL  2855 +2033    83    30     0    30   18    234    8   382  120   28     2
+   17   2 wikipedia      FAIL  2866   +11    85    29     0    30   26    234    8   371  120   28     2
+   20   2 github         FAIL  2873    +7    83    30     0    30   36    234    8   364  121   29     2
+   23   2 youtube        FAIL  2882    +9    85    30     0    30   42    234    8   355  122   29     2
+   26   2 openstreetmap  FAIL  2889    +7    83    29     0    30   51    234    8   348  123   29     2
+   27   2 pdf            FAIL  2896    +7    85    30     0    30   56    234    8   341  123   29     2
+   38   3 euro-os        FAIL  2929   +33    87    31     0    30   87    234    8   308  126   29     2
+   41   3 wikipedia      FAIL  2935    +6    85    28     0    30   95    234    8   302  127   29     2
+   44   3 github         FAIL  2934    -1    82    30     0    30   97    234    8   303  129   29     2
+   48   3 youtube        FAIL  2942    +8    83    30     0    30  104    234    8   295  128   29     2
+   50   3 openstreetmap  FAIL  2951    +9    85    31     0    30  111    234    8   286  129   28     2
+   52   3 pdf            FAIL  2955    +4    85    31     0    30  115    234    8   282  129   28     2
+   63   4 euro-os        FAIL  2984   +29    89    32     0    30  141    234    8   253  131   28     2
+   66   4 wikipedia      FAIL  2990    +6    87    32     0    30  148    234    8   247  132   28     2
+   69   4 github         FAIL  2998    +8    89    33     0    30  155    234    7   239  133   28     2
+   72   4 youtube        FAIL  3002    +4    87    31     0    30  161    234    7   235  133   29     2
+   74   4 openstreetmap  FAIL  3009    +7    87    33     0    30  167    234    8   228  134   28     2
+   78   4 pdf            FAIL  3012    +3    88    33     0    30  169    234    8   225  134   29     2
+   90   5 euro-os        FAIL  3036   +24    89    34     0    30  192    234    8   201  138   29     2
+   92   6 euro-os        ok    3042    +6    89    33     0    30  197    234    8   195  137   29     2
+   95   6 wikipedia      FAIL  3048    +6    89    33     0    30  203    234    8   189  137   29     2
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later +2033 +33 +29 +24 +6   mean +425
+  wikipedia      first   +55   later +11 +6 +6 +6   mean +7
+  github         first  +139   later +7 -1 +8   mean +5
+  youtube        first  +192   later +9 +8 +4   mean +7
+  openstreetmap  first  -110   later +7 +9 +7   mean +8
+  pdf            first  +114   later +7 +4 +3   mean +5
+
+after the warm-up (15 min): 172 samples over 83 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)     2859   3052   2859   3055   +138.6
+anon                       83     89     82     92     +4.4
+zero                       29     33     27     35     +2.8
+noaccess                    0      0      0      0     +0.0
+fileprivate                30     30     30     30     +0.0
+tables                     22    208     22    208   +133.5
+pagecache                 234    234    234    234     +0.0
+shm                         8      8      7     22     +0.1
+heap_used                 120    138    120    484    +17.0
+big_used                   58     95     58    504    +51.2
+ramfile_bytes              28     28     27    810    +25.3
+
+lowest free: 182 MiB of 3237; largest unattributed: 2538964 KiB
+verdict: NOT flat (in use +138.6 MiB/h = +4.3% of the pool per hour; 0 kill/exhaustion lines; 2479 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                73    30     0
+   1017 CrRendererMain        16     3     0

@@ -1136,6 +1136,109 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
     (unmapped, freed)
 }
 
+const ACCESSED: u64 = 1 << 5;
+
+/// Walk every present READ-ONLY entry of the demand slot `idx` of `pml4` (a
+/// read-only page there is a mapping of a page-cache frame). `f(frame,
+/// accessed)` says what to do with it: true unmaps the entry (the frame is
+/// about to leave the cache), false leaves it. With `age`, the accessed bit of
+/// every entry that stays is cleared, so that the next pass sees who used the
+/// page since this one. Returns the entries unmapped. The caller flushes the
+/// TLB of the address space it runs on.
+pub fn scan_demand_ro(pml4: u64, idx: usize, age: bool, f: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    let mut unmapped = 0usize;
+    // SAFETY: identity-mapped table chain; the caller keeps the address space
+    // alive (interrupts off on the core that runs ring 3).
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return 0;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let slot = (pt as *mut u64).add(i1);
+                    let e1 = slot.read_volatile();
+                    if e1 & PRESENT == 0 || e1 & WRITABLE != 0 {
+                        continue;
+                    }
+                    if f(e1 & ADDR_MASK, e1 & ACCESSED != 0) {
+                        slot.write_volatile(0);
+                        unmapped += 1;
+                    } else if age && e1 & ACCESSED != 0 {
+                        slot.write_volatile(e1 & !ACCESSED);
+                    }
+                }
+            }
+        }
+    }
+    unmapped
+}
+
+/// Reload CR3: every non-global translation of the running address space is
+/// looked up again (after entries of it were unmapped or aged in bulk).
+pub fn flush_tlb_all() {
+    use x86_64::registers::control::Cr3;
+    let (frame, flags) = Cr3::read();
+    // SAFETY: the same root is written back.
+    unsafe { Cr3::write(frame, flags) };
+}
+
+/// madvise(MADV_DONTNEED): in [`start`, `end`) of the demand region of `pml4`,
+/// unmap and free every page for which `owned(va, writable)` says the process
+/// owns the frame alone (private anonymous memory); every other page stays as
+/// it is. A page of the range that is swapped out loses its slot the same way.
+/// The next touch of such a page faults in a fresh zero page, which is what
+/// the call promises. Returns the frames freed.
+pub fn discard_demand_range(pml4: u64, start: u64, end: u64, owned: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    let mut freed = 0usize;
+    let mut va = start & !0xFFF;
+    // SAFETY: identity-mapped table chain of the calling process (IF=0 syscall).
+    unsafe {
+        while va < end {
+            let i4 = ((va >> 39) & 0x1FF) as usize;
+            let i3 = ((va >> 30) & 0x1FF) as usize;
+            let i2 = ((va >> 21) & 0x1FF) as usize;
+            let e4 = (pml4 as *const u64).add(i4).read_volatile();
+            if e4 & PRESENT == 0 { va = ((va >> 39) + 1) << 39; continue; }
+            let e3 = ((e4 & ADDR_MASK) as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 { va = ((va >> 30) + 1) << 30; continue; }
+            let e2 = ((e3 & ADDR_MASK) as *const u64).add(i2).read_volatile();
+            if e2 & PRESENT == 0 { va = ((va >> 21) + 1) << 21; continue; }
+            let pt = e2 & ADDR_MASK;
+            let table_end = (((va >> 21) + 1) << 21).min(end);
+            while va < table_end {
+                let slot = (pt as *mut u64).add(((va >> 12) & 0x1FF) as usize);
+                let e1 = slot.read_volatile();
+                if e1 & PRESENT != 0 {
+                    if owned(va, e1 & WRITABLE != 0) {
+                        slot.write_volatile(0);
+                        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+                        crate::procpool::demand_free(e1 & ADDR_MASK);
+                        freed += 1;
+                    }
+                } else if e1 & SWAPPED_PTE != 0 && owned(va, true) {
+                    crate::swapmgr::free_slot(((e1 >> 12) & 0xFFFFF) as usize);
+                    slot.write_volatile(0);
+                }
+                va += 4096;
+            }
+        }
+    }
+    freed
+}
+
 /// Free a demand-paged region: walk PML4[`idx`] and return every committed data page
 /// AND every page-table frame to the process pool, then clear the PML4 entry. Mirrors
 /// [`map_demand_4k`]. Called when a process that used demand paging exits.
@@ -1177,6 +1280,47 @@ pub fn demand_phys_sorted(pml4: u64, idx: usize) -> alloc::vec::Vec<u64> {
     }
     v.sort_unstable();
     v
+}
+
+/// Census walk of the demand slot `idx` of `pml4`: `f(va, pte)` for every
+/// entry that is present or swapped out. Returns the table frames behind the
+/// slot (one PDPT, its PDs, their PTs). Read-only.
+pub fn walk_demand_region(pml4: u64, idx: usize, f: &mut dyn FnMut(u64, u64)) -> usize {
+    let mut tables = 0usize;
+    // SAFETY: identity-mapped table chain, read-only walk; the caller keeps
+    // the address space alive (interrupts off on the BSP, where ring 3 runs).
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return 0;
+        }
+        tables += 1;
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            tables += 1;
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                tables += 1;
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let e1 = (pt as *const u64).add(i1).read_volatile();
+                    if e1 & (PRESENT | SWAPPED_PTE) != 0 {
+                        let va = ((idx as u64) << 39) | ((i3 as u64) << 30) | ((i2 as u64) << 21) | ((i1 as u64) << 12);
+                        f(va, e1);
+                    }
+                }
+            }
+        }
+    }
+    tables
 }
 
 pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {

@@ -1,0 +1,164 @@
+360 census samples over 128 min; pool 3232 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    0   1 euro-os        ok     419    +0    78     2     0    94    4    212   29  2813  117    8     7
+    0   1 wikipedia      ok     490   +71   134     3     0   105    6    217   26  2742  118    8     7
+    1   1 github         ok     569   +79   195     4     0   105    7    225   36  2663  118    9     7
+    2   1 youtube        ok     704  +135   283     6     0   143    9    227   39  2528  119   11    10
+    2   1 openstreetmap  ok     742   +38   323     6     0   150   10    228   27  2490  119   15    10
+    2   1 pdf            ok     726   -16   268     6     0   180   11    231   34  2506  119   16    12
+    6   1 youtube-play   FAIL   854  +128   362     6     0   209   15    233   33  2378  120   35    14
+    8   1 video-play     FAIL   732  -122   247     8     0   209   15    235   24  2500  120   36    14
+    8   2 euro-os        ok     740    +8   237     8     0   209   13    235   44  2492  120   36    14
+    9   2 wikipedia      ok     775   +35   266     7     0   224   14    235   33  2457  120   36    15
+   10   2 github         ok     880  +105   342     9     0   239   16    235   46  2352  120   37    16
+   11   2 youtube        ok    1002  +122   436    10     0   269   18    239   38  2230  122   38    18
+   12   2 openstreetmap  ok     794  -208   266     7     0   238   14    240   34  2438  122   39    16
+   12   2 pdf            ok     902  +108   315     9     0   283   17    240   45  2330  122   39    19
+   15   2 youtube-play   FAIL   994   +92   407     9     0   283   18    240   44  2238  122   34    19
+   18   2 video-play     FAIL   968   -26   368    10     0   298   19    240   42  2264  122   34    20
+   18   3 euro-os        ok    1028   +60   387    12     0   313   20    240   66  2204  123   34    21
+   18   3 wikipedia      ok    1093   +65   434    12     0   328   21    240   68  2139  125   34    22
+   19   3 github         ok    1028   -65   430     9     0   283   19    240   53  2204  124   35    19
+   19   3 youtube        ok    1124   +96   502     9     0   313   21    240   45  2108  124   36    21
+   20   3 openstreetmap  ok    1058   -66   440     9     0   313   20    240   43  2174  124   36    21
+   21   3 pdf            ok    1161  +103   484    12     0   358   23    240   54  2071  126   36    24
+   24   3 youtube-play   FAIL  1171   +10   526     9     0   343   22    240   38  2061  126   37    23
+   27   3 video-play     FAIL  1023  -148   385    10     0   343   21    240   32  2209  126   37    23
+   27   4 euro-os        ok    1074   +51   400    11     0   358   22    240   52  2158  126   37    24
+   27   4 wikipedia      ok    1135   +61   442    11     0   373   24    240   54  2097  126   37    25
+   28   4 github         ok    1093   -42   450    10     0   328   22    240   52  2139  126   38    22
+   28   4 youtube        ok    1141   +48   467    11     0   357   23    240   52  2091  126   39    24
+   29   4 openstreetmap  ok    1000  -141   354     9     0   342   21    240   40  2232  126   39    23
+   30   4 pdf            ok    1029   +29   343    10     0   372   22    240   49  2203  126   40    25
+   33   4 youtube-play   FAIL  1090   +61   424     9     0   357   22    240   45  2142  126   37    24
+   36   4 video-play     FAIL  1069   -21   391    11     0   372   23    240   41  2163  126   37    25
+   36   5 euro-os        ok    1137   +68   414    13     0   387   24    240   69  2095  126   37    26
+   37   5 wikipedia      ok    1075   -62   402    10     0   357   23    240   52  2157  127   37    24
+   38   5 github         ok    1018   -57   357     9     0   342   21    240   56  2214  127   38    23
+   38   5 youtube        ok    1073   +55   384    10     0   372   22    240   53  2159  127   38    25
+   38   5 openstreetmap  FAIL  1061   -12   394     9     0   357   22    240   46  2171  127   38    24
+   39   5 pdf            ok    1037   -24   336     9     0   386   23    240   49  2195  127   39    26
+   42   5 youtube-play   FAIL  1070   +33   390     9     0   386   23    241   28  2162  127   39    26
+   45   5 video-play     FAIL  1065    -5   368    11     0   401   24    241   28  2167  127   39    27
+   47   6 euro-os        FAIL   851  -214   229     6     0   341   19    241   19  2381  126   39    23
+   47   6 wikipedia      ok     916   +65   272     9     0   356   21    241   28  2316  127   39    24
+   48   6 github         ok     958   +42   304     7     0   356   21    241   33  2274  127   39    24
+   48   6 youtube        ok    1030   +72   350     8     0   386   23    241   29  2202  127   40    26
+   48   6 openstreetmap  ok    1050   +20   385     9     0   371   22    241   28  2182  127   40    25
+   49   6 pdf            FAIL   974   -76   295     8     0   386   22    241   28  2258  127   42    26
+   50   6 youtube-play   FAIL   897   -77   252     7     0   355   21    241   25  2335  127   43    24
+   52   6 video-play     FAIL   935   +38   273     8     0   371   22    241   27  2297  127   43    25
+   52   7 euro-os        ok     989   +54   290    10     0   386   23    241   47  2243  127   43    26
+   53   7 wikipedia      ok    1029   +40   320    10     0   401   24    241   40  2203  127   43    27
+   56   7 github         FAIL  1022    -7   315    10     0   401   24    241   38  2210  127   43    27
+   58   7 youtube        FAIL   943   -79   271     7     0   371   22    241   36  2289  127   43    25
+   59   7 openstreetmap  ok     917   -26   250     7     0   370   22    241   31  2315  127   43    25
+   59   7 pdf            FAIL   986   +69   280     8     0   400   23    241   39  2246  127   43    27
+   63   7 youtube-play   FAIL   891   -95   225     5     0   370   22    241   30  2341  126   43    25
+   63   7 video-play     FAIL   906   +15   240     6     0   370   22    241   31  2326  126   43    25
+   63   8 euro-os        ok     944   +38   259     9     0   370   22    241   49  2288  127   43    25
+   64   8 wikipedia      ok     988   +44   289     8     0   385   23    241   47  2244  127   43    26
+   64   8 github         ok    1070   +82   354     9     0   401   25    241   47  2162  127   44    27
+   66   8 youtube        FAIL  1044   -26   335     8     0   401   25    241   40  2188  127   44    27
+   68   8 openstreetmap  FAIL  1034   -10   325     8     0   401   25    241   40  2198  127   44    27
+   69   8 pdf            FAIL   945   -89   272     7     0   371   22    241   37  2287  127   44    25
+   71   8 youtube-play   FAIL  1123  +178   426     9     0   401   25    241   27  2109  127   46    27
+   73   8 video-play     FAIL  1113   -10   415     9     0   401   25    241   29  2119  127   44    27
+   74   9 euro-os        FAIL   980  -133   333     5     0   355   22    241   26  2252  127   45    24
+   75   9 wikipedia      ok    1046   +66   373     6     0   371   24    241   36  2186  127   45    25
+   76   9 github         ok    1112   +66   418     8     0   386   25    241   39  2120  127   46    26
+   77   9 youtube        FAIL  1223  +111   508     9     0   401   27    241   43  2009  127   46    27
+   79   9 openstreetmap  FAIL  1085  -138   398     7     0   386   25    241   33  2147  127   46    26
+   79   9 pdf            FAIL  1122   +37   411     8     0   401   26    241   40  2110  127   46    27
+   80   9 youtube-play   FAIL  1076   -46   393     7     0   385   25    241   29  2156  127   47    26
+   83   9 video-play     FAIL  1066   -10   368     9     0   400   26    241   28  2166  127   47    27
+   84  10 euro-os        FAIL   967   -99   286     9     0   385   25    241   27  2265  127   47    26
+   85  10 wikipedia      ok     923   -44   264     7     0   370   23    241   22  2309  127   48    25
+   86  10 github         ok    1028  +105   340     8     0   385   25    241   34  2204  127   49    26
+   87  10 youtube        FAIL  1094   +66   389     8     0   400   25    241   35  2138  127   49    27
+   88  10 openstreetmap  FAIL  1051   -43   352     8     0   400   25    241   29  2181  127   48    27
+   90  10 pdf            FAIL  1055    +4   356     8     0   400   25    241   29  2177  127   48    27
+   91  10 youtube-play   FAIL  1107   +52   408     8     0   400   26    241   29  2125  127   53    27
+   93  10 video-play     FAIL  1105    -2   408     8     0   400   26    241   27  2127  127   53    27
+   95  11 euro-os        FAIL  1081   -24   384     8     0   400   26    241   27  2151  127   53    27
+   96  11 wikipedia      FAIL  1004   -77   344     5     0   370   24    241   23  2228  127   53    25
+   97  11 github         FAIL   924   -80   286     3     0   355   22    241   18  2308  127   53    24
+   98  11 youtube        ok    1058  +134   375     6     0   385   25    241   29  2174  127   53    27
+  101  11 openstreetmap  FAIL   938  -120   267     4     0   385   24    242   18  2294  127   53    26
+  101  11 pdf            FAIL   974   +36   283     5     0   400   24    242   23  2258  127   53    27
+  102  11 youtube-play   FAIL  1023   +49   322     5     0   399   25    242   33  2209  127   41    27
+  104  11 video-play     FAIL  1025    +2   324     5     0   399   25    242   33  2207  127   40    27
+  106  12 euro-os        FAIL   995   -30   294     5     0   399   25    242   33  2237  127   40    27
+  108  12 wikipedia      FAIL   994    -1   293     4     0   399   25    242   33  2238  127   40    27
+  109  12 github         FAIL   995    +1   295     4     0   399   25    242   32  2237  127   40    27
+  109  12 youtube        FAIL  1117  +122   413     5     0   399   25    242   35  2115  127   41    27
+  111  12 openstreetmap  FAIL  1033   -84   346     5     0   399   25    242   18  2199  127   41    27
+  113  12 pdf            FAIL  1032    -1   345     5     0   399   25    242   18  2200  127   41    27
+  114  12 youtube-play   FAIL  1084   +52   394     5     0   399   26    242   21  2148  127   41    27
+  116  12 video-play     FAIL  1081    -3   390     5     0   399   26    242   21  2151  127   41    27
+  118  13 euro-os        FAIL  1056   -25   366     5     0   399   26    242   21  2176  127   41    27
+  119  13 wikipedia      FAIL  1054    -2   364     5     0   399   26    242   20  2178  127   41    27
+  121  13 github         FAIL  1057    +3   367     5     0   399   26    242   20  2175  127   41    27
+  121  13 youtube        FAIL  1117   +60   421     6     0   399   26    242   26  2115  127   41    27
+  123  13 openstreetmap  FAIL  1039   -78   351     5     0   399   26    242   18  2193  127   41    27
+  125  13 pdf            FAIL  1045    +6   357     5     0   399   26    242   18  2187  127   41    27
+  126  13 youtube-play   FAIL  1085   +40   395     5     0   399   27    242   20  2147  127   42    27
+  128  13 video-play     FAIL  1084    -1   393     6     0   399   27    242   21  2148  127   41    27
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later +8 +60 +51 +68 -214 +54 +38 -133 -99 -24 -30 -25   mean -20
+  wikipedia      first   +71   later +35 +65 +61 -62 +65 +40 +44 +66 -44 -77 -1 -2   mean +16
+  github         first   +79   later +105 -65 -42 -57 +42 -7 +82 +66 +105 -80 +1 +3   mean +13
+  youtube        first  +135   later +122 +96 +48 +55 +72 -79 -26 +111 +66 +134 +122 +60   mean +65
+  openstreetmap  first   +38   later -208 -66 -141 -12 +20 -26 -10 -138 -43 -120 -84 -78   mean -76
+  pdf            first   -16   later +108 +103 +29 -24 -76 +69 -89 +37 +4 +36 -1 +6   mean +17
+  youtube-play   first  +128   later +92 +10 +61 +33 -77 -95 +178 -46 +52 +49 +52 +40   mean +29
+  video-play     first  -122   later -26 -148 -21 -5 +38 +15 -10 -10 -2 +2 -3 -1   mean -14
+
+after the warm-up (15 min): 316 samples over 113 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      990   1084    851   1262    -10.3
+anon                      403    393    225    575    -34.2
+zero                        9      6      3     13     -3.2
+noaccess                    0      0      0      0     +0.0
+fileprivate               283    399    283    401    +35.2
+tables                     18     27     18     27     +2.9
+pagecache                 240    242    240    242     +1.2
+shm                        44     21     18     75    -15.0
+heap_used                 122    127    122    127     +1.0
+big_used                   88     93     88    109     +3.5
+ramfile_bytes              34     41     34     53     +4.7
+
+lowest free: 1970 MiB of 3232; largest unattributed: 123452 KiB
+verdict: NOT flat (in use -10.3 MiB/h = -0.3% of the pool per hour; 0 kill/exhaustion lines; 121 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                63     0     0
+   1000 network.CrUtilit       6     0     0
+   1001 storage.CrUtilit       4     0     0
+   1002 CrRendererMain        16     0     0
+   1013 video_capture.Cr       1     0     0
+   1014 CrRendererMain        39     1     0
+   1020 video_capture.Cr       1     0     0
+   1021 on_device_model.       1     0     0
+   1023 video_capture.Cr       1     0     0
+   1030 video_capture.Cr       1     0     0
+   1032 data_decoder.CrU       1     0     0
+   1039 video_capture.Cr       1     0     0
+   1045 video_capture.Cr       1     0     0
+   1051 video_capture.Cr       1     0     0
+   1052 video_capture.Cr       1     0     0
+   1058 video_capture.Cr       1     0     0
+   1066 video_capture.Cr       1     0     0
+   1073 video_capture.Cr       1     0     0
+   1079 video_capture.Cr       1     0     0
+   1081 video_capture.Cr       1     0     0
+   1087 video_capture.Cr       1     0     0
+   1113 video_capture.Cr       1     0     0
+   1118 video_capture.Cr       1     0     0
+   1120 CrRendererMain       229     2     0
+   1122 video_capture.Cr       1     0     0
+   1126 video_capture.Cr       1     0     0
+   1129 CrRendererMain         6     0     0

@@ -142,6 +142,14 @@ pub fn demand_free(addr: u64) {
         note_foreign("demand pool", r, addr);
     }
 }
+/// Frames the demand pool manages in all (0 = no pool installed).
+pub fn demand_total_frames() -> usize {
+    DEMAND_POOL.lock().as_ref().map(|p| p.usable_frames()).unwrap_or(0)
+}
+/// Frames the process pool manages in all.
+pub fn total_frames() -> usize {
+    POOL.lock().as_ref().map(|p| p.usable_frames()).unwrap_or(0)
+}
 pub fn demand_free_frames() -> usize {
     DEMAND_POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)
 }

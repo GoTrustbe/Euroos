@@ -20,10 +20,12 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 // Chrome (even --single-process headless) spawns dozens of threads (thread pool,
 // compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
 // browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
-// BUG-147: 512. After BUG-140 no slot stays with an ended task, but a browser
-// session keeps up to 16 processes and their threads live: 214 of 256 in one
-// minimal session. A slot costs its 16 KiB kernel-task stack (STACKS) and a few
-// words; thread kernel stacks past the static 224 come from the heap on demand.
+// 512 since BUG-147 (w23) and BUG-151 (mem), the same finding twice: once the
+// slots of ended fork children and their threads come back (retire_task in
+// ring3.rs), a browser session still keeps up to 16 processes and their threads
+// live (214 of 256 in one minimal session, 224 of 256 with 14 processes). A slot
+// costs its 16 KiB kernel-task stack (STACKS) and a few words; thread kernel
+// stacks (ring3.rs, MAX_THREADS = 480) past the static 224 come from the heap.
 pub const MAX_TASKS: usize = 512;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
@@ -1368,6 +1370,11 @@ pub fn slot_census() -> (usize, usize, usize) {
             && (s.free_slots.contains(&i) || RECLAIMABLE[i].load(Ordering::Relaxed)))
         .count();
     (s.count, live, reusable)
+}
+
+/// Tasks that are not Dead (the table holds MAX_TASKS).
+pub fn live_tasks() -> usize {
+    slot_census().1
 }
 
 /// Pick a task slot: first reuse a RECLAIMED slot (a finished task whose resources

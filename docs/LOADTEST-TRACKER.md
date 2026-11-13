@@ -2068,8 +2068,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   - The probe now gets to its stack scan and census (it stopped in its own `sched::current()`).
 - **Proof:**    `proof/chrome-w23/README.md` (after: the TCG matrix and further 512 MiB smp 4 boots, no wedge).
 
-### BUG-137 — the demand pool drains during a long browser session ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for criterion 4 (the browser is killed after ~74 min)
+### BUG-137 — the demand pool drains during a long browser session ✅ FIXED
+- **Status:**   FIXED (`48bf2e7`, `b882f4d`, `15fe72b`; cause and proof: BUG-150, BUG-151, BUG-152, BUG-155 and
+  `proof/chrome-mem/`) · **Severity:** HIGH for criterion 4 (the browser is killed after ~74 min)
+- **Cause:**    not the page cache (212-235 MiB, flat). Forks that were refused because the task table was used up by
+  slots of ended tasks (BUG-151), each keeping 128 MiB of arena and ~105 MiB of demand pages (BUG-150); the browser
+  retried until the pool was empty, and the fault that then failed ended its main thread (BUG-155).
 - **Actual:**   two-hour soak (`proof/chrome-2026-11b/`, 8 GiB): demand pool 2 834 MiB free at the start, 1 059 after
   round 1, 415 after round 2, 62 after round 3, 0 in round 4; then `[isolation] ring-3 page fault … (task 1)
   TERMINATED`: the browser's main thread faulted on a page the pool could not give. The guest kept running.
@@ -2093,6 +2097,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   occupant. `fds` prints the table: "scheduler: N of 256 task slots handed out, L live, R free for reuse, H held
   by ended tasks".
 - **Open:**     BUG-147 (live tasks come close to 256 in a long session).
+- **Integration:** `feature/chrome-integ` merged this with the same finding of the other team (BUG-140 = BUG-151, BUG-141 = BUG-150, BUG-147 = the second half of BUG-151): one `retire_task` (Dead, kernel stack, futex entries, the registries GLIBC_THREADS/GLIBC_CTIDS/THREAD_NAMES, RECLAIMABLE), one undo path for a refused fork (`undo_fork`, with the `[spawn-refused]` reason), 512 task slots and fd spaces, 480 thread kernel stacks (224 static, the rest from the heap on first use). `proof/chrome-integ/`.
 
 ### BUG-141 — a fork that failed late kept the arena of the child ✅ FIXED
 - **Status:**   FIXED (`7b0629c`) · **Severity:** MEDIUM (each refused fork kept 128 MiB once the table was full)
@@ -2100,6 +2105,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   existed (no kernel stack, no scheduler slot, no memory for its demand pages) without giving them back; the
   page-table failure path freed one frame of the arena.
 - **Fix:**      `fork_undo()`: what the exit of the child would have given back.
+- **Integration:** `feature/chrome-integ` merged this with the same finding of the other team (BUG-140 = BUG-151, BUG-141 = BUG-150, BUG-147 = the second half of BUG-151): one `retire_task` (Dead, kernel stack, futex entries, the registries GLIBC_THREADS/GLIBC_CTIDS/THREAD_NAMES, RECLAIMABLE), one undo path for a refused fork (`undo_fork`, with the `[spawn-refused]` reason), 512 task slots and fd spaces, 480 thread kernel stacks (224 static, the rest from the heap on first use). `proof/chrome-integ/`.
 
 ### BUG-142 — a 64 MiB glibc arena had its mmap window past its end ✅ FIXED
 - **Status:**   FIXED (`7b0629c`, test `bb2e7d8`) · **Severity:** HIGH on 512 MiB machines (gsdl crashed in every boot;
@@ -2159,6 +2165,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   threads alive at once, pthread_create: Resource temporarily unavailable -> FAILED`, after `320 of 320 -> PASS`.
 - **Fix:**      512 task slots; thread kernel stacks 224 static, 224..480 from the kernel heap on first use (kept per slot).
   Static memory +4 MiB (the 16 KiB kernel-task stack per slot). A session of five rounds: 210 live of 512.
+- **Integration:** `feature/chrome-integ` merged this with the same finding of the other team (BUG-140 = BUG-151, BUG-141 = BUG-150, BUG-147 = the second half of BUG-151): one `retire_task` (Dead, kernel stack, futex entries, the registries GLIBC_THREADS/GLIBC_CTIDS/THREAD_NAMES, RECLAIMABLE), one undo path for a refused fork (`undo_fork`, with the `[spawn-refused]` reason), 512 task slots and fd spaces, 480 thread kernel stacks (224 static, the rest from the heap on first use). `proof/chrome-integ/`.
 
 ### BUG-160 — Chromium's audio output fails: every clip with sound stops at t=0 (`AUDIO_RENDERER_ERROR`) ✅ FIXED (BUG-170, BUG-171)
 - **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH for criterion 3
@@ -2205,6 +2212,103 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 
 ### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
 - **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).
+
+### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
+- **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
+- **Actual:**   `do_glibc_fork` returned from four places (no thread kernel stack, no task slot, no frame for the copy of
+  the demand pages, no page table) with the child's arena (128 MiB for the browser), its page tables and a copy of every
+  committed demand page (~105 MiB) still allocated and owned by nobody. Two of the four said nothing. The census
+  (`[memstat] … unattributed`) showed it: 0 KiB, then 420 860 KiB after four refused forks, 659 300 KiB a minute later
+  (run b8 of `proof/chrome-mem/`); a browser retries.
+- **Fix:**      one undo path in `do_glibc_fork` gives it all back, as the exit of a child does, and says so
+  (`[fork] refused (…): N MiB of demand pages and M MiB of arena and tables given back`); every refusal names its
+  reason (`[spawn-refused]`).
+- **Proof:**    `[memt] forkfail`: process pool 1 708 032 → 528 336 kB free over three refused forks and still so after
+  the run (before); 0 kB lost (after). Browser: `unattributed=0 KiB` in every census of the proof runs.
+- **Integration:** `feature/chrome-integ` merged this with the same finding of the other team (BUG-140 = BUG-151, BUG-141 = BUG-150, BUG-147 = the second half of BUG-151): one `retire_task` (Dead, kernel stack, futex entries, the registries GLIBC_THREADS/GLIBC_CTIDS/THREAD_NAMES, RECLAIMABLE), one undo path for a refused fork (`undo_fork`, with the `[spawn-refused]` reason), 512 task slots and fd spaces, 480 thread kernel stacks (224 static, the rest from the heap on first use). `proof/chrome-integ/`.
+
+### BUG-151 — "the task table is full" with 135 live tasks; no room for the threads of 14 browser processes ✅ FIXED
+- **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (no thread, no process: the root of BUG-134, BUG-135 and BUG-137)
+- **Actual:**   `[spawn-refused] fork: the task table is full (thread kernel stacks 131/224, tasks 135/256)` (run c8).
+  The main task of every fork child, and every thread of a child that was killed or whose process exited under it,
+  stayed Dead and never offered its slot; only a thread that ended by itself did. After some tens of ended processes
+  the table of 256 was used up. With that fixed, a browser with 14 processes had 224 live tasks and all but 4 of the
+  224 thread kernel stacks in use (run d8), and its next fork was refused for want of a stack.
+- **Fix:**      `retire_task` (Dead and reclaimable) in `fork_child_teardown` and in the `exit_group` of a child; the
+  task table is 512 (fd spaces with it) and there are 448 thread kernel stacks, the ones past the first 224 taken from
+  the kernel heap the first time they are used.
+- **Proof:**    `[memt] forkmany`: 270 children one after the other, every second one ended by SIGTERM, each reaped
+  with its status. Browser: no `[spawn-refused]` line in the proof runs; peak tasks and stacks in the README.
+- **Note:**     this is what BUG-134 (a renderer aborts at its start: its thread could not be made) and BUG-135 (typed
+  URLs do not navigate: no renderer could be forked) looked like from outside in runs b8, c8 and c4. Whether every
+  occurrence of those two has this cause is for their owners to say; the site matrix after the PDF now passes.
+- **Integration:** `feature/chrome-integ` merged this with the same finding of the other team (BUG-140 = BUG-151, BUG-141 = BUG-150, BUG-147 = the second half of BUG-151): one `retire_task` (Dead, kernel stack, futex entries, the registries GLIBC_THREADS/GLIBC_CTIDS/THREAD_NAMES, RECLAIMABLE), one undo path for a refused fork (`undo_fork`, with the `[spawn-refused]` reason), 512 task slots and fd spaces, 480 thread kernel stacks (224 static, the rest from the heap on first use). `proof/chrome-integ/`.
+
+### BUG-152 — madvise(MADV_DONTNEED) zeroed the pages and kept every frame ✅ FIXED
+- **Status:**   FIXED (`b882f4d`) · **Severity:** HIGH for a long session (memory in use only grew)
+- **Actual:**   PartitionAlloc and V8 give memory back with `madvise(MADV_DONTNEED/MADV_FREE)` and nothing else; the
+  call zeroed the pages in place and kept them committed. The census counted 25-40% of the anonymous pages of the
+  browser's processes as all zeros (`zero~`).
+- **Fix:**      `paging::discard_demand_range`: unmap and free the pages the process owns alone; shared windows,
+  page-cache mappings and private file pages stay; a swapped-out page loses its slot. The next touch faults in zeros.
+- **Proof:**    `[memt] madvise`: 32 MiB touched and advised away came back in full (before: 0 kB of 32 768). Browser:
+  `zero~` 2-3% of the anonymous pages.
+
+### BUG-153 — the page cache of the packs only grew ✅ FIXED
+- **Status:**   FIXED (`15fe72b`) · **Severity:** MEDIUM (212-235 MiB in a session; it is what can be given back first)
+- **Fix:**      `euromm::PageCache` (recency, write state, eviction order; host-tested against a brute-force model) and
+  `pcache_reclaim`: under 4 MiB free, clean pages go, unmapped first, then mapped ones no process referenced since the
+  last pass, oldest first; mapped victims are unmapped from every process. See `design/MEMORY-RECLAIM.md` §4.
+- **Proof:**    host tests; in a 4 GiB guest under pressure the `[pcache]` lines of the README.
+
+### BUG-154 — the bytes of memory files lived in the kernel heap, twice when mapped; a memfd was never freed ✅ FIXED
+- **Status:**   FIXED (`f9a8870`) · **Severity:** HIGH (the open half of BUG-132)
+- **Actual:**   a memfd or an unlinked shared-memory file was a byte vector in the kernel heap (≤ 512 MiB at any guest
+  size) plus one frame per touched page of its mappings; a mapping of more than 4 MiB never saw what `write()` wrote,
+  nor `pread` what the mapping stored; and a memfd kept its made-up path, so the sweep of files without a name never
+  took it: every memfd a program made stayed until the run ended.
+- **Fix:**      a file without a name is a `euromm::ramfile::PageFile` (frames, 0 for a hole): one memory for read,
+  write, ftruncate and every mapping. Budget from the pool: half of it, never its last sixteenth; ENOSPC at the limit.
+  A memfd has no name from its creation. `design/MEMORY-RECLAIM.md` §3.
+- **Proof:**    `[memt] memfd` 12/12: 16 MiB written to a memfd grew the kernel heap by 0 kB (before: 16 MiB) and
+  mapping it took no further frame (before: 16 MiB more); a store through one mapping is read by `pread` and by a
+  second mapping; ftruncate to 4 MiB gave 12 MiB back; ENOSPC at the limit of a 96 MiB pool and 4 MiB of anonymous
+  memory still granted. Browser: `ramfile-bytes` in the kernel heap and `shm` frames in the README.
+
+### BUG-155 — out of memory ended whoever faulted, the browser included; in a system call it stopped the kernel ✅ FIXED
+- **Status:**   FIXED (`15fe72b`) · **Severity:** HIGH
+- **Actual:**   a page fault that found the pool empty failed: `[isolation] … (task 1) TERMINATED` for the browser's
+  main thread (the last line of BUG-137). The same fault from kernel mode (a system call copying into a page of its
+  caller that was never touched) went to `[idt] PAGE FAULT` and `halt()`.
+- **Fix:**      `memory_pressure` in the fault path: page cache, sweep of memory files nobody holds, swap when present;
+  below 1 MiB free one process is ended, chosen by `euromm::oom::pick_victim` (the child that holds the most; the
+  launched process only when it has no child). 64 frames are kept for faults from kernel mode; a system call that
+  still finds none ends its process, not the kernel. `design/MEMORY-RECLAIM.md` §5.
+- **Proof:**    `[memt] oom` 5/5: a child holds 60% of a 64 MiB pool, the main process touches another 60%: the child
+  is ended (wait status SIGKILL) and the main process gets its memory; a child that touches twice the pool is ended
+  and the parent lives. The path "inside a system call" has no self-test (see the README, not done).
+
+### BUG-156 — idle utility processes of the browser never end; each keeps a 128 MiB arena ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for a long session (after 27 processes, 13 on 4 GiB, no renderer can be forked)
+- **Actual:**   in the two-hour sessions of `proof/chrome-mem/` the process count only grows: 6, 16, 19, 21, 24, 26,
+  27 (16 GiB, one census every ~12 min). The last census lists 17 `video_capture.CrUtility` (one per round of the
+  video steps), 2 `unzip.CrUtility`, `data_decoder`, `on_device_model`, each with 1 MiB of anonymous memory and a
+  128 MiB arena in the process pool. Then `[fork] arena alloc FAILED (128 MiB, pool has 137 MiB)` 64-116 times per
+  session and the site steps fail. The demand pool is not involved (10 GiB free); nobody is ended.
+- **Expected:** a utility process ends when the browser drops its connection (on Linux within seconds).
+- **Not known:** whether the child never sees the end of its Mojo channel (an end of the socket still open in a
+  process that was forked later would do that) or the browser never closes it.
+- **Also:**     the split of the RAM in a process pool (up to half) and a demand pool is what makes this bite at
+  10 GiB free; `design/MEMORY-RECLAIM.md` §6.
+
+### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH (once in 12 browser sessions on the image of `f9a8870`)
+- **Actual:**   run s4 of `proof/chrome-mem/` (4 GiB, site matrix, after the fourth site): "the desktop loop did not
+  answer the serial console within 40 s". NMI probe: `sched::schedule_core+0x27c`, IF=0, CR2 0x11c030d9000; 153 live
+  tasks, 572 MiB of the demand pool and 387 MiB of the process pool free; no `[oom]`, no refused fork before it.
+- **Not known:** the cause. The reuse of the task slots of ended fork children (BUG-151) is new in what the scheduler
+  sees and is not ruled out; BUG-136 is an older wedge on the scheduler lock.
+- **Next:**     the probe with every task's state (it printed an empty "ready tasks" list); repeat s4.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

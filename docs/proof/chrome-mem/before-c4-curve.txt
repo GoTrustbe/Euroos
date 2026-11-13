@@ -1,0 +1,75 @@
+194 census samples over 83 min; pool 1300 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    0   1 euro-os        ok     430    +0    93    19     0    89    4    212   29   870  132   48     6
+    1   1 wikipedia      FAIL   484   +54   146    37     5    90    5    218   23   816  140   46     6
+    2   1 github         ok     624  +140   249    66     6   105    7    224   36   676  151   63     7
+    2   1 youtube        ok     795  +171   371    98     6   145    9    228   39   505  175   86    10
+    3   1 openstreetmap  ok     701   -94   298   102     9   135    9    228   30   599  168   72     9
+    3   1 pdf            ok     815  +114   351   113     9   180   11    231   39   485  177   85    12
+   10   2 euro-os        FAIL  1118  +303   299   120     9   135    9    234   15   182  150   50     9
+   11   2 wikipedia      FAIL  1078   -40   279   114     9   119    8    234   10   222  147   44     8
+   13   2 github         FAIL  1022   -56   143    58     3    89    5    234    8   278  133   30     6
+   15   2 youtube        FAIL  1189  +167   102    41     0    74    4    234    8   111  130   26     5
+   16   2 openstreetmap  FAIL  1300  +111   102    39     0    74    4    234   17     0  130   38     5
+   18   2 pdf            FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   32   3 euro-os        FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   34   3 wikipedia      FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   36   3 github         FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   38   3 youtube        FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   39   3 openstreetmap  FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   42   3 pdf            FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   55   4 euro-os        FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   57   4 wikipedia      FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   59   4 github         FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   61   4 youtube        FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   63   4 openstreetmap  FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   65   4 pdf            FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   78   5 euro-os        FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   80   5 wikipedia      FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+   82   5 github         FAIL  1300    +0   102    39     0    74    4    234   17     0  130   38     5
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later +303 +0 +0 +0   mean +76
+  wikipedia      first   +54   later -40 +0 +0 +0   mean -10
+  github         first  +140   later -56 +0 +0 +0   mean -14
+  youtube        first  +171   later +167 +0 +0   mean +56
+  openstreetmap  first   -94   later +111 +0 +0   mean +37
+  pdf            first  +114   later +0 +0 +0   mean +0
+
+after the warm-up (15 min): 154 samples over 68 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)     1300   1300   1300   1300     +0.0
+anon                      102    102    102    102     +0.0
+zero                       39     39     39     39     +0.0
+noaccess                    0      0      0      0     +0.0
+fileprivate                74     74     74     74     +0.0
+tables                      4      4      4      4     +0.0
+pagecache                 234    234    234    234     +0.0
+shm                        17     17     17     17     +0.0
+heap_used                 130    130    130    135     -0.1
+big_used                   52     52     51     52     +0.0
+ramfile_bytes              38     38     38     38     +0.0
+
+lowest free: 0 MiB of 1300; largest unattributed: 887264 KiB
+verdict: NOT flat (in use +0.0 MiB/h = +0.0% of the pool per hour; 14 kill/exhaustion lines; 866 MiB without an owner at the worst)
+  kill line near minute 15: [isolation] ring-3 page fault addr=0x11434b7f000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 26) TERMINATED
+  kill line near minute 15: [isolation] ring-3 page fault addr=0x11434b80000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 1) TERMINATED
+  kill line near minute 15: [demand] POOL EXHAUSTED at addr=0x10004963a31 (committed=718980 pages ~2808 MiB)
+  kill line near minute 15: [isolation] ring-3 page fault addr=0x10004963a31 code=PageFaultErrorCode(USER_MODE) -> process pid 0 (task 199) TERMINATED
+  kill line near minute 15: [isolation] ring-3 page fault addr=0x10008488c00 code=PageFaultErrorCode(USER_MODE | INSTRUCTION_FETCH) -> process pid 0 (task 62) TERMINATED
+  kill line near minute 16: [isolation] ring-3 page fault addr=0x10800312000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 32) TERMINATED
+  kill line near minute 18: [isolation] ring-3 page fault addr=0x10004b74663 code=PageFaultErrorCode(USER_MODE) -> process pid 0 (task 47) TERMINATED
+  kill line near minute 18: [isolation] ring-3 page fault addr=0x10800276000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 8) TERMINATED
+  kill line near minute 19: [isolation] ring-3 page fault addr=0x1080031c000 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 60) TERMINATED
+  kill line near minute 22: [isolation] ring-3 page fault addr=0x10004b74663 code=PageFaultErrorCode(USER_MODE) -> process pid 0 (task 51) TERMINATED
+  kill line near minute 36: [isolation] ring-3 page fault addr=0x10004bc03eb code=PageFaultErrorCode(USER_MODE) -> process pid 0 (task 65) TERMINATED
+  kill line near minute 36: [isolation] ring-3 page fault addr=0x10c04969010 code=PageFaultErrorCode(CAUSED_BY_WRITE | USER_MODE) -> process pid 0 (task 53) TERMINATED
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                68    24     0
+   1000 network.CrUtilit      10     6     0
+   1001 storage.CrUtilit       2     0     0
+   1002 CrRendererMain        19     7     0
+   1016 on_device_model.       1     0     0
