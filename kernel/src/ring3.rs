@@ -3416,6 +3416,9 @@ fn ensure_proc(path: &[u8]) -> bool {
         }
         b"/proc/euroos/mem" => {
             // The kernel's own memory account, kB per line (gmemt reads it).
+            // Files that lost their last holder since the last sweep are
+            // not memory in use: sweep before counting.
+            ram_file_sweep();
             let t = mem_totals();
             let (limit, used) = ram_file_budget();
             alloc::format!(
@@ -4067,11 +4070,9 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
     // One allocation at the exact size: this list is over a hundred thousand
     // entries with the chrome pack cached, and growing it by doubling asked a
     // fragmented heap for 2 MiB blocks it could not give (runs 63 and 65).
-    let n = SHARED_FRAMES.lock().iter().map(|(_, f)| f.len()).sum::<usize>() + DISK_PAGE_CACHE.lock().len();
+    let n = SHARED_FRAMES.lock().iter().map(|(_, f)| f.held()).sum::<usize>() + DISK_PAGE_CACHE.lock().len();
     let mut v: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(n + 16);
-    v.extend(SHARED_FRAMES.lock().iter()
-        .flat_map(|(_, frames)| frames.iter().copied())
-        .filter(|&p| p != 0));
+    v.extend(SHARED_FRAMES.lock().iter().flat_map(|(_, f)| f.frames()));
     // Disk-cache frames are shared between processes exactly the same way.
     v.extend(DISK_PAGE_CACHE.lock().frames());
     v.sort_unstable();
@@ -4140,9 +4141,13 @@ fn sync_shared_region(fi: usize, to_file: bool) {
     // read directly through the identity map — no user address needed, and no risk
     // of touching a page that has not been faulted in yet (an unallocated frame is
     // simply zeros, exactly what an untouched page reads as).
+    if is_paged(fi) {
+        return; // BUG-154: the frames are the file, there is no second copy
+    }
     let aliased = SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi);
     if aliased {
-        let frames = SHARED_FRAMES.lock().iter().find(|(f, _)| *f == fi).map(|(_, v)| v.clone());
+        let frames: Option<alloc::vec::Vec<u64>> = SHARED_FRAMES.lock().iter().find(|(f, _)| *f == fi)
+            .map(|(_, v)| (0..1024usize).map(|i| v.frame_at(i)).collect());
         let frames = match frames {
             Some(v) => v,
             None => return, // nothing touched yet: the file already reads as zeros
@@ -4269,7 +4274,7 @@ fn vfs_pread(fd: usize, buf: u64, len: usize, offset: usize) -> u64 {
     // buffer may live in demand memory: touching it can #PF, and handle_demand_fault
     // takes FILES.lock — holding it here would self-deadlock (IF=0, timer dead). This
     // is the chrome-scale wedge. (Disk-backed reads already clone-then-copy.)
-    let chunk: alloc::vec::Vec<u8> = {
+    let chunk: alloc::vec::Vec<u8> = if let Some(v) = paged_read(fi, offset, len) { v } else {
         let files = FILES.lock();
         // .get, not [fi]: a stale file index (fi == FILES.len() after an unlink
         // shifted the table) read as EOF instead of panicking the boot (runs 84, 95).
@@ -4387,7 +4392,7 @@ fn vfs_read(fd: usize, buf: u64, len: usize) -> u64 {
     // be in demand memory and #PF mid-copy, and handle_demand_fault takes FILES.lock
     // (self-deadlock, IF=0, timer dead — the chrome-scale wedge). OPEN_FDS (fds) is
     // safe to keep held: the fault handler does not take it.
-    let (chunk, n) = {
+    let (chunk, n) = if let Some(v) = paged_read(fi, off, len) { let n = v.len(); (v, n) } else {
         let files = FILES.lock();
         match files.get(fi) {
             Some((_, data)) => {
@@ -4468,6 +4473,18 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         Some(e) => e,
         None => return u64::MAX,
     };
+    if is_paged(fi) {
+        // BUG-154: the file is frames. The bytes are taken from the caller
+        // first (that may fault), then written with no fault possible.
+        let Some(bytes) = copy_from_user(buf, len) else { return u64::MAX };
+        return match paged_write(fi, off, &bytes) {
+            Some(Ok(n)) if n > 0 || len == 0 => {
+                fds[fd] = Some((fi, off + n));
+                n as u64
+            }
+            _ => (-28i64) as u64, // -ENOSPC: the files in memory are at their limit
+        };
+    }
     let mut files = FILES.lock();
     let Some(entry) = files.get_mut(fi) else { return u64::MAX };
     let data = entry.1.to_mut(); // clone-on-write if this were a borrowed lib (never)
@@ -7550,6 +7567,9 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
     if fi >= DISK_FI_BASE {
         return (-9i64) as u64; // WAD/proc-mem/disk fds are not truncatable
     }
+    if let Some(ok) = paged_set_len(fi, len) {
+        return if ok { 0 } else { (-27i64) as u64 }; // -EFBIG: past what a file can be
+    }
     let mut files = FILES.lock();
     if let Some(f) = files.get_mut(fi) {
         let path = f.0.clone();
@@ -7709,6 +7729,15 @@ fn vfs_unlink(path: &[u8]) -> u64 {
     SYMLINKS.lock().retain(|(q, _)| *q != p);
     MKDIRS.lock().retain(|q| *q != p);
     reclaim_tombstones(&dead);
+    // BUG-154: a file that lives on without a name (open, or mapped) is
+    // shared memory in the making: its bytes move out of the kernel heap.
+    if DEMAND_ENABLED.load(Ordering::Relaxed) {
+        for &fi in dead.iter() {
+            if file_referenced(fi) {
+                paged_adopt(fi);
+            }
+        }
+    }
     0
 }
 
@@ -7794,17 +7823,19 @@ pub fn ram_file_sweep() {
             nbytes += e.1.len() as u64;
             e.1 = alloc::borrow::Cow::Borrowed(&[]);
         }
-        let frames = {
+        let gone = {
             let mut sf = SHARED_FRAMES.lock();
-            match sf.iter().position(|(f, _)| *f == fi) {
-                Some(k) => sf.swap_remove(k).1,
-                None => alloc::vec::Vec::new(),
-            }
+            sf.iter().position(|(f, _)| *f == fi).map(|k| sf.swap_remove(k).1)
         };
-        for p in frames {
-            if p != 0 {
-                crate::procpool::demand_free(p);
-                nframes += 1;
+        if let Some(mut f) = gone {
+            nframes += f.held() as u64;
+            nbytes += if is_paged(fi) { f.len() } else { 0 };
+            f.release(&mut PoolFrames);
+        }
+        {
+            let mut pf = PAGED_FILES.lock();
+            if let Ok(k) = pf.binary_search(&fi) {
+                pf.remove(k);
             }
         }
         nfiles += 1;
@@ -8044,6 +8075,10 @@ fn vfs_size(fd: usize) -> Option<usize> {
     }
     // .get, not [fi]: a stale or out-of-range file index (fi == FILES.len() panicked
     // vfs_size in run 84, wedging the boot) reads as "no size" instead of a crash.
+    drop(fds);
+    if let Some(n) = with_paged(fi, |f| f.len() as usize) {
+        return Some(n);
+    }
     FILES.lock().get(fi).map(|(_, d)| d.len())
 }
 
@@ -10043,12 +10078,7 @@ pub fn run_dynamic(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
@@ -10175,12 +10205,7 @@ pub fn run_interp(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
@@ -11268,7 +11293,7 @@ static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(all
 /// through one mapping is a write through all of them. Handing out one address for
 /// every mapping would be simpler, but chrome keeps its mappings in a registry
 /// keyed BY ADDRESS and CHECK-fails when two of them collide.
-static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, alloc::vec::Vec<u64>)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, euromm::ramfile::PageFile)>> = Mutex::new(alloc::vec::Vec::new());
 /// Address ranges handed out for shared mappings: (base, length, file index).
 static SHARED_ALIASES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -11399,8 +11424,13 @@ fn memory_pressure() {
     if cached > 0 {
         pcache_reclaim((cached / 8).max(2048));
     }
-    // Files without a name that nothing holds any more: the desktop loop sweeps.
+    // Files without a name that nothing holds any more: at once for a fault
+    // from ring 3 (the sweep takes the locks a system call takes), by the
+    // desktop loop otherwise.
     ram_file_sweep_due();
+    if FAULT_CODE.load(Ordering::Relaxed) & 4 != 0 {
+        ram_file_sweep();
+    }
     if crate::procpool::demand_free_frames() >= OOM_AT {
         return;
     }
@@ -11586,33 +11616,37 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
     let alias = SHARED_ALIASES.lock().iter().find(|&&(b, l, _)| page >= b && page < b + l).copied();
     if let Some((abase, _alen, fi)) = alias {
         let idx = ((page - abase) / 4096) as usize;
+        let paged = is_paged(fi);
         let mut frames = SHARED_FRAMES.lock();
         if !frames.iter().any(|(f, _)| *f == fi) {
-            frames.push((fi, alloc::vec::Vec::new()));
+            if frames.try_reserve(1).is_err() {
+                return false;
+            }
+            frames.push((fi, euromm::ramfile::PageFile::new()));
         }
         let ent = frames.iter_mut().find(|(f, _)| *f == fi).unwrap();
-        if ent.1.len() <= idx {
-            ent.1.resize(idx + 1, 0);
-        }
-        let mut phys = ent.1[idx];
-        if phys == 0 {
-            phys = match crate::procpool::demand_alloc() {
-                Some(p) => p,
-                None => return false,
-            };
-            // A fresh page of shared memory reads as zeros, then takes the file's
-            // bytes if it has any (a freshly sized buffer has none).
-            unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096); }
-            let foff = idx * 4096;
-            let files = FILES.lock();
-            if let Some(f) = files.get(fi) {
-                if foff < f.1.len() {
-                    let n = (f.1.len() - foff).min(4096);
-                    // SAFETY: `phys` is an identity-mapped, zeroed 4 KiB frame.
-                    unsafe { core::ptr::copy_nonoverlapping(f.1[foff..].as_ptr(), phys as *mut u8, n); }
+        let had = ent.1.frame_at(idx);
+        // A fresh page of shared memory reads as zeros (PageFile::ensure_frame).
+        // None: the files in memory are at their limit or the pool is empty;
+        // the fault fails as one for anonymous memory does.
+        let phys = match ent.1.ensure_frame(&mut PoolFrames, idx) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        if had == 0 {
+            // A file that still has its bytes in the heap (not a paged one):
+            // the new page takes them, as before.
+            if !paged {
+                let foff = idx * 4096;
+                let files = FILES.lock();
+                if let Some(f) = files.get(fi) {
+                    if foff < f.1.len() {
+                        let n = (f.1.len() - foff).min(4096);
+                        // SAFETY: `phys` is an identity-mapped, zeroed 4 KiB frame.
+                        unsafe { core::ptr::copy_nonoverlapping(f.1[foff..].as_ptr(), phys as *mut u8, n); }
+                    }
                 }
             }
-            ent.1[idx] = phys;
             DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
         }
         drop(frames);
@@ -11736,6 +11770,10 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                 }
             } else {
                 let file_pos = foff + moff as usize;
+                if let Some(v) = paged_read(fidx, file_pos, fill) {
+                    // SAFETY: `phys` is an identity-mapped 4 KiB frame; v.len() <= fill <= 4096.
+                    unsafe { core::ptr::copy_nonoverlapping(v.as_ptr(), phys as *mut u8, v.len()); }
+                }
                 let files = FILES.lock();
                 if let Some(f) = files.get(fidx) {
                     let data = &f.1;
@@ -11902,12 +11940,7 @@ pub fn spawn_glibc_persistent(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     OUTPUT.lock().clear();
@@ -12549,12 +12582,7 @@ fn glibc_disk_launch(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
@@ -13234,14 +13262,180 @@ pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
     );
 }
 
-/// Forks to refuse from now on (the [memt] self-test).
-static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+// -- Memory files made of frames (BUG-154) --------------------------------------
+// A file without a name (a memfd; a shared-memory file that was unlinked while
+// open) is a `euromm::ramfile::PageFile`: its bytes are the frames its
+// mappings map. read, write, ftruncate and every MAP_SHARED mapping work on
+// the same frames, so there is one copy, none of it in the kernel heap, and a
+// hole costs nothing. The frames come from the demand pool and are counted
+// against a budget that follows the size of that pool (half of it, and never
+// its last sixteenth): at the limit a write or a grow is ENOSPC.
+//
+// SHARED_FRAMES holds one PageFile per file that has frames. For a file in
+// PAGED_FILES that is the file; for any other RAM file that was mapped shared
+// it is, as before, the frames of its mappings next to the bytes in the heap.
 
-/// (limit in kB or -1 when RAM files have no limit of their own, frames held).
+struct PoolFrames;
+static RAMFILE_BUDGET: Mutex<euromm::ramfile::Budget> = Mutex::new(euromm::ramfile::Budget::none());
+/// Files whose frames are the file; sorted.
+static PAGED_FILES: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec::new());
+static PAGED_ANY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+impl euromm::ramfile::Frames for PoolFrames {
+    fn alloc(&mut self) -> Option<u64> {
+        let total = crate::procpool::demand_total_frames();
+        let mut b = RAMFILE_BUDGET.lock();
+        let fresh = euromm::ramfile::Budget::for_pool(total);
+        b.limit = fresh.limit;
+        b.reserve = fresh.reserve;
+        if !b.try_charge(1, crate::procpool::demand_free_frames()) {
+            return None;
+        }
+        match crate::procpool::demand_alloc() {
+            Some(f) => Some(f),
+            None => {
+                b.uncharge(1);
+                None
+            }
+        }
+    }
+    fn free(&mut self, frame: u64) {
+        crate::procpool::demand_free(frame);
+        RAMFILE_BUDGET.lock().uncharge(1);
+    }
+    fn page(&mut self, frame: u64) -> &mut [u8] {
+        // SAFETY: a frame of the demand pool, identity-mapped, owned by the file.
+        unsafe { core::slice::from_raw_parts_mut(frame as *mut u8, 4096) }
+    }
+}
+
+/// (limit in kB, frames held) of the files made of frames.
 fn ram_file_budget() -> (i64, usize) {
     let _g = crate::sched::IfOffGuard::new();
-    (-1, SHARED_FRAMES.lock().iter().map(|(_, v)| v.iter().filter(|&&p| p != 0).count()).sum())
+    let total = crate::procpool::demand_total_frames();
+    let b = RAMFILE_BUDGET.lock();
+    (if total == 0 { -1 } else { (euromm::ramfile::Budget::for_pool(total).limit * 4) as i64 }, b.used)
 }
+
+fn is_paged(fi: usize) -> bool {
+    if !PAGED_ANY.load(Ordering::Relaxed) {
+        return false;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    PAGED_FILES.lock().binary_search(&fi).is_ok()
+}
+
+/// Run `f` on the PageFile of paged file `fi`. None: not a paged file.
+fn with_paged<R>(fi: usize, f: impl FnOnce(&mut euromm::ramfile::PageFile) -> R) -> Option<R> {
+    if !is_paged(fi) {
+        return None;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let mut sf = SHARED_FRAMES.lock();
+    let e = sf.iter_mut().find(|(x, _)| *x == fi)?;
+    Some(f(&mut e.1))
+}
+
+/// File `fi` is made of frames from now on (it is empty, or its bytes are
+/// moved out of the heap). Only while a demand pool exists; false otherwise
+/// and when the bytes do not fit the budget (the file then stays as it was).
+fn paged_adopt(fi: usize) -> bool {
+    if fi >= DISK_FI_BASE || crate::procpool::demand_total_frames() == 0 || is_paged(fi) {
+        return false;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let bytes: alloc::vec::Vec<u8> = match FILES.lock().get(fi) {
+        Some((_, d)) if matches!(d, alloc::borrow::Cow::Owned(_)) || d.is_empty() => d.to_vec(),
+        _ => return false, // part of the kernel image
+    };
+    {
+        let mut sf = SHARED_FRAMES.lock();
+        if !sf.iter().any(|(x, _)| *x == fi) {
+            if sf.try_reserve(1).is_err() {
+                return false;
+            }
+            sf.push((fi, euromm::ramfile::PageFile::new()));
+        }
+        let e = sf.iter_mut().find(|(x, _)| *x == fi).unwrap();
+        // Frames a mapping already has keep what the mapping wrote: the
+        // bytes of the heap go only where there is no frame yet.
+        let mut off = 0usize;
+        while off < bytes.len() {
+            let n = (bytes.len() - off).min(4096);
+            if e.1.frame_at(off / 4096) == 0 && bytes[off..off + n].iter().any(|&b| b != 0)
+                && e.1.write(&mut PoolFrames, off as u64, &bytes[off..off + n]).is_err()
+            {
+                return false;
+            }
+            off += n;
+        }
+        if e.1.set_len(&mut PoolFrames, bytes.len() as u64).is_err() {
+            return false;
+        }
+    }
+    if let Some(e) = FILES.lock().get_mut(fi) {
+        e.1 = alloc::borrow::Cow::Borrowed(&[]);
+    }
+    let mut pf = PAGED_FILES.lock();
+    if let Err(i) = pf.binary_search(&fi) {
+        pf.insert(i, fi);
+    }
+    PAGED_ANY.store(true, Ordering::Relaxed);
+    true
+}
+
+/// Length of RAM file `fi`, whatever it is made of.
+fn ram_len(fi: usize) -> usize {
+    match with_paged(fi, |f| f.len() as usize) {
+        Some(n) => n,
+        None => {
+            let _g = crate::sched::IfOffGuard::new();
+            FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0)
+        }
+    }
+}
+
+/// Up to `len` bytes of paged file `fi` at `off`. None: not a paged file.
+fn paged_read(fi: usize, off: usize, len: usize) -> Option<alloc::vec::Vec<u8>> {
+    with_paged(fi, |f| {
+        let n = len.min((f.len() as usize).saturating_sub(off));
+        let mut v: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        if n == 0 || v.try_reserve_exact(n).is_err() {
+            return v;
+        }
+        v.resize(n, 0);
+        let got = f.read(&mut PoolFrames, off as u64, &mut v);
+        v.truncate(got);
+        v
+    })
+}
+
+/// Write to paged file `fi`: Some(Ok(bytes written)) or Some(Err(())) for
+/// ENOSPC. None: not a paged file.
+fn paged_write(fi: usize, off: usize, data: &[u8]) -> Option<Result<usize, ()>> {
+    with_paged(fi, |f| f.write(&mut PoolFrames, off as u64, data).map_err(|_| ()))
+}
+
+/// ftruncate of paged file `fi`. None: not a paged file.
+fn paged_set_len(fi: usize, len: usize) -> Option<bool> {
+    with_paged(fi, |f| f.set_len(&mut PoolFrames, len as u64).is_ok())
+}
+
+/// Every frame of every file back to the pool, and no file is paged any more:
+/// the run that owned the pool is over.
+fn shared_frames_drop_all() {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut all = core::mem::take(&mut *SHARED_FRAMES.lock());
+    for (_, f) in all.iter_mut() {
+        f.release(&mut PoolFrames);
+    }
+    PAGED_FILES.lock().clear();
+    PAGED_ANY.store(false, Ordering::Relaxed);
+    *RAMFILE_BUDGET.lock() = euromm::ramfile::Budget::none();
+}
+
+/// Forks to refuse from now on (the [memt] self-test).
+static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// [memt]: memory that comes back, and what happens when it runs out. Five
 /// runs of `gmemt` (userland/glibc/gmemt.c), each in a demand-paged process:
@@ -13572,12 +13766,7 @@ pub fn run_glibc(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
@@ -15084,7 +15273,7 @@ pub fn mem_totals() -> MemTotals {
     t.pool_free = crate::procpool::demand_free_frames();
     t.pcache = DISK_PAGE_CACHE.lock().len();
     let per_file: alloc::vec::Vec<(usize, usize)> = SHARED_FRAMES.lock().iter()
-        .map(|(fi, v)| (*fi, v.iter().filter(|&&p| p != 0).count())).collect();
+        .map(|(fi, v)| (*fi, v.held())).collect();
     {
         let files = FILES.lock();
         for &(fi, n) in per_file.iter() {
@@ -16067,7 +16256,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // addresses are not cosmetic: chrome registers its mappings by
                     // address and CHECK-fails on a collision.
                     if DEMAND_ENABLED.load(Ordering::Relaxed) {
-                        let fsz = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+                        let fsz = ram_len(fi);
                         let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
                         let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
                         if start + region > DEMAND_BASE + DEMAND_SIZE {
@@ -16102,7 +16291,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     } else {
                         // First mapping: reserve the whole file (chrome ftruncates to the
                         // final size before mapping), fill it once, and record it.
-                        let fsz = FILES.lock().get(fi).map(|(_, d)| d.len()).unwrap_or(0);
+                        let fsz = ram_len(fi);
                         let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
                         // A BIG shared buffer belongs in the sparse demand region, not in
                         // the ~30 MiB arena mmap window: chrome maps a 64 MiB shared pool
@@ -16361,8 +16550,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     crate::serial_println!("[linux-abi] mmap(fd={a5}, off={off}, {len} B) DISK-backed -> {base:#x} ({copy} B read)");
                     return base;
                 }
+                let paged_bytes = paged_read(fi, off, len as usize);
                 let files = FILES.lock();
-                let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
+                let data: &[u8] = match paged_bytes.as_ref() {
+                    Some(v) => &v[..],
+                    None => files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]),
+                };
+                let off = if paged_bytes.is_some() { 0 } else { off };
                 let copy = if off < data.len() { (data.len() - off).min(len as usize) } else { 0 };
                 unsafe {
                     if copy > 0 {
@@ -16900,6 +17094,13 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             };
             if fi >= DISK_FI_BASE {
                 return (-9i64) as u64; // disk/WAD/proc-mem fds not fallocatable
+            }
+            if let Some(cur) = with_paged(fi, |f| f.len() as usize) {
+                // Frames come when the pages are touched or written.
+                return match cur >= need || paged_set_len(fi, need) == Some(true) {
+                    true => 0,
+                    false => (-28i64) as u64,
+                };
             }
             let mut files = FILES.lock();
             match files.get_mut(fi) {
@@ -18016,6 +18217,27 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let path = alloc::format!("/memfd:{}:{seq}", String::from_utf8_lossy(&name));
             register_file(&path, alloc::vec::Vec::new());
             let fd = vfs_open(path.as_bytes());
+            // BUG-154: a memfd is not in the namespace. Its entry kept the
+            // made-up path for good, so the sweep of files without a name
+            // never took it and every memfd a program ever made stayed in
+            // memory after its last close. Without a name it goes with its
+            // last descriptor and mapping; and it is made of frames from its
+            // first byte on.
+            if fd != u64::MAX {
+                if let Some(fi) = OPEN_FDS.lock().get(fd as usize).and_then(|s| *s).map(|(fi, _)| fi) {
+                    {
+                        let _g = crate::sched::IfOffGuard::new();
+                        if let Some(e) = FILES.lock().get_mut(fi) {
+                            if e.0 == path {
+                                e.0.clear();
+                            }
+                        }
+                    }
+                    if DEMAND_ENABLED.load(Ordering::Relaxed) {
+                        paged_adopt(fi);
+                    }
+                }
+            }
             if fd != u64::MAX && a2 & 0x1 != 0 { fd_set_cloexec(fd, true); } // MFD_CLOEXEC
             // MFD_ALLOW_SEALING decides whether this file can ever be sealed.
             if fd != u64::MAX {
@@ -18847,12 +19069,7 @@ pub fn run_args(
     // pool (a 4 MiB region is 1024 of them); dropping the table without freeing them
     // leaks a little more with every process, and the program that finally finds the
     // pool empty is never the one that lost them.
-    for (_, frames) in SHARED_FRAMES.lock().iter() {
-        for &phys in frames.iter().filter(|&&p| p != 0) {
-            crate::procpool::demand_free(phys);
-        }
-    }
-    SHARED_FRAMES.lock().clear();
+    shared_frames_drop_all();
     SHARED_ALIASES.lock().clear();
     SHARED_ANY.store(false, Ordering::Relaxed);
     unsafe {
