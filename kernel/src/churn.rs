@@ -150,6 +150,30 @@ pub fn sync_socket_test(alloc: &mut FrameAllocator) {
         if skipped { "OK (not run: no room for a second process)" } else if exit == 77 { "OK ✓" } else { "FAILED" });
 }
 
+/// BUG-147: 320 threads of one glibc process alive at the same time
+/// (gmanythreads.c), more than the 256 task slots and 224 thread kernel stacks
+/// of the tree before; a browser session had 214 live tasks. Exit 77 = all
+/// created and joined; the thread kernel stacks back to where they were.
+pub fn many_threads_test(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    let k0 = crate::ring3::thread_kstacks_used();
+    let prev = crate::ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gmanythreads_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gmanythreads"], &[b"PATH=/bin"], caps);
+    crate::ring3::DEMAND_ENABLED.store(prev, core::sync::atomic::Ordering::Relaxed);
+    crate::ring3::reap_dead(alloc);
+    let k1 = crate::ring3::thread_kstacks_used();
+    let line = out.lines().rev().find(|l| l.contains("GMANYTHREADS:"))
+        .map(|l| l.trim_end().replace("GMANYTHREADS: ", "")).unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == u64::MAX;
+    let ok = exit == 77 && k1 == k0;
+    crate::serial_println!(
+        "[many-threads] 320 threads of one process alive at once: {line} (exit {}) · thread-kstacks {k0}→{k1} → {}",
+        if skipped { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { "OK (not run: no arena for a glibc program)" } else if ok { "OK ✓" } else { "FAILED" });
+}
+
 /// Filesystem lifecycle: create / write / rename / read back / remove, several
 /// rounds on the live root; every op must succeed, data must read back intact,
 /// the directory must be empty and removable after each round, a sentinel file

@@ -8233,6 +8233,7 @@ static GTHREADCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gthreadchu
 static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn");
 static GSLOTS_ELF: &[u8] = include_bytes!("../../userland/glibc/gslots");
 static GSYNCSOCK_ELF: &[u8] = include_bytes!("../../userland/glibc/gsyncsock");
+static GMANYTHREADS_ELF: &[u8] = include_bytes!("../../userland/glibc/gmanythreads");
 static GTEST_ELF: &[u8] = include_bytes!("../../userland/glibc/gtest");
 static GTHREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gthread");
 // Multi-library test: needs libm.so.6 (a SECOND real shared lib) + dlopen/dlsym.
@@ -8379,6 +8380,7 @@ pub fn gthreadchurn_bytes() -> &'static [u8] { GTHREADCHURN_ELF }
 pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 pub fn gslots_bytes() -> &'static [u8] { GSLOTS_ELF }
 pub fn gsyncsock_bytes() -> &'static [u8] { GSYNCSOCK_ELF }
+pub fn gmanythreads_bytes() -> &'static [u8] { GMANYTHREADS_ELF }
 /// A richer glibc test: printf + malloc + pthreads.
 pub fn gtest_bytes() -> &'static [u8] { GTEST_ELF }
 /// A threaded glibc test: pthread_create + join of 3 workers.
@@ -9027,6 +9029,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gslots" => include_bytes!("../../userland/glibc/gslots.sig"),
         "/bin/gsyncsock" => include_bytes!("../../userland/glibc/gsyncsock.sig"),
+        "/bin/gmanythreads" => include_bytes!("../../userland/glibc/gmanythreads.sig"),
         "/bin/gunix" => include_bytes!("../../userland/glibc/gunix.sig"),
         "/bin/gnet" => include_bytes!("../../userland/glibc/gnet.sig"),
         "/bin/gunlink" => include_bytes!("../../userland/glibc/gunlink.sig"),

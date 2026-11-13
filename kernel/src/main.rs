@@ -4250,6 +4250,8 @@ fn main() -> Status {
         churn::fork_thread_churn(&mut allocator);
         // BUG-170: the sync socket of Chromium's audio stream ([syncsock]).
         churn::sync_socket_test(&mut allocator);
+        // BUG-147: more live threads than the old task table ([many-threads]).
+        churn::many_threads_test(&mut allocator);
         churn::fs_churn(&mut vfs);
         churn::net_churn();
         churn::surface_churn();
