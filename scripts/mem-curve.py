@@ -12,7 +12,8 @@ site of its matrix. This script reads both:
   * the time series of the heartbeats (--csv);
   * the slope of every owner after the warm-up, in MiB per hour (least squares), and
     the verdict "flat" when what the pool has in use grows by less than 5% of the pool
-    per hour and no kill line is in the log.
+    per hour, no kill line is in the log and less than 1% of the pool was ever without
+    an owner.
 
 Every figure is MiB as the kernel printed it. No guest is started here.
 """
@@ -131,11 +132,14 @@ def main():
         used = rows[0][1]
         sl = slope(xs, used)
         pool = late[-1]["pool"]
-        flat = sl < 0.05 * pool and not kills
+        lost = max(abs(s["unattributed_kib"]) for s in samples) / 1024
+        # Flat: little growth, nobody ended, and every frame has an owner (frames that
+        # nobody owns do not grow any more once the pool is empty, which is not "flat").
+        flat = sl < 0.05 * pool and not kills and lost < 0.01 * pool
         print(f"\nlowest free: {min(s['free'] for s in samples)} MiB of {pool}; largest unattributed: "
               f"{max(abs(s['unattributed_kib']) for s in samples)} KiB")
         print(f"verdict: {'flat' if flat else 'NOT flat'} (in use {sl:+.1f} MiB/h = {100 * sl / pool:+.1f}% of the pool per hour; "
-              f"{len(kills)} kill/exhaustion lines)")
+              f"{len(kills)} kill/exhaustion lines; {lost:.0f} MiB without an owner at the worst)")
     for tick, line in kills[:12]:
         print(f"  kill line near minute {(tick - t0) / a.hz / 60:.0f}: {line}")
     last = samples[-1]

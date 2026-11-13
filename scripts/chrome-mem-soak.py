@@ -9,7 +9,9 @@ matrix are that harness's own. What this adds is the loop and its own YouTube st
   per round: every site of the matrix (the harness asks the kernel for `ramfiles`
              after each, which prints the memory census), then the YouTube step with
              a video that plays for --video-seconds (picture and sound are checked
-             by the harness), then a census.
+             by the harness), then a census; then a public video file (Big Buck Bunny from
+             Wikimedia Commons) in the browser's own player, for the rounds in which
+             YouTube does not let a guest play.
 
 No logins, no accounts. YouTube as a guest: the consent dialog is answered with a
 real click; a "Sign in to confirm you're not a bot" page is reported as it is.
@@ -28,27 +30,31 @@ _spec.loader.exec_module(cs)
 
 
 def pills(g, s):
-    """Wide one-colour pill buttons on a light page: [(x_centre, y_centre, width, colour)], top to
-    bottom then left to right. A pill is a run of 70 to 330 px of one colour that is not near white,
-    found again with the same ends some rows further down (its label interrupts the rows between)."""
+    """Wide dark pill buttons on a light page: [(x_centre, y_centre, width)], top to bottom
+    then left to right. A pill is a run of 60 to 330 dark pixels (Google's buttons are shaded,
+    not one colour) that is found again with the same ends some rows further down; its label
+    interrupts the rows between."""
     x0, y0, x1, y1 = g.content()
+    dark = lambda x, y: sum(s.px(x, y)) < 240
     runs = []
     for y in range(y0 + 40, y1 - 4, 3):
         x = x0 + 8
         while x < x1 - 8:
-            c = s.px(x, y)
+            if not dark(x, y):
+                x += 2
+                continue
             n = 0
-            while x + n < x1 - 8 and s.px(x + n, y) == c:
+            while x + n < x1 - 8 and dark(x + n, y):
                 n += 2
-            if 70 <= n <= 330 and sum(c) < 600:
-                runs.append((x, x + n, y, c))
-            x += max(n, 2)
+            if 60 <= n <= 330:
+                runs.append((x, x + n, y))
+            x += n + 2
     found = []
     for a in runs:
-        same = [b for b in runs if b[3] == a[3] and abs(b[0] - a[0]) <= 14 and abs(b[1] - a[1]) <= 14 and 0 <= b[2] - a[2] <= 60]
+        same = [b for b in runs if abs(b[0] - a[0]) <= 14 and abs(b[1] - a[1]) <= 14 and 0 <= b[2] - a[2] <= 60]
         top, bottom = a[2], max(b[2] for b in same)
         if 18 <= bottom - top <= 60 and not any(abs(f[0] - (a[0] + a[1]) // 2) < 30 and abs(f[1] - (top + bottom) // 2) < 30 for f in found):
-            found.append(((a[0] + a[1]) // 2, (top + bottom) // 2, a[1] - a[0], a[3]))
+            found.append(((a[0] + a[1]) // 2, (top + bottom) // 2, a[1] - a[0]))
     return sorted(found, key=lambda f: (f[1] // 30, f[0]))
 
 
@@ -120,8 +126,10 @@ def youtube_play(g, seconds, rnd):
                 f"clicked at {hit[:2]} (a {hit[2]} px pill), {len(ps)} pills seen; afterwards {url2}, {white_share(g, s2):.0%} of the player area white")
             s = s2
         else:
-            answered = False
-            rec(f"youtube: consent dialog on the {where} page (round {rnd})", False, "no pair of buttons found after 5 wheel steps; see the yt-consent screenshots")
+            # White where the player should be, and no buttons: not a dialog this code knows
+            # (a page that is still a skeleton looks like this). Recorded, not judged.
+            print(f"[chrome-mem-soak] round {rnd}: the {where} page is mostly white and shows no pair of dialog buttons "
+                  f"after 5 wheel steps (yt-consent-{where}{tag}-*.png)", flush=True)
     # The player: top left of the page, 16:9 over most of the width at this window size.
     px0, py0 = g.page(24, 80)
     pw = min(g.xw - 48, 1280)
@@ -151,6 +159,52 @@ def youtube_play(g, seconds, rnd):
             "consent": answered}
 
 
+FREE_VIDEO = "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.vp9.webm"
+
+
+def video_play(g, url, seconds, rnd):
+    """A video file in the browser's own player (a public file, no account, no dialog): picture
+    and sound for `seconds`. The browser starts such a document by itself; when the picture does
+    not move after 8 s the player gets a real click."""
+    tag = f"-r{rnd}" if rnd <= 3 else "-last"
+    ok, secs, detail = g.navigate(url, url.split("/")[2])
+    g.move(g.w - 4, g.h - 4)
+    g.nap(6.0)
+    x0, y0, x1, y1 = g.content()
+    region = (x0 + 60, y0 + 40, x1 - 60, y1 - 80)
+    a = g.digest(g.shot(), region)
+    g.nap(4.0)
+    clicked = False
+    if g.digest(g.shot(), region) == a:
+        g.click((x0 + x1) // 2, (y0 + y1) // 2)
+        clicked = True
+        g.nap(2.0)
+        g.move(g.w - 4, g.h - 4)
+    wav = os.path.join(g.wd, "audio.wav")
+    wav0 = os.path.getsize(wav) if os.path.exists(wav) else 0
+    t0 = time.time()
+    digests, shots = [], 0
+    while time.time() - t0 < seconds:
+        s = g.shot()
+        digests.append(g.digest(s, region))
+        if int(time.time() - t0) // 50 >= shots:
+            shots += 1
+            s.save_png(os.path.join(g.wd, f"video-play{tag}-{shots:02d}.png"))
+        if g.new_bad():
+            break
+        time.sleep(4.0)
+    changes = sum(1 for i in range(1, len(digests)) if digests[i] != digests[i - 1])
+    levels = cs.wav_levels(wav, start=wav0)
+    loud = sum(1 for v in levels if v > 40)
+    picture = ok and len(digests) >= seconds // 6 and changes >= (len(digests) - 1) * 0.9
+    sound = len(levels) >= seconds // 5 - 2 and loud >= len(levels) * 0.8
+    ram = g.ramfiles()
+    g.step("site video-play", picture and sound,
+           f"round {rnd}: {seconds} s of {url}: {detail} after {secs:.1f} s; picture: {changes} of {len(digests) - 1} consecutive screendumps "
+           f"differ; sound: {loud} of {len(levels)} five-second windows above the noise floor; started by "
+           f"{'a click on the player' if clicked else 'the browser'}; RAM files {ram}")
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -169,6 +223,8 @@ def main():
     ap.add_argument("--hours", type=float, default=2.0)
     ap.add_argument("--video-seconds", type=int, default=120)
     ap.add_argument("--no-video", action="store_true")
+    ap.add_argument("--free-video-seconds", type=int, default=120,
+                    help="per round, also play a public video file in the browser's own player for this long (0: not)")
     a = ap.parse_args()
     # The fields chrome-smoke's own argument parser would have set.
     a.only, a.rounds, a.soak_hours, a.starts = "", 1, a.hours, 0
@@ -204,6 +260,8 @@ def main():
                            f"consent dialog: {'none shown' if y['consent'] is None else ('answered' if y['consent'] else 'NOT answered')}; RAM files {ram}")
                 else:
                     g.step("site youtube-play", False, f"round {rnd}: the watch page did not load; RAM files {ram}")
+                if a.free_video_seconds > 0:
+                    video_play(g, FREE_VIDEO, a.free_video_seconds, rnd)
             mem.append((int(time.time() - t0), g.memory()))
             print(f"[chrome-mem-soak] round {rnd} done after {int(time.time() - t0)} s: {mem[-1][1]}", flush=True)
             extra["soak_rounds"], extra["soak_memory"] = rnd, mem
