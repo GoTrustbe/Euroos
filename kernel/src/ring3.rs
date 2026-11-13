@@ -3414,6 +3414,23 @@ fn ensure_proc(path: &[u8]) -> bool {
             }
             s.into_bytes()
         }
+        b"/proc/euroos/mem" => {
+            // The kernel's own memory account, kB per line (gmemt reads it).
+            let t = mem_totals();
+            let (limit, used) = ram_file_budget();
+            alloc::format!(
+                "demand_total_kb {}
+demand_free_kb {}
+procpool_free_kb {}
+heap_used_kb {}
+ramfile_frames_kb {}
+ramfile_limit_kb {}
+pagecache_kb {}
+",
+                t.pool_total * 4, t.pool_free * 4, t.procpool_free * 4, t.heap_used / 1024,
+                used as i64 * 4, limit, t.pcache * 4)
+            .into_bytes()
+        }
         b"/proc/meminfo" => {
             // MemTotal: the QEMU RAM (256 MiB). MemFree/Available: live kernel-heap-free.
             let free_kb = free as u64 / 1024;
@@ -8129,6 +8146,9 @@ static FORKPIPE_ELF: &[u8] = include_bytes!("../../userland/forkpipe.elf");
 /// (userland/musl/); `fdsem` is freestanding and runs, forks and execs on the
 /// background path (userland/fdsem.c).
 static GFDSEM_ELF: &[u8] = include_bytes!("../../userland/glibc/gfdsem");
+/// `gmemt` (userland/glibc/gmemt.c): memory that comes back and what happens
+/// when it runs out; the [memt] self-test runs its four modes.
+static GMEMT_ELF: &[u8] = include_bytes!("../../userland/glibc/gmemt");
 static MFDSEM_ELF: &[u8] = include_bytes!("../../userland/musl/mfdsem");
 static FDSEM_ELF: &[u8] = include_bytes!("../../userland/fdsem.elf");
 /// The [fdspace] self-test program (userland/pipehold.c): holds a pipe and a file open.
@@ -8941,6 +8961,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gscm" => include_bytes!("../../userland/glibc/gscm.sig"),
         "/bin/gscm3" => include_bytes!("../../userland/glibc/gscm3.sig"),
         "/bin/gfdsem" => include_bytes!("../../userland/glibc/gfdsem.sig"),
+        "/bin/gmemt" => include_bytes!("../../userland/glibc/gmemt.sig"),
         "/bin/mfdsem" => include_bytes!("../../userland/musl/mfdsem.sig"),
         "/bin/fdsem" => include_bytes!("../../userland/fdsem.elf.sig"),
         "/bin/gsdl" => include_bytes!("../../userland/glibc/gsdl.sig"),
@@ -10805,10 +10826,13 @@ fn do_glibc_fork() -> u64 {
     // Child task: resume at the fork-return RIP on the child's own address space,
     // with rax=0 (spawn_thread forces it) and the parent's user RSP (same VA, own
     // frames via the arena copy).
-    let (slot, kstack_top) = match alloc_thread_kstack() {
+    // [memt]: the self-test asks for the next forks to be refused here, the
+    // place where a fork has taken everything it takes.
+    let injected = FORK_REFUSE_NEXT.load(Ordering::Relaxed) > 0 && FORK_REFUSE_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
+    let (slot, kstack_top) = match if injected { None } else { alloc_thread_kstack() } {
         Some(s) => s,
         None => {
-            spawn_refused("fork", "no thread kernel stack left");
+            spawn_refused("fork", if injected { "refused for the [memt] self-test" } else { "no thread kernel stack left" });
             return (-11i64) as u64; // -EAGAIN
         }
     };
@@ -12871,6 +12895,67 @@ pub fn fdsem_selftest(falloc: &mut FrameAllocator) {
         gexit as i64, before.0, before.1, before.2, after.0, after.1, after.2,
         if ok { "OK ✓" } else { "FAILED" }
     );
+}
+
+/// Forks to refuse from now on (the [memt] self-test).
+static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// (limit in kB or -1 when RAM files have no limit of their own, frames held).
+fn ram_file_budget() -> (i64, usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    (-1, SHARED_FRAMES.lock().iter().map(|(_, v)| v.iter().filter(|&&p| p != 0).count()).sum())
+}
+
+/// [memt]: memory that comes back, and what happens when it runs out. Four
+/// runs of `gmemt` (userland/glibc/gmemt.c), each in a demand-paged process:
+///
+/// * forkfail: a fork the kernel refuses after it took the child's arena, page
+///   tables and a copy of every demand page gives all of it back (BUG-150);
+/// * madvise: MADV_DONTNEED and MADV_FREE give the frames back (BUG-152);
+/// * memfd: a memory file is frames, one memory for read/write and every
+///   mapping, with ENOSPC at a limit that follows the pool (BUG-154);
+/// * oom: the main process needs a page while a child holds the pool; the
+///   child is ended and the main process goes on (BUG-155).
+pub fn memt_selftest(falloc: &mut FrameAllocator) {
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let prev_demand = DEMAND_ENABLED.swap(true, Ordering::Relaxed);
+    let prev_swap = SWAP_DEMAND_EVICT.swap(false, Ordering::Relaxed);
+    let mut all = true;
+    let mut ran = 0;
+    // (mode, demand pool cap in MiB or 0, forks to refuse)
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
+        DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
+        FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
+        let free0 = falloc.free_frames();
+        let pp0 = crate::procpool::free_frames();
+        let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", mode.as_bytes()], &[b"PATH=/bin"], caps);
+        FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
+        DEMAND_POOL_CAP_FRAMES.store(0, Ordering::Relaxed);
+        if exit == u64::MAX {
+            crate::serial_println!("[memt] {mode}: not run (no arena for a glibc program on this machine)");
+            continue;
+        }
+        ran += 1;
+        for l in out.lines().filter(|l| l.starts_with("FAIL")) {
+            crate::serial_println!("[memt]   {mode}: {}", l.trim_end());
+        }
+        let sum = out.lines().rev().find(|l| l.starts_with("GMEMT")).map(|l| String::from(l.trim_end()))
+            .unwrap_or_else(|| String::from("(no result line)"));
+        // After the run every frame is back where it came from.
+        let (free1, pp1) = (falloc.free_frames(), crate::procpool::free_frames());
+        let back = free1 + 16 >= free0 && pp1 + 16 >= pp0;
+        let ok = exit == 0 && sum.contains("PASS") && back;
+        all &= ok;
+        crate::serial_println!("[memt] {mode}: {sum} (exit {}); frames after the run: {free1} free (was {free0}), process pool {pp1} (was {pp0}) → {}",
+            exit as i64, if ok { "OK ✓" } else { "FAILED" });
+    }
+    SWAP_DEMAND_EVICT.store(prev_swap, Ordering::Relaxed);
+    DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+    if ran == 0 {
+        crate::serial_println!("[memt] memory self-test: not run on this machine → OK ✓");
+    } else {
+        crate::serial_println!("[memt] memory self-test, {ran} modes → {}", if all { "OK ✓" } else { "FAILED" });
+    }
 }
 
 /// What the [fdspace] line says about the fd spaces themselves.
