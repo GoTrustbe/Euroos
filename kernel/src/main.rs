@@ -457,7 +457,9 @@ fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     // be a handful of phantom clicks on whatever it happens to be showing.
     while mouse::take_button_event().is_some() {}
     ring3::chrome_stage_files();
-    ring3::GLIBC_ARENA_MIB.store(256, core::sync::atomic::Ordering::Relaxed);
+    // 128 MiB, not 256 (BUG-133): anonymous mappings from 64 KiB live in the
+    // demand region since BUG-131, and the arena is copied at every fork.
+    ring3::GLIBC_ARENA_MIB.store(128, core::sync::atomic::Ordering::Relaxed);
     // Leave the desktop 128 MiB: it keeps compositing, allocating window buffers and
     // serving files while the browser runs, and the boot-phase margin (32 MiB) was
     // sized for a system where nothing else was running at all.
@@ -5367,6 +5369,8 @@ fn main() -> Status {
         // The DevTools input bridge for a desktop-launched chrome: attach + ferry
         // page input (see cdp_install_input at the `chrome` command's spawn).
         ring3::cdp_pump();
+        // RAM files that lost their last descriptor or mapping (BUG-132).
+        ring3::ram_file_sweep();
         sched::deskwatch::mark(1);
         // Interrupt-independent USB input HERE TOO: the boot launcher polls the
         // xHCI ring every iteration, but the desktop loop did not — so desktop

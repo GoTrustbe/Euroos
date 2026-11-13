@@ -520,6 +520,11 @@ class Chrome(gs.Guest):
             # page stays on the screen for seconds after that.
             self.move(self.w - 4, self.h - 4)
             painted, loaded = self.wait_loaded(75)
+            # YouTube draws its consent dialog over the page: answer it ("Reject
+            # all") before the picture is judged, as a user would.
+            if "youtube" in site["host"] and self.reject_overlay():
+                self.move(self.w - 4, self.h - 4)
+                self.wait_loaded(30)
             s, paint, settled = self.settle(45, quiet=2.5, save_as=f"site-{name}{tag}")
             n, share = self.colours(s)
             bad = self.new_bad()
@@ -804,10 +809,16 @@ class Chrome(gs.Guest):
             s, _, _ = self.settle(60, quiet=2.5, save_as="youtube-after-consent")
             rec("youtube: consent dialog answered with 'Reject all'", "consent" not in (self.tabs() or [("", "")])[0][0], f"{self.tabs()}")
         ok, secs, detail = self.navigate(VIDEO_URL, "watch")
+        self.move(self.w - 4, self.h - 4)
+        self.wait_loaded(60)
         s, _, _ = self.settle(60, quiet=3.0, save_as="youtube-watch")
         rec("youtube: the watch page loads", ok, f"{detail} after {secs:.1f} s")
         if not ok:
             return False
+        # The consent dialog over the watch page (no consent address of its own).
+        if self.reject_overlay():
+            s, _, _ = self.settle(30, quiet=2.5, save_as="youtube-watch-after-consent")
+            rec("youtube: consent overlay answered with 'Reject all'", True, "clicked the left button of the dialog")
         # The player: top left of the page, 16:9 over most of the width at this window size.
         px0, py0 = self.page(24, 80)
         pw = min(self.xw - 48, 1280)
@@ -838,11 +849,29 @@ class Chrome(gs.Guest):
             f"{loud} of {len(levels)} five-second windows of the guest's audio output are above the noise floor (RMS {levels[:24]})")
         return True
 
-    def find_consent(self, s):
+    def reject_overlay(self):
+        """The consent dialog drawn OVER the watch page ("Before you continue to
+        YouTube"): scroll it to its buttons and click the left one, "Reject all".
+        True when a button was found and clicked."""
+        x0, y0, x1, y1 = self.content()
+        self.move((x0 + x1) // 2, (y0 + y1) // 2)
+        for k in range(4):
+            self.wheel(10)
+            self.nap(0.8)
+            s = self.shot(f"youtube-consent-{k + 1}")
+            a = self.find_consent(s, need_url=False)
+            if a:
+                self.click(*a)
+                self.nap(3.0)
+                self.shot("youtube-consent-answered")
+                return True
+        return False
+
+    def find_consent(self, s, need_url=True):
         """The centre of the 'Reject all' button of Google's consent page, or None: the
         page is light, and the two wide pill buttons are the only dark-on-light blocks
         in the lower half that span tens of pixels in one colour."""
-        if "consent" not in ((self.tabs() or [("", "")])[0][0]):
+        if need_url and "consent" not in ((self.tabs() or [("", "")])[0][0]):
             return None
         x0, y0, x1, y1 = self.content()
         # rows where a long run of one non-background colour starts in the left half

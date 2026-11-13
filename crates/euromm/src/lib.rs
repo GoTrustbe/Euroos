@@ -12,6 +12,8 @@ extern crate alloc;
 pub mod bulk;
 pub mod frame;
 pub mod swap;
+pub mod vaspace;
 
 pub use frame::{FrameAllocator, MemoryRegion, PAGE_SIZE};
 pub use swap::{Clock, SwapArea};
+pub use vaspace::FreeRanges;

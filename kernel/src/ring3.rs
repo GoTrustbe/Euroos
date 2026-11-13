@@ -7256,7 +7256,12 @@ pub fn spawn_euro_app(
 }
 
 fn vfs_close(fd: usize) -> u64 {
+    let nameless = fd < max_fd()
+        && OPEN_FDS.lock()[fd].is_some_and(|(fi, _)| FILES.lock().get(fi).is_some_and(|e| e.0.is_empty()));
     close_low_in(fdspace::current(), fd);
+    if nameless {
+        ram_file_sweep_due();
+    }
     0
 }
 
@@ -7288,6 +7293,20 @@ pub fn grow_ram_file(v: &mut alloc::vec::Vec<u8>, need: usize) -> bool {
     }
     let cap = crate::allocator::size() / 2;
     if need > cap {
+        return false;
+    }
+    // Never into the last 32 MiB of kernel memory (BUG-132): the kernel needs
+    // it for itself, and a heap that runs dry panics where a file that
+    // cannot grow is an ENOSPC for one program.
+    let (_, small_free) = crate::allocator::stats();
+    let (_, big_free_mib, _) = crate::allocator::big_stats();
+    let room = small_free + (big_free_mib << 20);
+    if (need - v.len()) + (32 << 20) > room {
+        static SAID: AtomicU64 = AtomicU64::new(0);
+        if SAID.fetch_add(1, Ordering::Relaxed) < 8 {
+            crate::serial_println!("[ramfiles] a RAM file may not grow to {} KiB: {} MiB of kernel memory left, 32 MiB stay for the kernel (ENOSPC)",
+                need / 1024, room >> 20);
+        }
         return false;
     }
     if v.try_reserve(need - v.len()).is_err() {
@@ -7512,18 +7531,114 @@ fn vfs_unlink(path: &[u8]) -> u64 {
 }
 
 /// Can file `fi` still be reached without its name: a descriptor in any fd
-/// space, or a shared mapping?
+/// space, or a mapping in any process?
 fn file_referenced(fi: usize) -> bool {
-    if OPEN_FDS_ALL.lock().any(|e| matches!(e, Some((f, _)) if *f == fi)) {
-        return true;
+    files_referenced().binary_search(&fi).is_ok()
+}
+
+/// Every file index that a descriptor (any fd space) or a mapping (any
+/// process: the demand state that is loaded, and every saved one in
+/// CHILD_MEM) still names; sorted. A file's own frame list (SHARED_FRAMES)
+/// is not a reference: it is what the file is made of.
+fn files_referenced() -> alloc::vec::Vec<usize> {
+    let mut v: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    OPEN_FDS_ALL.lock().any(|e| {
+        if let Some((f, _)) = e {
+            v.push(*f);
+        }
+        false
+    });
+    let _g = crate::sched::IfOffGuard::new();
+    v.extend(SHARED_MAPS.lock().iter().map(|&(f, _, _)| f));
+    v.extend(SHARED_ALIASES.lock().iter().map(|&(_, _, f)| f));
+    v.extend(DEMAND_FILE_MAPS.lock().iter().map(|&(_, _, f, _, _)| f));
+    for cm in CHILD_MEM.lock().iter() {
+        v.extend(cm.shared_maps.iter().map(|&(f, _, _)| f));
+        v.extend(cm.shared_aliases.iter().map(|&(_, _, f)| f));
+        v.extend(cm.file_maps.iter().map(|&(_, _, f, _, _)| f));
     }
-    if SHARED_MAPS.lock().iter().any(|(f, _, _)| *f == fi) {
-        return true;
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+static RAMFILE_FREED_FILES: AtomicU64 = AtomicU64::new(0);
+static RAMFILE_FREED_BYTES: AtomicU64 = AtomicU64::new(0);
+static RAMFILE_FREED_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// A sweep is due: a descriptor of a file without a name was closed, a shared
+/// window was unmapped, or a process ended.
+static RAMFILE_SWEEP_DUE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+pub fn ram_file_sweep_due() {
+    RAMFILE_SWEEP_DUE.store(true, Ordering::Relaxed);
+}
+
+/// Free the bytes and the shared frames of every file without a name that
+/// nothing names any more (BUG-132). The slot stays (an index never moves).
+/// Runs from task context (the syscall that made it due, at its end).
+pub fn ram_file_sweep() {
+    if !RAMFILE_SWEEP_DUE.swap(false, Ordering::Relaxed) {
+        return;
     }
-    if SHARED_FRAMES.lock().iter().any(|(f, _)| *f == fi) {
-        return true;
+    // Interrupts off throughout: FILES and SHARED_FRAMES are taken by the
+    // demand fault handler too (the BUG-007 family if a holder is preempted).
+    let _if = crate::sched::IfOffGuard::new();
+    // SHARED_FRAMES before FILES, one at a time (the fault handler takes them
+    // in that order).
+    let mut with_frames: alloc::vec::Vec<usize> = SHARED_FRAMES.lock().iter().map(|(f, _)| *f).collect();
+    with_frames.sort_unstable();
+    let candidates: alloc::vec::Vec<usize> = {
+        let files = FILES.lock();
+        files.iter().enumerate()
+            .filter(|(i, (p, d))| p.is_empty() && (!d.is_empty() || with_frames.binary_search(i).is_ok()))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    if candidates.is_empty() {
+        return;
     }
-    SHARED_ALIASES.lock().iter().any(|&(_, _, f)| f == fi)
+    let held = files_referenced();
+    let mut nfiles = 0u64;
+    let mut nbytes = 0u64;
+    let mut nframes = 0u64;
+    for fi in candidates {
+        if held.binary_search(&fi).is_ok() {
+            continue;
+        }
+        if let Some(e) = FILES.lock().get_mut(fi) {
+            if !e.0.is_empty() {
+                continue; // got a name again meanwhile
+            }
+            nbytes += e.1.len() as u64;
+            e.1 = alloc::borrow::Cow::Borrowed(&[]);
+        }
+        let frames = {
+            let mut sf = SHARED_FRAMES.lock();
+            match sf.iter().position(|(f, _)| *f == fi) {
+                Some(k) => sf.swap_remove(k).1,
+                None => alloc::vec::Vec::new(),
+            }
+        };
+        for p in frames {
+            if p != 0 {
+                crate::procpool::demand_free(p);
+                nframes += 1;
+            }
+        }
+        nfiles += 1;
+    }
+    if nfiles > 0 {
+        let f = RAMFILE_FREED_FILES.fetch_add(nfiles, Ordering::Relaxed) + nfiles;
+        let b = RAMFILE_FREED_BYTES.fetch_add(nbytes, Ordering::Relaxed) + nbytes;
+        let p = RAMFILE_FREED_FRAMES.fetch_add(nframes, Ordering::Relaxed) + nframes;
+        static SAID: AtomicU64 = AtomicU64::new(0);
+        let k = SAID.fetch_add(1, Ordering::Relaxed);
+        if k < 8 || (k + 1) % 256 == 0 {
+            crate::serial_println!(
+                "[ramfiles] freed {nfiles} files without a name ({} KiB of bytes, {nframes} shared frames); since boot {f} files, {} MiB of bytes, {} MiB of frames",
+                nbytes / 1024, b >> 20, p / 256);
+        }
+    }
 }
 
 /// Free the BYTES of files that have just lost their name (unlink, or a rename
@@ -10123,6 +10238,7 @@ struct ChildMem {
     prot_none: alloc::vec::Vec<(u64, u64)>,
     shared_aliases: alloc::vec::Vec<(u64, u64, usize)>,
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
+    free: euromm::FreeRanges,
 }
 static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
 
@@ -10142,6 +10258,7 @@ fn child_mem_snapshot(task: usize) {
         prot_none: PROT_NONE_RANGES.lock().clone(),
         shared_aliases: SHARED_ALIASES.lock().clone(),
         shared_maps: SHARED_MAPS.lock().clone(),
+        free: DEMAND_FREE.lock().clone(),
     };
     let mut g = CHILD_MEM.lock();
     if let Some(slot) = g.iter_mut().find(|c| c.task == task) {
@@ -10262,6 +10379,7 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *PROT_NONE_RANGES.lock(), &mut cm.prot_none);
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
+    core::mem::swap(&mut *DEMAND_FREE.lock(), &mut cm.free);
     true
 }
 
@@ -10292,6 +10410,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     globals_release_owner(ctask); // never drop state that is loaded
     GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
     child_mem_drop(ctask);
+    ram_file_sweep_due();
     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
     fdtab::exit(fdtab::child_proc(ctask), fdspace::ROOT, &mut |o| {
         let _ = close_fd_now(o);
@@ -10506,9 +10625,9 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
     let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
-    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
-    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
     PROT_NONE_RANGES.lock().clear();
     SHARED_ALIASES.lock().clear();
     SHARED_MAPS.lock().clear();
@@ -10687,8 +10806,10 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] pid {pid}: no memory for the child's descriptor table (it starts with the standard streams only)");
     }
     crate::serial_println!(
-        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB; arena copy {} ms, demand pages {} ms, rest {} ms)",
-        span >> 20, tsc_ms(t_start, t_arena), tsc_ms(t_arena, t_demand),
+        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB, the parent uses {} MiB of it up to its mmap window top and {} KiB of brk; arena copy {} ms, demand pages {} ms, rest {} ms)",
+        span >> 20, HEAP_BREAK.load(Ordering::Relaxed).saturating_sub(arena) >> 20,
+        BRK_CUR.load(Ordering::Relaxed).saturating_sub(arena + 0x0200_0000) / 1024,
+        tsc_ms(t_start, t_arena), tsc_ms(t_arena, t_demand),
         tsc_ms(t_demand, unsafe { core::arch::x86_64::_rdtsc() })
     );
     pid
@@ -10727,7 +10848,10 @@ const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
 // exhausted a 256 GiB region and returned ENOMEM mid-init. Virtual-only: physical
 // frames + page tables commit per touched page, so a bigger reservation is free.
 const DEMAND_SIZE: u64 = 480 * (1 << 30);
-const DEMAND_MIN_BYTES: u64 = 16 * (1 << 20); // route anon mmaps >= 16 MiB here
+// Route anon mmaps >= 64 KiB here (BUG-131: under 16 MiB they came from the
+// arena window, which never gives back, and V8's 512 KiB zone segments ran it
+// dry in a YouTube renderer).
+const DEMAND_MIN_BYTES: u64 = 64 * 1024;
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 /// The lowest demand address that can be committed this run (DEMAND_NEXT at
@@ -10802,6 +10926,50 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     }
     0
 }
+/// munmap of [`start`, `end`) in the demand region: the addresses can be
+/// handed out again (BUG-131) when no file-backed or shared mapping is left in
+/// them. Such mappings that lie wholly inside the range go with it; one that
+/// reaches out of it keeps the whole range out of the list, as before. The
+/// bump pointer comes down when the top of the free list meets it.
+fn demand_give_back(start: u64, end: u64) {
+    let inside = |b: u64, l: u64| b >= start && b + l <= end;
+    let overlaps = |b: u64, l: u64| b < end && start < b + l;
+    {
+        let mut m = DEMAND_FILE_MAPS.lock();
+        m.retain(|&(b, l, _, _, _)| !inside(b, l));
+        if m.iter().any(|&(b, l, _, _, _)| overlaps(b, l)) {
+            return;
+        }
+    }
+    {
+        let mut a = SHARED_ALIASES.lock();
+        let before = a.len();
+        a.retain(|&(b, l, _)| !inside(b, l));
+        if a.len() != before {
+            ram_file_sweep_due();
+        }
+        if a.iter().any(|&(b, l, _)| overlaps(b, l)) {
+            return;
+        }
+    }
+    if SHARED_MAPS.lock().iter().any(|&(_, b, l)| overlaps(b, l as u64)) {
+        return;
+    }
+    let next = DEMAND_NEXT.load(Ordering::Relaxed);
+    if start >= next {
+        return; // never handed out here
+    }
+    let end = end.min(next);
+    let mut f = DEMAND_FREE.lock();
+    f.insert(start, end);
+    let top = f.lower_top(next);
+    if top < next && top >= DEMAND_FLOOR.load(Ordering::Relaxed) {
+        let _ = DEMAND_NEXT.compare_exchange(next, top, Ordering::Relaxed, Ordering::Relaxed);
+    } else if top < next {
+        f.insert(top, next); // below the floor: keep it as it was
+    }
+}
+
 /// Drop every page of [`start`, `end`) from the current process's demand region:
 /// unmap all, free the frames the process owns (writable, not a MAP_SHARED window
 /// or alias: those frames belong to the file), leave shared and page-cache frames
@@ -10848,6 +11016,11 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
 static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// Address ranges of this process's demand region that munmap gave back
+/// (BUG-131): an anonymous mmap takes its addresses from here before the bump
+/// pointer moves. Swapped per process with the rest of the demand state.
+static DEMAND_FREE: Mutex<euromm::FreeRanges> = Mutex::new(euromm::FreeRanges::new());
+static DEMAND_REUSED: AtomicU64 = AtomicU64::new(0);
 /// Live MAP_SHARED regions: (file index, arena base, region length). One entry per
 /// shared in-RAM file (memfd/tmpfs) for the duration of a process — every mapping of
 /// that file resolves to this one region, which is what "shared memory" means. Arena
@@ -10870,7 +11043,7 @@ static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicB
 pub fn demand_file_pages() -> u64 { DEMAND_FILE_FILLED.load(Ordering::Relaxed) }
 /// Drop all lazy file-mapping descriptors (called when a process address space is
 /// torn down, so a later run cannot fill a fresh frame from a stale file index).
-pub fn clear_demand_file_maps() { DEMAND_FILE_MAPS.lock().clear(); }
+pub fn clear_demand_file_maps() { DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear(); }
 
 /// Number of 4 KiB pages committed on demand so far (diagnostics).
 pub fn demand_committed_pages() -> u64 { DEMAND_COMMITTED.load(Ordering::Relaxed) }
@@ -11485,7 +11658,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
             let _ = falloc.free(dpb + i * 4096);
         }
         free_demand_extra(falloc);
-        DEMAND_FILE_MAPS.lock().clear();
+        DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
         DEMAND_ENABLED.store(PERSIST_PREV_DEMAND.load(Ordering::Relaxed), Ordering::Relaxed);
         DEMAND_FILE_ENABLED.store(PERSIST_PREV_FILE.load(Ordering::Relaxed), Ordering::Relaxed);
     }
@@ -11906,7 +12079,7 @@ fn glibc_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pm
 fn glibc_disk_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize,
                            prev_demand: bool, prev_file: bool) {
     glibc_launch_abort(falloc, arena, frames, pml4, dp_base, dp_frames);
-    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
     DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
     DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
 }
@@ -12091,7 +12264,7 @@ fn glibc_disk_launch(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
-    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
@@ -12375,7 +12548,7 @@ pub fn run_glibc_disk(
     for i in 0..frames as u64 {
         let _ = falloc.free(arena + i * 4096);
     }
-    DEMAND_FILE_MAPS.lock().clear();
+    DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
     DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
     DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
     (out, code)
@@ -13054,7 +13227,7 @@ pub fn run_glibc(
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
     let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
-    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
+    DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
     DEMAND_USED.store(false, Ordering::Relaxed);
@@ -14312,12 +14485,25 @@ fn mm_fail(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, r: u64) {
         DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(DEMAND_BASE) >> 30, DEMAND_SIZE >> 30,
         crate::procpool::demand_free_frames() / 256, crate::procpool::free_frames() / 256,
         hu >> 20, hf >> 20);
+    let (free_total, free_n) = { let f = DEMAND_FREE.lock(); (f.total(), f.ranges().len()) };
+    crate::serial_println!("[mm-fail]   demand addresses given back and free for reuse: {} MiB in {} ranges; reused so far: {} MiB",
+        free_total >> 20, free_n, DEMAND_REUSED.load(Ordering::Relaxed) >> 20);
 }
 
 /// `ramfiles` (shell): what the files that live in memory are. One line per
 /// kind (anonymous memory files, shared-memory files, then by directory) with
 /// count and size, and the largest ones by name.
 pub fn ram_files_census() -> alloc::vec::Vec<String> {
+    ram_file_sweep_due();
+    ram_file_sweep();
+    let mut out = ram_files_census_inner();
+    out.push(alloc::format!("freed since boot: {} files without a name, {} MiB of bytes, {} MiB of shared frames",
+        RAMFILE_FREED_FILES.load(Ordering::Relaxed), RAMFILE_FREED_BYTES.load(Ordering::Relaxed) >> 20,
+        RAMFILE_FREED_FRAMES.load(Ordering::Relaxed) / 256));
+    out
+}
+
+fn ram_files_census_inner() -> alloc::vec::Vec<String> {
     let mut kinds: alloc::vec::Vec<(String, usize, usize)> = alloc::vec::Vec::new();
     let mut big: alloc::vec::Vec<(usize, String)> = alloc::vec::Vec::new();
     let (mut owned, mut borrowed, mut n_owned) = (0usize, 0usize, 0usize);
@@ -15281,6 +15467,25 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 } else {
                     4096
                 };
+                // Addresses that munmap gave back first (BUG-131).
+                let reused = {
+                    let mut f = DEMAND_FREE.lock();
+                    match f.take(len, align) {
+                        Some(a) if a + len <= DEMAND_NEXT.load(Ordering::Relaxed) => Some(a),
+                        Some(_) => {
+                            f.clear(); // not this process's: never hand it out
+                            None
+                        }
+                        None => None,
+                    }
+                };
+                if let Some(start) = reused {
+                    DEMAND_REUSED.fetch_add(len, Ordering::Relaxed);
+                    if a3 == 0 {
+                        prot_none_set(start, start + len, true);
+                    }
+                    return start;
+                }
                 let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
                 start = (start + (align - 1)) & !(align - 1);
                 let new_next = start + len;
@@ -15328,6 +15533,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // (the marking visitor's fault of runs 54, 67 and 73).
                     let (unmapped, freed) = demand_drop_range(base, base + len);
                     prot_none_set(base, base + len, a3 == 0);
+                    DEMAND_FREE.lock().remove(base, base + len);
                     let calls = FIXED_CALLS.fetch_add(1, Ordering::Relaxed);
                     let total = FIXED_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
                     if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
@@ -15484,6 +15690,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             if start >= DEMAND_BASE && end <= DEMAND_BASE + DEMAND_SIZE && end > start {
                 let (unmapped, freed) = demand_drop_range(start, end);
                 prot_none_set(start, end, false);
+                demand_give_back(start, end);
                 let calls = MUNMAP_CALLS.fetch_add(1, Ordering::Relaxed);
                 let total = MUNMAP_FREED.fetch_add(freed as u64, Ordering::Relaxed) + freed as u64;
                 if unmapped > 0 && (calls < 8 || (calls + 1) % 512 == 0) {
