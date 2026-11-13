@@ -1,0 +1,43 @@
+# BUG-162: the Download link of euro-os.eu/en/ clicked with the tablet (the coordinate of chrome-smoke interact), 10 fresh boots x 3 clicks, w23g-pub
+runs/lk1.out:[link] boot 1 click 1 at (875, 253): followed after 1.0 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 1 click 2 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 1 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 1: PASS
+runs/lk1.out:[link] boot 2 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 2 click 2 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 2 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 2: PASS
+runs/lk1.out:[link] boot 3 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 3 click 2 at (875, 253): followed after 0.8 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 3 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 3: PASS
+runs/lk1.out:[link] boot 4 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 4 click 2 at (875, 253): followed after 1.1 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 4 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 4: PASS
+runs/lk1.out:[link] boot 5 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 5 click 2 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 5 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk1.out:[link] boot 5: PASS
+runs/lk1.out:[link] 15 of 15 clicks followed
+runs/lk2.out:[link] boot 1 click 1 at (875, 253): NOT followed after 15.8 s; X button lines 4; tabs [('https://euro-os.eu/en/', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 1 click 2 at (875, 253): NOT followed after 15.6 s; X button lines 4; tabs [('file:///tmp/input-test.html', 'A=[] B=[] clip=- y=0')]
+runs/lk2.out:[link] boot 1 click 3 at (875, 253): NOT followed after 15.6 s; X button lines 4; tabs [('file:///tmp/input-test.html', 'A=[] B=[] clip=- y=0')]
+runs/lk2.out:[link] boot 1: PASS
+runs/lk2.out:[link] boot 2 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 2 click 2 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 2 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 2: PASS
+runs/lk2.out:[link] boot 3 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 3 click 2 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 3 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 3: PASS
+runs/lk2.out:[link] boot 4 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 4 click 2 at (875, 253): followed after 0.8 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 4 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 4: PASS
+runs/lk2.out:[link] boot 5 click 1 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 5 click 2 at (875, 253): followed after 1.1 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 5 click 3 at (875, 253): followed after 0.7 s; X button lines 4; tabs [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+runs/lk2.out:[link] boot 5: PASS
+runs/lk2.out:[link] 12 of 15 clicks followed

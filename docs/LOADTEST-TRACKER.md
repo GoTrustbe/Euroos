@@ -2151,32 +2151,57 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   window drew.
 - **Next:** the browser runs on one CPU (ring 3 only on the BSP), with thirty ready threads and 10 ms slices.
 
-### BUG-147 — live tasks come close to the 256 slots in one session ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (a long session may fill the table with live threads)
+### BUG-147 — live tasks come close to the 256 slots in one session ✅ FIXED
+- **Status:**   FIXED (`95a3bf2`, test `e5990d5`) · **Severity:** MEDIUM
 - **Measured:** after BUG-140 no slot is held by an ended task, but the browser keeps up to 16 processes (back/forward
   cache, the PDF viewer): 214 of 256 live tasks (a1); thread kernel stacks: 224.
-- **Next:** more slots and thread kernel stacks without static memory on small machines (stacks from the heap past 224).
+- **Test:**     `[many-threads]` (`userland/glibc/gmanythreads.c`, 320 threads of one process alive at once): before `223 of 320
+  threads alive at once, pthread_create: Resource temporarily unavailable -> FAILED`, after `320 of 320 -> PASS`.
+- **Fix:**      512 task slots; thread kernel stacks 224 static, 224..480 from the kernel heap on first use (kept per slot).
+  Static memory +4 MiB (the 16 KiB kernel-task stack per slot). A session of five rounds: 210 live of 512.
 
-### BUG-160 — Chromium's audio output fails: every clip with sound stops at t=0 (`AUDIO_RENDERER_ERROR`) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for criterion 3 (YouTube picture and sound) · found by `chrome-smoke.py --only localvideo` (`proof/chrome-harness/`)
-- **Reproduction:** `scripts/mk-test-video.sh DIR`; `chrome-smoke.py --only localvideo --media-dir DIR` (image `pub`, KVM, 2 vCPU, intel-hda + hda-duplex with `-audiodev wav`).
-  The page `vp9.html` (VP9 + Opus) is served from the host to `http://10.0.2.2:PORT/`, the PLAY button is clicked with the tablet.
-- **Actual:**   `video.error.code` 3 (MEDIA_ERR_DECODE), `currentTime` stays 0.00, `readyState` 4, QEMU's wav has RMS 0 in every window. Serial log:
-  `PipelineStatus::AUDIO_RENDERER_ERROR` and `services/audio/sync_reader.cc:154] ASR: No room in socket buffer.: Broken pipe (32)`;
-  the kernel's `[alsa]` trace shows the stream opened, three `writei` (peak 0), then `drop/drain` and `close` ~5 s later.
-- **Isolated:** the same clip split in two (`scripts/mk-test-video.sh`): VP9 **without** audio plays (14 of 14 screendumps differ, `currentTime` 3.0 -> 32.4 in 31.4 s, no error), Opus **alone** fails
-  as above. So the video decoder and the renderer are fine; the audio service's stream to the renderer breaks (EPIPE on the sync socket: the peer's end was closed or never handed over).
-- **Candidates:** the descriptor hand-over of the audio stream (`SCM_RIGHTS` / the socket pair of `CancelableSyncSocket`) in the per-process fd spaces of BUG-098; the shared-memory region of the stream. Not attributed.
-- **Not fixed here** (kernel; other teams). The YouTube "no sound / frames stop" of `chrome-2026-11b` has the same signature.
+### BUG-160 — Chromium's audio output fails: every clip with sound stops at t=0 (`AUDIO_RENDERER_ERROR`) ✅ FIXED (BUG-170, BUG-171)
+- **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH for criterion 3
+- **Cause:**    BUG-170 (a new socket inherited O_NONBLOCK from a closed one with the same object number: the renderer's blocking
+  read of the audio sync socket answered EAGAIN, the renderer closed its end, the audio service's write was EPIPE), then
+  BUG-171 (the blocking read, once it blocked, spun and stopped the machine).
+- **Proof:**    `chrome-smoke.py --only localvideo` (KVM, `proof/chrome-w23b/`): VP9+Opus `currentTime` 0.0 -> 61.2 s, 12 of 12 five-second
+  windows of the QEMU wav above the noise floor (RMS 1158), no media error; Opus alone the same; before: 0.0 s, RMS 0, error 3.
+  H.264/AAC still fails: BUG-161 (the build has no such codecs).
 
 ### BUG-161 — this Chromium build has no H.264/AAC ⬜ OPEN (build, not kernel)
 - **Actual:**   `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')` is empty, an `.mp4` fails with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (`error 4`). VP9/Opus/VP8 are supported.
   YouTube serves VP9/AV1 + Opus to such a browser, so it does not block criterion 3; sites that only offer H.264 will not play.
 - **Next:**     decide whether `proprietary_codecs`/`ffmpeg_branding=Chrome` is wanted (licence); otherwise document it.
 
-### BUG-162 — a click on a page link is sometimes not followed ⬜ OPEN (unconfirmed)
-- **Actual:**   `chrome-smoke.py --only interact`: the click on the "Download" link in the euro-os.eu header (a real tablet click, `interact-rerun-report.txt`) did not navigate in 1 of 2 fresh boots (the other boot followed it, `#download`); the history step that follows failed with it.
-- **Next:**     repeat the step 20 times on a fresh boot; check whether the click came while the page was still loading (the harness waits 1.5 s of unchanged picture) before it is called an input bug.
+### BUG-162 — a click on a page link is sometimes not followed ✅ NOT A EUROOS BUG (harness timing)
+- **Status:**   closed for the kernel · the harness change is described below
+- **Repeated:** 10 fresh boots × 3 clicks on the Download link of euro-os.eu/en/ at the coordinate of `chrome-smoke --only interact`
+  (`proof/chrome-w23b/link-clicks.txt`): 27 followed (0.7-1.1 s), 1 not, and the 2 after it in that boot clicked on the page the
+  test had gone back to. Every click reached the X client (press and release, `[xin]`).
+- **Cause:**    the click that was not followed came while euro-os.eu was still loading: the screendump before the click shows the
+  previous page (`input-test.html`) under the new tab title, with the stop button; 15 s later the page is there and the
+  pointer is over its Download button (screenshots in the proof). The harness waits for 1.5 s of unchanged picture, which a
+  page that has not painted yet also gives.
+- **Next (harness):** wait for the load to finish (`wait_loaded`, as the site matrix does) and for the target's pixels before
+  clicking a link.
+
+### BUG-170 — a new socket could be born non-blocking: Chromium's audio sync socket ✅ FIXED
+- **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH (BUG-160)
+- **Actual:**   `[audio-sys] ... 72(fd, F_GETFL) = 0x802` then `1(fd, 4 bytes) = -32` on the audio service's end of a fresh
+  socketpair; in `[syncsock]`: "a new socketpair is blocking (after a closed non-blocking one)" FAILED (0x802), the child's
+  blocking recvmsg EAGAIN.
+- **Cause:**    O_NONBLOCK is kept per object number (SOCK_NONBLOCK, FD_NONBLOCK) and was never removed when the object closed;
+  socketpair() set it only when asked. Object numbers are handed out again.
+- **Fix:**      `nonblock_forget()` at the last close of an object; socketpair() sets the flag either way.
+- **Test:**     `[syncsock]` (`userland/glibc/gsyncsock.c`): 9 of 17 FAILED -> 17 of 17 OK.
+
+### BUG-171 — a blocking read on a unix socket spun with interrupts off ✅ FIXED
+- **Status:**   FIXED (`d4d06ed`) · **Severity:** HIGH (the machine stopped answering a few seconds into the first clip once BUG-170 was
+  fixed: KVM run v1, every NMI in the renderer's `AudioOutputDevice` thread inside `unix_recv_blocking` / `yield_switch`)
+- **Cause:**    the wait was a loop of yields; a yield charges no vruntime, so the waiter was picked again at once.
+- **Fix:**      two quick yields, then a tick of sleep per look, as poll does. Runs v2, v3, v4: 60 s of sound per clip, the desktop
+  answering throughout.
 
 ### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
 - **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).

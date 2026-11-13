@@ -1,0 +1,5 @@
+# QEMU wav of the guest (all of the run, 1-s windows with RMS > 200)
+runs/v0/audio.wav seconds 234 max 3389 loud-seconds 1
+runs/v1/audio.wav seconds 199 max 3389 loud-seconds 109
+runs/v2/audio.wav seconds 320 max 3389 loud-seconds 140
+runs/v3/audio.wav seconds 312 max 3389 loud-seconds 139

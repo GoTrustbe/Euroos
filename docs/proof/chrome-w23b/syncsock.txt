@@ -1,0 +1,12 @@
+== s3b
+[syncsock]   GSYNCSOCK: FAIL a new socketpair is blocking (after a closed non-blocking one) (2050)
+[syncsock]   GSYNCSOCK: FAIL the renderer answers on the end it received (0)
+[syncsock]   GSYNCSOCK: FAIL its data is in the shared region (0)
+[syncsock]   GSYNCSOCK: FAIL the renderer answers on the end it received (0)
+[syncsock]   GSYNCSOCK: FAIL its data is in the shared region (0)
+[syncsock]   GSYNCSOCK: FAIL the renderer answers on the end it received (0)
+[syncsock]   GSYNCSOCK: FAIL its data is in the shared region (0)
+[syncsock]   GSYNCSOCK: FAIL the renderer saw every signal and the end of file (2560)
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 9 of 17 -> FAIL (exit 1) → FAILED
+== s3
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
