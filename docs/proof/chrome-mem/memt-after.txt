@@ -1,0 +1,12 @@
+[fork] refused (no thread kernel stack): 8 MiB of demand pages and 96 MiB of arena and tables given back
+[fork] refused (no thread kernel stack): 8 MiB of demand pages and 96 MiB of arena and tables given back
+[fork] refused (no thread kernel stack): 8 MiB of demand pages and 96 MiB of arena and tables given back
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[oom] #1 out of memory in task 25 "?" (process 1): pid 1289 "?" held the most (38 MiB) and was ended (SIGKILL); 38 MiB came back, pool 39 MiB free
+[oom] #2 out of memory in task 6 "?": its own process, pid 1290, holds the most (62 MiB) and is ended (SIGKILL)
+[oom] pid 1290 ended: 62 MiB came back, pool 63 MiB free
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓

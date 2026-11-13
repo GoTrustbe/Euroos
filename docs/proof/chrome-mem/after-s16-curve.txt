@@ -1,0 +1,100 @@
+311 census samples over 127 min; pool 11335 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    0   1 euro-os        ok     416    +0    79     2     0    89    4    212   28 10919  118    8     6
+    0   1 wikipedia      ok     492   +76   136     3     0   105    6    217   26 10843  118    8     7
+    1   1 github         ok     565   +73   192     4     0   105    7    224   35 10770  118    9     7
+    2   1 youtube        ok     696  +131   283     6     0   135    9    227   39 10639  119   10    10
+    2   1 openstreetmap  ok     744   +48   325     5     0   150   11    228   28 10591  119   11    10
+    2   1 pdf            ok     736    -8   275     7     0   180   11    231   36 10599  119   16    12
+    2   2 euro-os        ok     699   -37   245     6     0   165   11    231   45 10636  119   16    11
+    3   2 wikipedia      ok     750   +51   272     6     0   194   12    231   37 10585  119   16    13
+    4   2 github         ok     859  +109   354     8     0   209   14    231   47 10476  120   17    14
+    4   2 youtube        ok     993  +134   438     9     0   254   17    232   49 10342  120   18    17
+    5   2 openstreetmap  ok     894   -99   363     7     0   239   16    232   41 10441  120   18    16
+    6   2 pdf            ok     997  +103   410    10     0   284   19    232   49 10338  121   19    19
+    6   3 euro-os        ok     943   -54   372     8     0   254   17    232   65 10392  120   19    17
+    6   3 wikipedia      ok    1003   +60   416     9     0   269   18    232   65 10332  121   19    18
+    7   3 github         ok     925   -78   384     8     0   239   16    232   51 10410  121   20    16
+    7   3 youtube        ok    1031  +106   470    10     0   254   17    232   55 10304  121   21    18
+   10   3 openstreetmap  FAIL  1018   -13   448     9     0   269   19    233   47 10317  122   21    18
+   13   3 pdf            FAIL  1002   -16   444     9     0   269   19    233   35 10333  121   21    18
+   16   4 euro-os        FAIL   835  -167   338     7     0   224   15    233   23 10500  121   21    15
+   19   4 wikipedia      FAIL   681  -154   238     4     0   178   11    233   18 10654  121   21    12
+   22   4 github         FAIL   676    -5   233     4     0   178   11    233   18 10659  121   21    12
+   25   4 youtube        FAIL   683    +7   240     4     0   178   12    233   18 10652  121   21    12
+   27   4 openstreetmap  FAIL   680    -3   237     4     0   178   12    233   18 10655  121   21    12
+   30   4 pdf            FAIL   685    +5   242     5     0   178   12    233   18 10650  121   21    12
+   33   5 euro-os        FAIL  2050 +1365  1604     5     0   178   14    233   18  9285  121   21    12
+   36   5 wikipedia      FAIL  2035   -15  1589     5     0   178   14    233   19  9300  121   21    12
+   39   5 github         FAIL  2016   -19  1607     6     0   178   14    233   19  9319  121   21    12
+   42   5 youtube        FAIL  2048   +32  1601     5     0   178   14    233   19  9287  121   22    12
+   45   5 openstreetmap  FAIL  2049    +1  1603     5     0   178   15    233   18  9286  121   22    12
+   48   5 pdf            FAIL  2045    -4  1598     5     0   178   15    233   18  9290  121   22    12
+   50   6 euro-os        FAIL   683 -1362   237     4     0   178   15    233   18 10652  121   22    12
+   53   6 wikipedia      FAIL   688    +5   241     4     0   178   15    233   19 10647  121   22    12
+   56   6 github         FAIL   686    -2   239     5     0   178   15    233   19 10649  121   22    12
+   59   6 youtube        FAIL   682    -4   235     4     0   178   15    233   19 10653  121   22    12
+   62   6 openstreetmap  FAIL   688    +6   241     5     0   178   15    233   19 10647  121   22    12
+   65   6 pdf            FAIL  1057  +369   609     5     0   178   15    233   19 10278  121   22    12
+   68   7 euro-os        FAIL   687  -370   240     4     0   178   15    233   19 10648  121   22    12
+   70   7 wikipedia      FAIL   689    +2   241     4     0   178   15    233   19 10646  121   22    12
+   73   7 github         FAIL   689    +0   241     4     0   178   15    233   19 10646  121   22    12
+   76   7 youtube        FAIL   685    -4   237     4     0   178   15    233   19 10650  121   22    12
+   79   7 openstreetmap  FAIL   688    +3   241     5     0   178   15    233   18 10647  121   22    12
+   82   7 pdf            FAIL   686    -2   238     5     0   178   15    233   18 10649  121   22    12
+   85   8 euro-os        FAIL   686    +0   239     5     0   178   15    233   18 10649  120   22    12
+   88   8 wikipedia      FAIL   686    +0   239     5     0   178   15    233   18 10649  121   22    12
+   90   8 github         FAIL   691    +5   244     4     0   178   15    233   18 10644  121   22    12
+   93   8 youtube        FAIL   691    +0   244     5     0   178   15    233   19 10644  121   22    12
+   96   8 openstreetmap  FAIL   690    -1   242     5     0   178   15    233   18 10645  121   22    12
+   99   8 pdf            FAIL   690    +0   242     4     0   178   16    233   18 10645  121   22    12
+  102   9 euro-os        FAIL   691    +1   243     4     0   178   16    233   19 10644  121   22    12
+  105   9 wikipedia      FAIL   689    -2   241     5     0   178   16    233   19 10646  121   22    12
+  108   9 github         FAIL   689    +0   241     5     0   178   16    233   18 10646  121   22    12
+  110   9 youtube        FAIL   689    +0   241     5     0   178   16    233   19 10646  121   22    12
+  113   9 openstreetmap  FAIL   687    -2   238     4     0   178   16    233   19 10648  121   22    12
+  116   9 pdf            FAIL   688    +1   240     4     0   178   16    233   19 10647  121   22    12
+  119  10 euro-os        FAIL   687    -1   240     5     0   178   16    233   18 10648  121   22    12
+  122  10 wikipedia      FAIL   692    +5   244     4     0   178   16    233   18 10643  121   22    12
+  125  10 github         FAIL   693    +1   245     4     0   178   16    233   19 10642  121   22    12
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later -37 -54 -167 +1365 -1362 -370 +0 +1 -1   mean -69
+  wikipedia      first   +76   later +51 +60 -154 -15 +5 +2 +0 -2 +5   mean -5
+  github         first   +73   later +109 -78 -5 -19 -2 +0 +5 +0 +1   mean +1
+  youtube        first  +131   later +134 +106 +7 +32 -4 -4 +0 +0   mean +34
+  openstreetmap  first   +48   later -99 -13 -3 +1 +6 +3 -1 -2   mean -14
+  pdf            first    -8   later +103 -16 +5 -4 +369 -2 +0 +1   mean +57
+
+after the warm-up (15 min): 263 samples over 112 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      878    694    676   2051   -265.0
+anon                      357    246    233   1607   -264.1
+zero                        7      4      4      8     -0.1
+noaccess                    0      0      0      0     +0.0
+fileprivate               239    178    178    239     -2.9
+tables                     16     16     11     16     +2.0
+pagecache                 233    233    233    233     +0.0
+shm                        31     19     18     31     -0.1
+heap_used                 121    121    120    121     -0.0
+big_used                   59     56     55     59     -0.1
+ramfile_bytes              21     22     21     22     +0.5
+
+lowest free: 9284 MiB of 11335; largest unattributed: 38896 KiB
+verdict: flat (in use -265.0 MiB/h = -2.3% of the pool per hour; 0 kill/exhaustion lines; 38 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                57     0     0
+   1000 network.CrUtilit       5     0     0
+   1001 storage.CrUtilit       4     0     0
+   1002 CrRendererMain        12     0     0
+   1013 video_capture.Cr       1     0     0
+   1014 CrRendererMain        47     1     0
+   1019 data_decoder.CrU       1     0     0
+   1021 on_device_model.       1     0     0
+   1027 data_decoder.CrU       1     0     0
+   1033 CrRendererMain       103     1     0
+   1034 CrRendererMain         7     0     0
+   1035 video_capture.Cr       1     0     0

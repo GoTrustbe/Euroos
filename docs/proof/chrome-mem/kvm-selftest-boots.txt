@@ -1,0 +1,55 @@
+k-4g end=marker secs=198 failed-lines=0 crash-lines=0
+k-1g end=marker secs=183 failed-lines=6 crash-lines=0
+k-2g end=marker secs=189 failed-lines=1 crash-lines=0
+k-8g end=marker secs=201 failed-lines=0 crash-lines=0
+== k-1g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107534 free (was 107534), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107534 free (was 107534), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107534 free (was 107534), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107534 free (was 107534), process pool 40960 (was 40960) → OK ✓
+[oom] #1 out of memory in task 28 "?" (process 1): pid 1280 "?" held the most (38 MiB) and was ended (SIGKILL); 38 MiB came back, pool 39 MiB free
+[oom] #2 out of memory in task 6 "?": its own process, pid 1281, holds the most (62 MiB) and is ended (SIGKILL)
+[oom] pid 1281 ended: 62 MiB came back, pool 63 MiB free
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107534 free (was 107534), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+-- FAILED lines of the boot:
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+[fork] arena alloc FAILED (96 MiB, pool has 55 MiB)
+[linux-abi] GSCM3: fork B FAILED
+[glibc]   GSCM3: fork B FAILED
+[fork] arena alloc FAILED (192 MiB, pool has 160 MiB)
+== k-2g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 271374 free (was 271374), process pool 73728 (was 73728) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 271374 free (was 271374), process pool 73728 (was 73728) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 271374 free (was 271374), process pool 73728 (was 73728) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 271374 free (was 271374), process pool 73728 (was 73728) → OK ✓
+[oom] #1 out of memory in task 28 "?" (process 1): pid 1281 "?" held the most (38 MiB) and was ended (SIGKILL); 38 MiB came back, pool 39 MiB free
+[oom] #2 out of memory in task 6 "?": its own process, pid 1282, holds the most (62 MiB) and is ended (SIGKILL)
+[oom] pid 1282 ended: 63 MiB came back, pool 63 MiB free
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 271374 free (was 271374), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+-- FAILED lines of the boot:
+[fork] arena alloc FAILED (384 MiB, pool has 288 MiB)
+== k-4g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[oom] #1 out of memory in task 25 "?" (process 1): pid 1289 "?" held the most (38 MiB) and was ended (SIGKILL); 38 MiB came back, pool 39 MiB free
+[oom] #2 out of memory in task 6 "?": its own process, pid 1290, holds the most (62 MiB) and is ended (SIGKILL)
+[oom] pid 1290 ended: 62 MiB came back, pool 63 MiB free
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410904 free (was 410904), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+-- FAILED lines of the boot:
+== k-8g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 884504 free (was 884504), process pool 887296 (was 887296) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 884504 free (was 884504), process pool 887296 (was 887296) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 884504 free (was 884504), process pool 887296 (was 887296) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 884504 free (was 884504), process pool 887296 (was 887296) → OK ✓
+[oom] #1 out of memory in task 25 "?" (process 1): pid 1289 "?" held the most (38 MiB) and was ended (SIGKILL); 38 MiB came back, pool 39 MiB free
+[oom] #2 out of memory in task 6 "?": its own process, pid 1290, holds the most (62 MiB) and is ended (SIGKILL)
+[oom] pid 1290 ended: 63 MiB came back, pool 63 MiB free
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 884504 free (was 884504), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+-- FAILED lines of the boot:

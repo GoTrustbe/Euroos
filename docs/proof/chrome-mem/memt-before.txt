@@ -1,0 +1,26 @@
+== tree of 8f88f1b (tests first), KVM 4 GiB
+[spawn-refused] #1 fork: refused for the [memt] self-test (thread kernel stacks 1/224, tasks 11/256) task 25 "?"
+[spawn-refused] #2 fork: refused for the [memt] self-test (thread kernel stacks 1/224, tasks 11/256) task 25 "?"
+[spawn-refused] #3 fork: refused for the [memt] self-test (thread kernel stacks 1/224, tasks 11/256) task 25 "?"
+[memt]   forkfail: FAIL demand pool after the refused forks: 578184 kB free, 602832 before
+[memt]   forkfail: FAIL process pool after the refused forks: 528336 kB free, 1708032 before
+[memt]   forkfail: FAIL a fork after them works (pid -1, status 0x0)
+[memt] forkfail: GMEMT forkfail: FAILED 1/4 (exit 1); frames after the run: 412026 free (was 412026), process pool 132084 (was 427008) → FAILED
+[memt]   madvise: FAIL after MADV_DONTNEED: 578208 kB free (611048 before the mapping)
+[memt]   madvise: FAIL MADV_FREE of 16 MiB: 578208 -> 578208 kB free
+[memt] madvise: GMEMT madvise: FAILED 4/6 (exit 1); frames after the run: 412026 free (was 412026), process pool 132084 (was 132084) → FAILED
+[memt]   memfd: FAIL the file holds 0 kB of frames (0 before)
+[memt]   memfd: FAIL mapping and reading it took 16384 kB more frames (one memory, not a copy)
+[memt]   memfd: FAIL a store through one mapping is read by pread and the other mapping (c00000)
+[memt]   memfd: FAIL pwrite is seen through the mapping
+[memt]   memfd: FAIL ftruncate to 4 MiB gives 12 MiB of frames back (16384 kB held)
+[memt]   memfd: FAIL after the last close and unmap: 16384 kB of file frames, pool 81880 kB free (98304 at the start)
+[memt]   memfd: FAIL a file that keeps growing gets ENOSPC (errno 0) after 65536 kB; the limit is -1 kB
+[memt]   memfd: FAIL the big file is gone after its close: pool 77784 kB free (98304 at the start)
+[memt] memfd: GMEMT memfd: FAILED 4/12 (exit 1); frames after the run: 412026 free (was 412026), process pool 132084 (was 132084) → FAILED
+[memt]   oom: FAIL a child is forked (pid -1) and takes 39321 kB
+[memt] oom: GMEMT oom: FAILED 0/1 (exit 1); frames after the run: 412026 free (was 412026), process pool 132084 (was 132084) → FAILED
+[memt] memory self-test, 4 modes → FAILED
+== the same tree with the forkmany mode added (before BUG-150/151 were fixed)
+[memt]   forkmany: FAIL 280 forks one after the other: 0 made, 280 refused (first errno 12)
+[memt] forkmany: GMEMT forkmany: FAILED 2/3 (exit 1); frames after the run: 412025 free (was 412025), process pool 132084 (was 132084) → FAILED
