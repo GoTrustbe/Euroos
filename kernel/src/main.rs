@@ -5380,6 +5380,8 @@ fn main() -> Status {
         ring3::cdp_pump();
         // RAM files that lost their last descriptor or mapping (BUG-132).
         ring3::ram_file_sweep();
+        // A process that is to be ended for memory (BUG-155).
+        ring3::oom_deferred_poll();
         sched::deskwatch::mark(1);
         // Interrupt-independent USB input HERE TOO: the boot launcher polls the
         // xHCI ring every iteration, but the desktop loop did not — so desktop

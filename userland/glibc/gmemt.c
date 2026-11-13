@@ -239,7 +239,7 @@ static int mode_oom(void)
         printf("FAIL the test needs a small pool (demand_free_kb %ld)\n", freekb);
         return 1;
     }
-    long hog = freekb * 1024 / 10 * 6; /* 60% of what is free, each */
+    long hog = (freekb * 1024 / 10 * 6) & ~4095L; /* 60% of what is free, each */
     int pfd[2];
     if (pipe(pfd))
         return 1;
@@ -268,6 +268,28 @@ static int mode_oom(void)
     check(w == c && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL, "the child was ended for it (wait status 0x%lx)", st, 0, 0);
     if (w == 0)
         kill(c, SIGKILL);
+    munmap(p, hog);
+    /* A child that takes more than there is: it is the one that goes. */
+    long pool = kacct("demand_total_kb ");
+    c = fork();
+    if (c == 0) {
+        long big = pool * 1024 * 2;
+        char *q = mmap(0, big, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        touch(q, big, 4);
+        _exit(0); /* not reached */
+    }
+    st = 0;
+    w = 0;
+    for (int i = 0; c > 0 && w == 0 && i < 3000; i++) {
+        usleep(10000);
+        w = waitpid(c, &st, WNOHANG);
+    }
+    check(w == c && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL, "a child that touches twice the pool is ended (wait status 0x%lx, pid %ld)", st, w, 0);
+    if (w == 0)
+        kill(c, SIGKILL);
+    char *r = mmap(0, 4 * MIB, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    touch(r, 4 * MIB, 5);
+    check(r[4 * MIB - 4096] == 5, "and the main process still gets memory afterwards", 0, 0, 0);
     return 0;
 }
 

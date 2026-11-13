@@ -1136,6 +1136,65 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
     (unmapped, freed)
 }
 
+const ACCESSED: u64 = 1 << 5;
+
+/// Walk every present READ-ONLY entry of the demand slot `idx` of `pml4` (a
+/// read-only page there is a mapping of a page-cache frame). `f(frame,
+/// accessed)` says what to do with it: true unmaps the entry (the frame is
+/// about to leave the cache), false leaves it. With `age`, the accessed bit of
+/// every entry that stays is cleared, so that the next pass sees who used the
+/// page since this one. Returns the entries unmapped. The caller flushes the
+/// TLB of the address space it runs on.
+pub fn scan_demand_ro(pml4: u64, idx: usize, age: bool, f: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    let mut unmapped = 0usize;
+    // SAFETY: identity-mapped table chain; the caller keeps the address space
+    // alive (interrupts off on the core that runs ring 3).
+    unsafe {
+        let e4 = (pml4 as *const u64).add(idx).read_volatile();
+        if e4 & PRESENT == 0 {
+            return 0;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i3 in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i3).read_volatile();
+            if e3 & PRESENT == 0 {
+                continue;
+            }
+            let pd = e3 & ADDR_MASK;
+            for i2 in 0..512usize {
+                let e2 = (pd as *const u64).add(i2).read_volatile();
+                if e2 & PRESENT == 0 {
+                    continue;
+                }
+                let pt = e2 & ADDR_MASK;
+                for i1 in 0..512usize {
+                    let slot = (pt as *mut u64).add(i1);
+                    let e1 = slot.read_volatile();
+                    if e1 & PRESENT == 0 || e1 & WRITABLE != 0 {
+                        continue;
+                    }
+                    if f(e1 & ADDR_MASK, e1 & ACCESSED != 0) {
+                        slot.write_volatile(0);
+                        unmapped += 1;
+                    } else if age && e1 & ACCESSED != 0 {
+                        slot.write_volatile(e1 & !ACCESSED);
+                    }
+                }
+            }
+        }
+    }
+    unmapped
+}
+
+/// Reload CR3: every non-global translation of the running address space is
+/// looked up again (after entries of it were unmapped or aged in bulk).
+pub fn flush_tlb_all() {
+    use x86_64::registers::control::Cr3;
+    let (frame, flags) = Cr3::read();
+    // SAFETY: the same root is written back.
+    unsafe { Cr3::write(frame, flags) };
+}
+
 /// madvise(MADV_DONTNEED): in [`start`, `end`) of the demand region of `pml4`,
 /// unmap and free every page for which `owned(va, writable)` says the process
 /// owns the frame alone (private anonymous memory); every other page stays as

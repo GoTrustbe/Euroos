@@ -3931,29 +3931,134 @@ fn fd_is_cloexec(fd: u64) -> bool {
 /// READ-ONLY everywhere, and give a writer a private copy on its write fault
 /// (CoW break in handle_demand_fault). Key = fidx<<40 | file_page. Sorted for
 /// binary search.
-static DISK_PAGE_CACHE: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+///
+/// Since BUG-153 the cache is a `euromm::PageCache` (recency per page, a
+/// write state, the choice of what to evict) and gives pages back when the
+/// pool runs low: `pcache_reclaim`.
+static DISK_PAGE_CACHE: Mutex<euromm::PageCache> = Mutex::new(euromm::PageCache::new());
 static DISK_CACHE_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 fn disk_cache_get(key: u64) -> Option<u64> {
     let _g = crate::sched::IfOffGuard::new();
-    let c = DISK_PAGE_CACHE.lock();
-    c.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| c[i].1)
+    DISK_PAGE_CACHE.lock().get(key)
 }
 
 fn disk_cache_put(key: u64, phys: u64) {
     let _g = crate::sched::IfOffGuard::new();
-    let mut c = DISK_PAGE_CACHE.lock();
-    if let Err(i) = c.binary_search_by_key(&key, |&(k, _)| k) {
-        c.insert(i, (key, phys));
-    }
+    let _ = DISK_PAGE_CACHE.lock().insert(key, phys);
 }
 
 /// Free every cached frame and clear the cache (fresh run: the pack may differ).
 fn disk_cache_reset() {
-    let old = core::mem::take(&mut *DISK_PAGE_CACHE.lock());
-    for (_, phys) in old {
+    let old: alloc::vec::Vec<u64> = DISK_PAGE_CACHE.lock().drain().collect();
+    for phys in old {
         crate::procpool::demand_free(phys);
     }
+}
+
+/// Page-cache pages given back under pressure so far, and passes that did it.
+pub static PCACHE_EVICTED: AtomicU64 = AtomicU64::new(0);
+pub static PCACHE_PASSES: AtomicU64 = AtomicU64::new(0);
+
+/// The address spaces of the tree of the launched process (main first).
+/// None when the list is busy (the caller is a fault inside the code that
+/// holds it): the caller then does without.
+fn demand_address_spaces() -> Option<alloc::vec::Vec<u64>> {
+    let mut v = alloc::vec::Vec::new();
+    let main = GLIBC_PML4.load(Ordering::Relaxed);
+    if main != 0 {
+        v.push(main);
+    }
+    let g = GLIBC_FORK_CHILDREN.try_lock()?;
+    v.extend(g.iter().map(|c| c.2));
+    Some(v)
+}
+
+/// Give up to `want` pages of the page cache back to the demand pool
+/// (BUG-153). Clean pages only, and the cache of the packs holds nothing
+/// else; unmapped pages first, then mapped ones no process referenced since
+/// the last pass, oldest first (euromm::PageCache::evict). A mapped victim is
+/// unmapped from every process before its frame is freed; the next access
+/// faults and reads the page from the pack again.
+///
+/// Callable from the page-fault handler: interrupts are off, ring 3 runs on
+/// this core only, and every lock is tried, never waited for. Returns the
+/// frames freed.
+pub fn pcache_reclaim(want: usize) -> usize {
+    let _g = crate::sched::IfOffGuard::new();
+    let Some(spaces) = demand_address_spaces() else { return 0 };
+    let Some(mut cache) = DISK_PAGE_CACHE.try_lock() else { return 0 };
+    if cache.is_empty() || want == 0 {
+        return 0;
+    }
+    // Two bits per frame of the span the cache covers: mapped, referenced.
+    let (mut lo, mut hi) = (u64::MAX, 0u64);
+    for f in cache.frames() {
+        lo = lo.min(f >> 12);
+        hi = hi.max(f >> 12);
+    }
+    let words = ((hi - lo) / 64 + 1) as usize;
+    let mut mapped: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    let mut hot: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    if mapped.try_reserve_exact(words).is_err() || hot.try_reserve_exact(words).is_err() {
+        return 0;
+    }
+    mapped.resize(words, 0);
+    hot.resize(words, 0);
+    let bit = |f: u64| -> Option<(usize, u64)> {
+        let n = (f >> 12).checked_sub(lo)?;
+        if n > hi - lo { None } else { Some(((n / 64) as usize, 1u64 << (n % 64))) }
+    };
+    for &pml4 in spaces.iter() {
+        crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, true, &mut |frame, accessed| {
+            if let Some((w, b)) = bit(frame) {
+                mapped[w] |= b;
+                if accessed {
+                    hot[w] |= b;
+                }
+            }
+            false
+        });
+    }
+    let victims = cache.evict(want, &mut |frame| match bit(frame) {
+        Some((w, b)) if hot[w] & b != 0 => euromm::Use::Hot,
+        Some((w, b)) if mapped[w] & b != 0 => euromm::Use::Idle,
+        _ => euromm::Use::Unmapped,
+    });
+    drop(cache);
+    // Unmap the mapped victims everywhere, then free. `hot` becomes the set
+    // of victim frames.
+    let any_mapped = victims.iter().any(|v| v.2);
+    if any_mapped {
+        hot.iter_mut().for_each(|w| *w = 0);
+        for &(_, frame, was_mapped) in victims.iter() {
+            if was_mapped {
+                if let Some((w, b)) = bit(frame) {
+                    hot[w] |= b;
+                }
+            }
+        }
+        for &pml4 in spaces.iter() {
+            crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, false, &mut |frame, _| {
+                matches!(bit(frame), Some((w, b)) if hot[w] & b != 0)
+            });
+        }
+    }
+    // The accessed bits were cleared (and entries unmapped) in the running
+    // address space too: its translations are looked up again.
+    crate::paging::flush_tlb_all();
+    for &(_, frame, _) in victims.iter() {
+        crate::procpool::demand_free(frame);
+    }
+    let n = victims.len();
+    PCACHE_EVICTED.fetch_add(n as u64, Ordering::Relaxed);
+    let pass = PCACHE_PASSES.fetch_add(1, Ordering::Relaxed) + 1;
+    if pass <= 8 || pass % 64 == 0 {
+        crate::serial_println!("[pcache] pass {pass}: {n} of {want} pages given back ({} of them were mapped), {} left in the cache; pool {} MiB free",
+            victims.iter().filter(|v| v.2).count(), DISK_PAGE_CACHE.try_lock().map(|c| c.len()).unwrap_or(0),
+            crate::procpool::demand_free_frames() / 256);
+    }
+    n
 }
 
 /// Sorted list of every physical frame currently backing a SHARED (memfd)
@@ -3968,7 +4073,7 @@ fn shared_phys_sorted() -> alloc::vec::Vec<u64> {
         .flat_map(|(_, frames)| frames.iter().copied())
         .filter(|&p| p != 0));
     // Disk-cache frames are shared between processes exactly the same way.
-    v.extend(DISK_PAGE_CACHE.lock().iter().map(|&(_, p)| p));
+    v.extend(DISK_PAGE_CACHE.lock().frames());
     v.sort_unstable();
     v
 }
@@ -11268,6 +11373,148 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     r
 }
 
+// -- Memory pressure and out of memory (BUG-153, BUG-155) ----------------------
+/// Below this many free frames (4 MiB) a page fault reclaims before it takes.
+const PRESSURE_LOW: usize = 1024;
+/// Below this many (1 MiB) and nothing left to reclaim: out of memory.
+const OOM_AT: usize = 256;
+/// Frames only a fault from kernel mode may take (a system call that copies
+/// into a page of the caller): a fault from ring 3 is refused before them.
+const KERNEL_RESERVE: usize = 64;
+/// Processes ended for memory so far.
+pub static OOM_KILLS: AtomicU64 = AtomicU64::new(0);
+/// A child that is to be ended for memory by someone else than itself (its pid).
+static OOM_DEFERRED: AtomicU64 = AtomicU64::new(0);
+
+/// Called by the fault handler before it takes a frame. The ladder
+/// (docs/design/MEMORY-RECLAIM.md): the page cache gives pages back; a swap
+/// partition, when there is one, takes anonymous pages (the code that was
+/// there); and when the pool is still as good as empty, one process is ended:
+/// the child that holds the most, never the launched process while it has one.
+fn memory_pressure() {
+    if crate::procpool::demand_free_frames() >= PRESSURE_LOW {
+        return;
+    }
+    let cached = DISK_PAGE_CACHE.try_lock().map(|c| c.len()).unwrap_or(0);
+    if cached > 0 {
+        pcache_reclaim((cached / 8).max(2048));
+    }
+    // Files without a name that nothing holds any more: the desktop loop sweeps.
+    ram_file_sweep_due();
+    if crate::procpool::demand_free_frames() >= OOM_AT {
+        return;
+    }
+    if SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::swapmgr::active() {
+        return; // the swap code below this call makes room
+    }
+    // Ending a process takes the locks a system call takes: only for a fault
+    // from ring 3, which holds none.
+    if FAULT_CODE.load(Ordering::Relaxed) & 4 != 0 {
+        oom_kill();
+    }
+}
+
+/// End one process for memory. True when frames came back.
+fn oom_kill() -> bool {
+    let kids: alloc::vec::Vec<(u64, usize, u64, u64, usize)> = match GLIBC_FORK_CHILDREN.try_lock() {
+        Some(g) => g.clone(),
+        None => return false,
+    };
+    let mut sizes: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
+    for &(pid, _, pml4, _, _) in kids.iter() {
+        let mut n = 0usize;
+        crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |_, pte| {
+            if pte & 3 == 3 {
+                n += 1;
+            }
+        });
+        sizes.push((pid, n));
+    }
+    let cur = crate::sched::current();
+    let cur_pid = fork_child_owner(cur).and_then(|o| kids.iter().find(|k| k.1 == o).map(|k| k.0));
+    let size_of = |pid: u64| sizes.iter().find(|s| s.0 == pid).map(|s| s.1 / 256).unwrap_or(0);
+    match euromm::oom::pick_victim(&sizes, cur_pid, 256) {
+        euromm::oom::Victim::Other(pid) => {
+            let Some(&(_, ctask, pml4, arena, frames)) = kids.iter().find(|k| k.0 == pid) else { return false };
+            let before = crate::procpool::demand_free_frames();
+            let name = thread_name(ctask);
+            fork_child_teardown(pid, ctask, pml4, arena, frames, Some(9));
+            let n = OOM_KILLS.fetch_add(1, Ordering::Relaxed) + 1;
+            crate::serial_println!(
+                "[oom] #{n} out of memory in task {cur} {:?} (process {}): pid {pid} {name:?} held the most ({} MiB) and was ended (SIGKILL); {} MiB came back, pool {} MiB free",
+                thread_name(cur), cur_pid.unwrap_or(1), size_of(pid),
+                (crate::procpool::demand_free_frames().saturating_sub(before)) / 256, crate::procpool::demand_free_frames() / 256);
+            true
+        }
+        euromm::oom::Victim::Current => {
+            let pid = cur_pid.unwrap_or(0);
+            if OOM_DEFERRED.swap(pid, Ordering::Relaxed) != pid {
+                let n = OOM_KILLS.fetch_add(1, Ordering::Relaxed) + 1;
+                crate::serial_println!(
+                    "[oom] #{n} out of memory in task {cur} {:?}: its own process, pid {pid}, holds the most ({} MiB) and is ended (SIGKILL)",
+                    thread_name(cur), size_of(pid));
+            }
+            false
+        }
+        euromm::oom::Victim::None => {
+            static SAID: AtomicU64 = AtomicU64::new(0);
+            if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
+                crate::serial_println!("[oom] out of memory in task {cur} {:?} and no child process to end: the fault fails", thread_name(cur));
+            }
+            false
+        }
+    }
+}
+
+/// End the child that was found to be the one to go while it was itself the
+/// running process. Called from task context of ANOTHER process (the desktop
+/// loop, a wait4, a fault from ring 3); a no-op otherwise.
+pub fn oom_deferred_poll() {
+    let pid = OOM_DEFERRED.load(Ordering::Relaxed);
+    if pid == 0 {
+        return;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    let hit = GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.0 == pid).copied();
+    let Some((_, ctask, pml4, arena, frames)) = hit else {
+        OOM_DEFERRED.store(0, Ordering::Relaxed); // gone by itself
+        return;
+    };
+    if fork_child_owner(crate::sched::current()) == Some(ctask) {
+        return; // still inside it
+    }
+    OOM_DEFERRED.store(0, Ordering::Relaxed);
+    let before = crate::procpool::demand_free_frames();
+    fork_child_teardown(pid, ctask, pml4, arena, frames, Some(9));
+    crate::serial_println!("[oom] pid {pid} ended: {} MiB came back, pool {} MiB free",
+        (crate::procpool::demand_free_frames().saturating_sub(before)) / 256, crate::procpool::demand_free_frames() / 256);
+}
+
+/// A system call of task `idx` (already marked dead) needed a page at `addr`
+/// and the pool had none, reserve included: its process ends. The launched
+/// process ends as a whole (its thread group); a child is torn down by the
+/// next caller of `oom_deferred_poll`.
+pub fn oom_in_syscall(idx: usize, addr: u64, rip: u64) {
+    let n = OOM_KILLS.fetch_add(1, Ordering::Relaxed) + 1;
+    let child = fork_child_owner(idx).and_then(|o| {
+        GLIBC_FORK_CHILDREN.try_lock().and_then(|g| g.iter().find(|k| k.1 == o).map(|k| k.0))
+    });
+    crate::serial_println!(
+        "[oom] #{n} out of memory inside a system call of task {idx} {:?} (address {addr:#x}, kernel rip {rip:#x}, {} frames free): {} ended (SIGKILL)",
+        thread_name(idx), crate::procpool::demand_free_frames(),
+        match child { Some(pid) => alloc::format!("its process, pid {pid}, is"), None => String::from("the launched process is") });
+    match child {
+        Some(pid) => OOM_DEFERRED.store(pid, Ordering::Relaxed),
+        None => { fault_kill_group(idx, 9); }
+    }
+}
+
+/// Is `addr` in the demand region, i.e. was a fault there one the pool could
+/// not serve (and not a wild kernel pointer)?
+pub fn in_demand_region(addr: u64) -> bool {
+    DEMAND_ENABLED.load(Ordering::Relaxed) && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE
+}
+
 fn handle_demand_fault_inner(addr: u64) -> bool {
     let in_region = addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE;
     if !DEMAND_ENABLED.load(Ordering::Relaxed) {
@@ -11308,6 +11555,22 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         return false;
     }
     let page = addr & !0xFFF;
+    // BUG-153/155: make room before the pool is empty, and never let a fault
+    // from ring 3 take the last frames (a system call may need one).
+    let from_user = FAULT_CODE.load(Ordering::Relaxed) & 4 != 0;
+    if from_user {
+        oom_deferred_poll();
+    }
+    memory_pressure();
+    if from_user && crate::procpool::demand_free_frames() < KERNEL_RESERVE
+        && !(SWAP_DEMAND_EVICT.load(Ordering::Relaxed) && crate::swapmgr::active())
+    {
+        if !DEMAND_POOL_OOM.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[demand] POOL EXHAUSTED at addr={addr:#x}: {} frames left, kept for the kernel",
+                crate::procpool::demand_free_frames());
+        }
+        return false;
+    }
     // A page this process swapped OUT earlier (sprint N2): bring it back from the
     // EuroSwap partition, evicting another page first if the pool is dry. This
     // runs before any fresh-page logic, or the swapped data would be lost.
@@ -13002,11 +13265,17 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
+        // 270 forks copy the arena 270 times: the small one for that mode.
+        let prev_arena = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
+        if mode == "forkmany" {
+            GLIBC_ARENA_MIB.store(prev_arena.min(96), Ordering::Relaxed);
+        }
         let free0 = falloc.free_frames();
         let pp0 = crate::procpool::free_frames();
         let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", mode.as_bytes()], &[b"PATH=/bin"], caps);
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
         DEMAND_POOL_CAP_FRAMES.store(0, Ordering::Relaxed);
+        GLIBC_ARENA_MIB.store(prev_arena, Ordering::Relaxed);
         if exit == u64::MAX {
             crate::serial_println!("[memt] {mode}: not run (no arena for a glibc program on this machine)");
             continue;
@@ -16558,6 +16827,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         }
         61 => {
             // wait4(pid, *status, options, *rusage): reap a glibc fork child.
+            oom_deferred_poll(); // a child that is to be ended for memory (BUG-155)
             // WNOHANG (chrome's child watcher always passes it) returns 0 when
             // nothing is reapable; WITHOUT it POSIX says wait, and a caller that
             // waits for its child's exit code got 0 back and read it as failure.

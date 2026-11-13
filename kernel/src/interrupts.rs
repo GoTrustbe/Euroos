@@ -781,6 +781,18 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     if crate::swapmgr::try_swap_in(addr) {
         return;
     }
+    // BUG-155: a fault from kernel mode on a page of the demand region that
+    // could not be given a frame is a system call out of memory (it copies
+    // into a page of its caller that was never touched), not a kernel bug.
+    // The process ends; the kernel does not stop.
+    if crate::ring3::in_demand_region(addr) && crate::sched::current() != 0 {
+        let idx = crate::sched::mark_current_dead();
+        crate::ring3::oom_in_syscall(idx, addr, frame.instruction_pointer.as_u64());
+        x86_64::instructions::interrupts::enable();
+        loop {
+            x86_64::instructions::hlt(); // the timer switches to another task
+        }
+    }
     serial_println!(
         "[idt] PAGE FAULT addr={:#x} code={:?} @ {:#x}",
         addr,
