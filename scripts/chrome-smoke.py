@@ -177,6 +177,26 @@ class Chrome(gs.Guest):
         q = re.search(r"its console output waited at most (\d+) ms", out)
         return (int(m.group(1)), int(m.group(2)), int(q.group(1)) if q else -1) if m else None
 
+    def diag_stuck(self, why):
+        """A step the browser did not follow: what every thread of every Chromium
+        process is doing (`cdiag` with the full console for a moment) and an NMI
+        census of every task, for the first two such steps of a run."""
+        self.stuck_dumps = getattr(self, "stuck_dumps", 0) + 1
+        if self.stuck_dumps > 2:
+            return
+        print(f"[chrome-smoke]   {why}: cdiag and an NMI census on the serial log", flush=True)
+        for line in ("chatter on", "cdiag"):
+            self.serial.send_line(line)
+            self.nap(1.0)
+        self.nap(3.0)
+        self.serial.send_line("chatter off")
+        self.nap(0.5)
+        try:
+            self.qmp.cmd("inject-nmi")
+        except Exception:
+            pass
+        self.nap(3.0)
+
     def ramfiles(self):
         """The `ramfiles` shell command: its first line, or None."""
         pos = self.serial.mark()
@@ -503,6 +523,7 @@ class Chrome(gs.Guest):
         hit = self.wait_tab(lambda u, t: host in u and t != "" and (same or t not in old_titles), timeout)
         if not hit:
             t = self.tabs()
+            self.diag_stuck(f"navigation to {host} did not happen")
             return False, time.time() - t0, f"the tab never showed {host} with a title of its own: {t}"
         return True, hit[0], hit[1]
 
@@ -522,7 +543,7 @@ class Chrome(gs.Guest):
             painted, loaded = self.wait_loaded(75)
             # YouTube draws its consent dialog over the page: answer it ("Reject
             # all") before the picture is judged, as a user would.
-            if "youtube" in site["host"] and self.reject_overlay():
+            if ok_nav and "youtube" in site["host"] and self.reject_overlay():
                 self.move(self.w - 4, self.h - 4)
                 self.wait_loaded(30)
             s, paint, settled = self.settle(45, quiet=2.5, save_as=f"site-{name}{tag}")
@@ -1020,11 +1041,19 @@ def main():
                 g.move(g.w - 4, g.h - 4)
                 g.calibrate_idle_icon()
                 g.click(*g.page(*FIELD_A)); g.type("first-key")
-                v = g.field("A")
+                # The page puts the field into its title, which reaches the console
+                # a moment after the last key: wait for it, do not sample once.
+                st = g.wait_state(lambda st: st[0] == "first-key", timeout=6)
+                v = st[0] if st else None
                 g.step("page input right after start: typed text arrives", v == "first-key", f"field A = {v!r}")
                 t = time.time()
                 ok, secs, detail = g.navigate("https://euro-os.eu/", "euro-os.eu")
-                s, _, _ = g.settle(30, quiet=1.5, save_as="start-site")
+                # Judged when the browser says the load is over (as in the site
+                # matrix), not after the first 1.5 s without change: the colour
+                # count of a half-painted page fell under the threshold.
+                g.move(g.w - 4, g.h - 4)
+                g.wait_loaded(60)
+                s, _, _ = g.settle(30, quiet=2.5, save_as="start-site")
                 n, _ = g.colours(s)
                 g.step("omnibox right after start: Ctrl+L, URL, Enter", ok and n >= 400, f"{detail} after {secs:.1f} s, {n} colours")
                 r = g.shot()
