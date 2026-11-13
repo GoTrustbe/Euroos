@@ -91,6 +91,89 @@ pub fn fork_churn(alloc: &mut FrameAllocator) {
     );
 }
 
+/// BUG-140: fork children with threads, ended the three ways a Chromium child
+/// ends (exit_group from its main thread while its threads wait, exit_group from
+/// a worker thread, kill(SIGTERM) by the parent): 40 children of 7 tasks each,
+/// more than the 256 scheduler slots. Every slot must come back as the child
+/// ends, not only at the end of the run: on the tree before, the children's
+/// threads stopped being created after about 30 children (pthread_create EAGAIN),
+/// as the browser's renderers did after a few sites. Exit 88 = every round, the
+/// parent's threads and one more child afterwards; 89 = the first fork was
+/// refused for memory (a machine with no room for a second arena: not run).
+pub fn fork_thread_churn(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    let (t0, k0, p0, d0) = (crate::sched::task_count(), crate::ring3::thread_kstacks_used(),
+        crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gslots_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gslots"], &[b"PATH=/bin"], caps);
+    crate::ring3::reap_dead(alloc);
+    let (t1, k1, p1, d1) = (crate::sched::task_count(), crate::ring3::thread_kstacks_used(),
+        crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    let line = out.lines().rev().find(|l| l.contains("GSLOTS:")).map(|l| l.trim_end().replace("GSLOTS: ", ""))
+        .unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == 89 || exit == u64::MAX;
+    // The table may grow by the few tasks one child has at a time (high-water),
+    // never by a child's worth per round.
+    let ok = skipped || (exit == 88 && t1 <= t0 + 16 && k1 == k0 && p1 == p0 && d1 == d0);
+    crate::serial_println!(
+        "[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: {line} (exit {}) · task table {t0}→{t1} · thread-kstacks {k0}→{k1} · process-pool {p0}→{p1} · demand-pool {d0}→{d1} → {}",
+        if exit == u64::MAX { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { "OK (fork refused for memory: one process only)" } else if ok { "OK ✓" } else { "FAILED" }
+    );
+}
+
+/// BUG-170: the audio stream of Chromium between two processes (gsyncsock.c):
+/// a socketpair and a shared-memory region made in the parent, one end and the
+/// region handed to a fork child with SCM_RIGHTS, the parent's copies closed at
+/// once; then 4-byte signals both ways, non-blocking on the parent's side, and
+/// end of file for the child when the parent closes. Exit 77 = every check;
+/// 78 = fork refused for memory (not run).
+pub fn sync_socket_test(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    // Demand paging on, as for the browser: shared memory of in-RAM files is then
+    // the file's own frames in every process (SHARED_ALIASES).
+    let prev = crate::ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gsyncsock_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gsyncsock"], &[b"PATH=/bin"], caps);
+    crate::ring3::DEMAND_ENABLED.store(prev, core::sync::atomic::Ordering::Relaxed);
+    for l in out.lines().filter(|l| l.contains("FAIL ")) {
+        crate::serial_println!("[syncsock]   {}", l.trim_end());
+    }
+    let line = out.lines().rev().find(|l| l.contains("GSYNCSOCK:") && l.contains(" -> "))
+        .map(|l| l.trim_end().replace("GSYNCSOCK: ", "")).unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == 78 || exit == u64::MAX;
+    crate::serial_println!(
+        "[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: {line} (exit {}) → {}",
+        if exit == u64::MAX { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { "OK (not run: no room for a second process)" } else if exit == 77 { "OK ✓" } else { "FAILED" });
+}
+
+/// BUG-147: 320 threads of one glibc process alive at the same time
+/// (gmanythreads.c), more than the 256 task slots and 224 thread kernel stacks
+/// of the tree before; a browser session had 214 live tasks. Exit 77 = all
+/// created and joined; the thread kernel stacks back to where they were.
+pub fn many_threads_test(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    let k0 = crate::ring3::thread_kstacks_used();
+    let prev = crate::ring3::DEMAND_ENABLED.swap(true, core::sync::atomic::Ordering::Relaxed);
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gmanythreads_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gmanythreads"], &[b"PATH=/bin"], caps);
+    crate::ring3::DEMAND_ENABLED.store(prev, core::sync::atomic::Ordering::Relaxed);
+    crate::ring3::reap_dead(alloc);
+    let k1 = crate::ring3::thread_kstacks_used();
+    let line = out.lines().rev().find(|l| l.contains("GMANYTHREADS:"))
+        .map(|l| l.trim_end().replace("GMANYTHREADS: ", "")).unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == u64::MAX;
+    let ok = exit == 77 && k1 == k0;
+    crate::serial_println!(
+        "[many-threads] 320 threads of one process alive at once: {line} (exit {}) · thread-kstacks {k0}→{k1} → {}",
+        if skipped { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { "OK (not run: no arena for a glibc program)" } else if ok { "OK ✓" } else { "FAILED" });
+}
+
 /// Filesystem lifecycle: create / write / rename / read back / remove, several
 /// rounds on the live root; every op must succeed, data must read back intact,
 /// the directory must be empty and removable after each round, a sentinel file

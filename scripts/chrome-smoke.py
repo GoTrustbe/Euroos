@@ -14,7 +14,9 @@ Nothing is sent to the page over DevTools. What the browser shows is judged from
 
   python3 scripts/chrome-smoke.py --image eurokernel.img --pack chrome-pack2.img \\
       --nss nss-pack.img --kvm --workdir /srv/euroos/chrome-runs/smoke-1
-  ... --only sites            the site matrix alone (also: interact, youtube, perf, starts)
+  ... --only sites            the site matrix alone (also: interact, youtube, localvideo, consent, perf, starts)
+  ... --only localvideo --media-dir DIR   H.264/AAC and VP9/Opus clips (scripts/mk-test-video.sh) served to the
+                              guest from this host at http://10.0.2.2:PORT/ (never to the outside)
   ... --soak-hours 2          repeat sites + interaction for that long, memory per round
   ... --starts 20             boot, start chrome, type a URL in the omnibox: 20 fresh boots
 
@@ -25,7 +27,7 @@ option update.check=off, visit only the sites of the matrix, log in nowhere.
 Exit status: 0 = every step passed, 1 = a step failed, 2 = the guest crashed or hung.
 Details: docs/CHROME-ON-EUROOS.md ("Testing"), docs/GUI-TESTING.md.
 """
-import argparse, hashlib, importlib.util, json, os, re, shlex, statistics, struct, sys, threading, time, types, wave
+import argparse, hashlib, http.server, urllib.parse, importlib.util, json, os, re, shlex, socketserver, statistics, struct, sys, threading, time, types, wave
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("gui_smoke", os.path.join(HERE, "gui-smoke.py"))
@@ -47,11 +49,24 @@ SITES = [
     {"name": "euro-os", "url": "https://euro-os.eu/", "host": "euro-os.eu", "colours": 400},
     {"name": "wikipedia", "url": "https://nl.wikipedia.org/", "host": "wikipedia.org", "colours": 300},
     {"name": "github", "url": "https://github.com/GoTrustbe/Euroos", "host": "github.com", "colours": 150},
-    {"name": "youtube", "url": "https://www.youtube.com/", "host": "youtube.com", "colours": 60},
+    {"name": "youtube", "url": "https://www.youtube.com/", "host": "youtube.com", "colours": 60, "consent_expected": True},
     {"name": "openstreetmap", "url": "https://www.openstreetmap.org/", "host": "openstreetmap.org", "colours": 300},
-    {"name": "pdf", "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", "host": "w3.org", "colours": 8},
+    {"name": "pdf", "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", "host": "w3.org", "colours": 8, "consent": False},
 ]
 VIDEO_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"      # Big Buck Bunny, 10 minutes
+# Public videos tried in turn when YouTube puts its "confirm you're not a bot" page in front
+# of one of them (every one is reported; nothing is done about the page itself).
+VIDEO_URLS = [VIDEO_URL, "https://www.youtube.com/watch?v=YE7VzlLtp-4", "https://www.youtube.com/watch?v=eRsGyueVLvQ",
+              "https://www.youtube.com/watch?v=R6MlUcmOul8"]
+
+# Consent banners, found without looking at the DOM: Chromium's own find-in-page (Ctrl+F, typed
+# through the X server like everything else) paints the ACTIVE match orange, wherever the text
+# is (page, overlay, iframe, scrolled out of sight: find scrolls it in). The harness types a
+# label, looks for those orange pixels, closes the find bar with Esc and CLICKS the spot with the
+# tablet. Order: reject first, then accept (no reject button on the banner).
+CONSENT_REJECT = ["reject all", "alles weigeren", "tout refuser", "alle ablehnen", "decline all", "reject", "weigeren", "refuser", "ablehnen"]
+CONSENT_ACCEPT = ["accept all", "alles accepteren", "tout accepter", "alle akzeptieren", "accept", "agree", "accepteren", "akzeptieren"]
+FIND_ACTIVE = bytes((255, 150, 50))       # Blink's active find match background, 0xFF9632
 
 # Characters beyond the tables of gui-smoke: (qcode, shift, altgr).
 US_EXTRA = {"#": ("3", True, False), "%": ("5", True, False), "@": ("2", True, False), "'": ("apostrophe", False, False),
@@ -151,6 +166,7 @@ class Chrome(gs.Guest):
         self.layout_name = "us"
         self.probe = None               # EchoProbe, from the first desktop on
         self.stalls = []                # (step, slowest console answer in ms)
+        self.consent_log = []           # one dict per consent button that was clicked
 
     def start_probe(self):
         if self.probe is None:
@@ -506,21 +522,62 @@ class Chrome(gs.Guest):
             self.nap(1.2)
         return self.infobars
 
-    def navigate(self, url, host, timeout=90):
+    def omnibox_selected(self, before, timeout=6):
+        """True once the omnibox shows its selection after Ctrl+L: the URL text is highlighted
+        (a run of selection blue in the omnibox row). Typing earlier sends the first letters to the
+        page while the renderer is busy (BUG-145: 's://www.openstreetmap...')."""
+        x0, y0 = self.cx(120, TOOLBAR_Y - 12)
+        x1, y1 = self.cx(-130, TOOLBAR_Y + 12)
+        t0 = time.time()
+        while time.time() - t0 < timeout * self.slow:
+            s = self.shot()
+            run = best = 0
+            for y in range(y0, y1, 3):
+                row = s.rgb[(y * s.w + x0) * 3:(y * s.w + x1) * 3]
+                run = 0
+                for i in range(0, len(row) - 2, 3):
+                    r, g, b = row[i], row[i + 1], row[i + 2]
+                    if b >= 200 and r <= 120 and g <= 170 and b - r >= 100:
+                        run += 1
+                        best = max(best, run)
+                    else:
+                        run = 0
+            if best >= 30:
+                print(f"[chrome-smoke]   omnibox selection seen {time.time() - t0:.1f} s after Ctrl+L ({best} px run)", flush=True)
+                return True
+            time.sleep(0.2)
+        print("[chrome-smoke]   omnibox selection NOT seen", flush=True)
+        return False
+
+    @staticmethod
+    def url_is(u, host):
+        """Does the tab's URL belong to `host`? By its host name, not by 'the text occurs somewhere'
+        (a search page for a mangled URL contains the host name too)."""
+        if u.startswith("file:") or "/" in host:        # "input-test", "euro-os.eu/en": a part of the address
+            return host in u
+        h = urllib.parse.urlparse(u).hostname or ""
+        return u.startswith(("http://", "https://")) and (h == host or h.endswith("." + host) or h.endswith(host))
+
+    def navigate(self, url, host, timeout=90, contains=None):
         """Ctrl+L, the URL, Enter. Returns (ok, seconds until the new document is there, detail).
         "There" is: the tab's URL has `host` in it AND its title is no longer the title
         of the page we left. (The URL alone changes the moment Enter is pressed, while
         the old document is still on the screen.)"""
         before = self.tabs() or []
         old_titles = {t for _, t in before}
-        same = any(host in u for u, _ in before)          # going to the page we are on
-        self.key("ctrl", "l")
-        self.nap(0.3)
+        same = any(self.url_is(u, host) and (contains is None or contains in u) for u, _ in before)          # going to the page we are on
+        for attempt in range(3):
+            self.key("ctrl", "l")
+            if self.omnibox_selected(None):
+                break
+            self.nap(1.0)                   # the browser is busy: ask again
+        else:
+            self.record_note = f"the omnibox never showed its selection after Ctrl+L ({host})"
         self.type(url)
         self.nap(0.2)
         t0 = time.time()
         self.key("ret")
-        hit = self.wait_tab(lambda u, t: host in u and t != "" and (same or t not in old_titles), timeout)
+        hit = self.wait_tab(lambda u, t: self.url_is(u, host) and (contains is None or contains in u) and t != "" and (same or t not in old_titles), timeout)
         if not hit:
             t = self.tabs()
             self.diag_stuck(f"navigation to {host} did not happen")
@@ -541,11 +598,14 @@ class Chrome(gs.Guest):
             # page stays on the screen for seconds after that.
             self.move(self.w - 4, self.h - 4)
             painted, loaded = self.wait_loaded(75)
-            # YouTube draws its consent dialog over the page: answer it ("Reject
-            # all") before the picture is judged, as a user would.
-            if ok_nav and "youtube" in site["host"] and self.reject_overlay():
-                self.move(self.w - 4, self.h - 4)
-                self.wait_loaded(30)
+            # A consent banner (YouTube's dialog, GitHub's bar, ...): answered before the
+            # picture is judged, as a user would. Which button is in the report.
+            if ok_nav and site.get("consent", True):
+                c = self.handle_consent(f"{name}{tag}", expect=45 if site.get("consent_expected") else 0)
+                self.consent_step(c)
+                if c["passes"]:
+                    self.move(self.w - 4, self.h - 4)
+                    self.wait_loaded(30)
             s, paint, settled = self.settle(45, quiet=2.5, save_as=f"site-{name}{tag}")
             n, share = self.colours(s)
             bad = self.new_bad()
@@ -813,9 +873,86 @@ class Chrome(gs.Guest):
             self.step("perf: key to screen under 100 ms", False, "no key changed the field within 2 s")
         return loads, lat
 
+    def red_extent(self, s, rect):
+        """Longest run of YouTube-red pixels in one row of `rect` (the player's progress bar:
+        it grows while the video's time runs, and is visible even when the controls fade)."""
+        x0, y0, x1, y1 = rect
+        best = 0
+        for y in range(y0, y1, 2):
+            run = 0
+            row = s.rgb[(y * s.w + x0) * 3:(y * s.w + x1) * 3]
+            for i in range(0, len(row) - 2, 6):
+                r, g, b = row[i], row[i + 1], row[i + 2]
+                if r >= 220 and g <= 50 and b <= 90:
+                    run += 2
+                    best = max(best, run)
+                else:
+                    run = 0
+        return best
+
+    def play_and_measure(self, label, player, seconds, wav, title_probe=None, sample_every=4.0, bar=None):
+        """The user's click on the middle of `player` (a screen rectangle) and then, for `seconds`:
+        screendumps of the player (do frames change?), the page's own clock if it has one
+        (title_probe() -> seconds or None), the progress bar (bar = rectangle) and the audio the
+        guest sent to QEMU's wav file (RMS per 5 s). Returns a dict of what was measured."""
+        self.click((player[0] + player[2]) // 2, (player[1] + player[3]) // 2)      # the user gesture
+        self.nap(3.0)
+        self.move(self.w - 4, self.h - 4)           # the pointer off the player: its controls fade
+        wav0 = os.path.getsize(wav) if os.path.exists(wav) else 0
+        t0 = time.time()
+        digests, clock, bars, shots = [], [], [], 0
+        clock0 = title_probe() if title_probe else None
+        while time.time() - t0 < seconds:
+            s = self.shot()
+            digests.append(self.digest(s, player))
+            if bar:
+                bars.append(self.red_extent(s, bar))
+            if title_probe:
+                clock.append((time.time() - t0, title_probe()))
+            if int(time.time() - t0) // 30 >= shots:
+                shots += 1
+                s.save_png(os.path.join(self.wd, f"{label}-play-{shots:02d}.png"))
+            if self.new_bad():
+                break
+            time.sleep(sample_every)
+        wall = time.time() - t0
+        changes = sum(1 for i in range(1, len(digests)) if digests[i] != digests[i - 1])
+        levels = wav_levels(wav, start=wav0)
+        loud = sum(1 for v in levels if v > 40)
+        res = {"samples": len(digests), "changed": changes, "wall_s": round(wall, 1), "audio_rms_5s": levels, "loud_windows": loud}
+        if title_probe:
+            vals = [v for _, v in clock if v is not None]
+            res["page_clock_start"], res["page_clock_end"] = clock0, (vals[-1] if vals else None)
+        if bar:
+            res["progress_bar_px"] = (bars[0], bars[-1]) if bars else None
+        return res
+
+    def check_playback(self, label, res, seconds, clock=True, bar=False, picture=True, sound=True):
+        """The verdicts of a video test: frames, time, sound."""
+        n, ch = res["samples"], res["changed"]
+        if picture:
+            self.step(f"{label}: the picture advances for {seconds} s", n >= max(3, seconds // 6) and ch >= (n - 1) * 0.9,
+                      f"{ch} of {n - 1} consecutive screendumps of the player differ")
+        if clock:
+            a, b = res.get("page_clock_start"), res.get("page_clock_end")
+            ok = a is not None and b is not None and (b - a) >= 0.7 * res["wall_s"]
+            self.step(f"{label}: the video's time increases", ok,
+                      f"currentTime {a} -> {b} s in {res['wall_s']} s of wall clock")
+        if bar:
+            pb = res.get("progress_bar_px")
+            self.step(f"{label}: the video's time increases (progress bar)", bool(pb) and pb[1] - pb[0] >= 4,
+                      f"red progress bar {pb[0] if pb else None} -> {pb[1] if pb else None} px")
+        lv = res["audio_rms_5s"]
+        if sound:
+          self.step(f"{label}: sound reaches the audio device for {seconds} s",
+                    len(lv) >= seconds // 5 - 2 and res["loud_windows"] >= len(lv) * 0.8,
+                    f"{res['loud_windows']} of {len(lv)} five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS {lv[:24]})")
+
     def youtube(self, seconds=120):
-        """A YouTube video: picture that advances and sound, for `seconds`. The play
-        gesture is a real mouse click on the player."""
+        """A YouTube video: picture that advances, the video's time, and sound, for `seconds`.
+        The consent dialog is answered by clicking its button (reject if there is one); the play
+        gesture is a real mouse click on the player. A 'confirm you're not a bot' page is
+        reported as it is (screenshot) and the next public video is tried; it is not worked around."""
         rec = self.step
         ok, secs, detail = self.navigate("https://www.youtube.com/", "youtube.com")
         s, _, _ = self.settle(60, quiet=2.5, save_as="youtube-front")
@@ -823,90 +960,272 @@ class Chrome(gs.Guest):
         rec("youtube: the front page (or its consent dialog) loads", ok and n >= 30, f"{detail} after {secs:.1f} s, {n} colours")
         if not ok:
             return False
-        # The EU consent dialog: "Reject all" is the left one of the two buttons under the text.
-        if a_consent := self.find_consent(s):
-            self.click(*a_consent)
-            self.wait_tab(lambda u, t: "consent" not in u and "youtube.com" in u, 40)
-            s, _, _ = self.settle(60, quiet=2.5, save_as="youtube-after-consent")
-            rec("youtube: consent dialog answered with 'Reject all'", "consent" not in (self.tabs() or [("", "")])[0][0], f"{self.tabs()}")
-        ok, secs, detail = self.navigate(VIDEO_URL, "watch")
-        self.move(self.w - 4, self.h - 4)
-        self.wait_loaded(60)
-        s, _, _ = self.settle(60, quiet=3.0, save_as="youtube-watch")
-        rec("youtube: the watch page loads", ok, f"{detail} after {secs:.1f} s")
-        if not ok:
+        self.consent_step(self.handle_consent("youtube-front", expect=45))
+        blocked = []
+        for k, url in enumerate(VIDEO_URLS):
+            ok, secs, detail = self.navigate(url, "youtube.com", contains="watch?v=" + url.split("=")[-1])
+            self.move(self.w - 4, self.h - 4)
+            self.wait_loaded(60)
+            s, _, _ = self.settle(60, quiet=3.0, save_as=f"youtube-watch-{k + 1}")
+            rec(f"youtube: the watch page loads ({url.split('=')[-1]})", ok, f"{detail} after {secs:.1f} s")
+            if not ok:
+                continue
+            self.consent_step(self.handle_consent(f"youtube-watch-{k + 1}"))
+            bot, _ = self.find_in_page(["confirm you", "not a bot"], shot_name=f"youtube-botcheck-{k + 1}", button_only=False)
+            if bot:
+                # Guests need no login: a sign-in or bot page after the consent banner means the
+                # banner was not handled (or the click did not register). Check that first, with
+                # a screenshot of every step, before calling it YouTube's doing.
+                again = self.handle_consent(f"youtube-watch-{k + 1}-recheck")
+                self.consent_step(again)
+                self.shot(f"youtube-watch-{k + 1}-after-recheck")
+                bot, _ = self.find_in_page(["confirm you", "not a bot"], shot_name=f"youtube-botcheck-{k + 1}b", button_only=False)
+            if bot:
+                blocked.append(url)
+                rec(f"youtube: {url.split('=')[-1]} is not behind a bot check", False,
+                    "the page shows YouTube's 'Sign in to confirm you're not a bot' (find-in-page matched "
+                    f"'{bot}'; screenshot youtube-botcheck-{k + 1}.png); reported as it is, not bypassed")
+                continue
+            break
+        else:
+            self.youtube_result = {"blocked_by_bot_check": blocked}
             return False
-        # The consent dialog over the watch page (no consent address of its own).
-        if self.reject_overlay():
-            s, _, _ = self.settle(30, quiet=2.5, save_as="youtube-watch-after-consent")
-            rec("youtube: consent overlay answered with 'Reject all'", True, "clicked the left button of the dialog")
+        self.youtube_result = {"video": url, "blocked_by_bot_check": blocked}
         # The player: top left of the page, 16:9 over most of the width at this window size.
         px0, py0 = self.page(24, 80)
         pw = min(self.xw - 48, 1280)
         player = (px0 + 20, py0 + 20, px0 + pw - 20, py0 + int(pw * 9 / 16) - 60)
-        wav = os.path.join(self.wd, "audio.wav")
-        self.click((player[0] + player[2]) // 2, (player[1] + player[3]) // 2)      # the user gesture
-        self.nap(3.0)
-        self.move(self.w - 4, self.h - 4)           # the pointer off the player: its controls fade
-        wav0 = os.path.getsize(wav) if os.path.exists(wav) else 0
-        t0 = time.time()
-        digests, shots = [], 0
-        while time.time() - t0 < seconds:
-            s = self.shot()
-            digests.append(self.digest(s, player))
-            if int(time.time() - t0) // 30 >= shots:
-                shots += 1
-                s.save_png(os.path.join(self.wd, f"youtube-play-{shots:02d}.png"))
-            if self.new_bad():
-                break
-            time.sleep(4.0)
-        changes = sum(1 for i in range(1, len(digests)) if digests[i] != digests[i - 1])
-        levels = wav_levels(wav, start=wav0)
-        loud = sum(1 for v in levels if v > 40)
-        self.youtube_result = {"samples": len(digests), "changed": changes, "audio_rms_5s": levels}
-        rec(f"youtube: the picture advances for {seconds} s", len(digests) >= seconds // 6 and changes >= (len(digests) - 1) * 0.9,
-            f"{changes} of {len(digests) - 1} consecutive screendumps of the player differ")
-        rec(f"youtube: sound for {seconds} s", len(levels) >= seconds // 5 - 2 and loud >= len(levels) * 0.8,
-            f"{loud} of {len(levels)} five-second windows of the guest's audio output are above the noise floor (RMS {levels[:24]})")
+        bar = (player[0], player[3] - 30, player[2], player[3] + 75)
+        res = self.play_and_measure("youtube", player, seconds, os.path.join(self.wd, "audio.wav"), bar=bar)
+        self.youtube_result.update(res)
+        self.check_playback("youtube", res, seconds, clock=False, bar=True)
         return True
 
-    def reject_overlay(self):
-        """The consent dialog drawn OVER the watch page ("Before you continue to
-        YouTube"): scroll it to its buttons and click the left one, "Reject all".
-        True when a button was found and clicked."""
-        x0, y0, x1, y1 = self.content()
-        self.move((x0 + x1) // 2, (y0 + y1) // 2)
-        for k in range(4):
-            self.wheel(10)
-            self.nap(0.8)
-            s = self.shot(f"youtube-consent-{k + 1}")
-            a = self.find_consent(s, need_url=False)
-            if a:
-                self.click(*a)
-                self.nap(3.0)
-                self.shot("youtube-consent-answered")
-                return True
-        return False
+    def consent_selftest(self, port):
+        """The consent handling against three local banners (reject + accept, Dutch labels,
+        accept only): the page's title says which button it got."""
+        for page, want in (("consent-en.html", "rejected"), ("consent-nl.html", "rejected"), ("consent-accept.html", "accepted")):
+            ok, secs, detail = self.navigate(f"http://10.0.2.2:{port}/{page}", "10.0.2.2")
+            self.settle(15, quiet=1.0)
+            if not ok:
+                self.step(f"consent self-test {page}: the page loads", False, detail)
+                continue
+            c = self.handle_consent(page)
+            self.consent_step(c)
+            self.step(f"consent self-test {page}: the page was told '{want}'", want in self.title(), f"title {self.title()!r}")
 
-    def find_consent(self, s, need_url=True):
-        """The centre of the 'Reject all' button of Google's consent page, or None: the
-        page is light, and the two wide pill buttons are the only dark-on-light blocks
-        in the lower half that span tens of pixels in one colour."""
-        if need_url and "consent" not in ((self.tabs() or [("", "")])[0][0]):
-            return None
-        x0, y0, x1, y1 = self.content()
-        # rows where a long run of one non-background colour starts in the left half
-        for y in range(y1 - 20, y0 + 100, -6):
-            x = x0 + 40
-            while x < (x0 + x1) // 2:
-                c = s.px(x, y)
-                run = 0
-                while x + run < x1 and s.px(x + run, y) == c:
-                    run += 4
-                if 60 <= run <= 400 and c not in (bytes((255, 255, 255)), s.px(x0 + 4, y)):
-                    return x + run // 2, y
-                x += max(run, 4)
+    def localvideo(self, port, seconds):
+        """H.264/AAC and VP9/Opus clips from this host (http://10.0.2.2:PORT/), with the same
+        checks as YouTube: frames change, the video's currentTime runs (the page mirrors it into
+        its title), and the guest's audio output is not silence."""
+        wav = os.path.join(self.wd, "audio.wav")
+        self.media_dir = LocalHandler.media_dir
+        results = {}
+        clips = (("h264+aac", "h264.html", True, True), ("vp9+opus", "vp9.html", True, True),
+                 ("vp9 video only", "vp9v.html", True, False), ("opus audio only", "opus.html", False, True))
+        for codec, page, want_pic, want_snd in clips:
+            if not os.path.isfile(os.path.join(self.media_dir, page.replace(".html", ".mp4" if "h264" in page else ".webm"))):
+                continue
+            label = f"local video {codec}"
+            ok, secs, detail = self.navigate(f"http://10.0.2.2:{port}/{page}", "10.0.2.2")
+            self.settle(15, quiet=1.0, save_as=f"local-{page}-loaded")
+            hit = self.wait_tab(lambda u, t: t.startswith("V=["), 20)
+            st = self.video_state()
+            self.step(f"{label}: the page loads from the host and the browser knows the codec", ok and st is not None and st["can"] != "no",
+                      f"{detail}; state {st}")
+            if not (ok and st):
+                continue
+            px0, py0 = self.page(8, 8)
+            player = (px0, py0, px0 + 480, py0 + 270)
+            btn = self.page(150, 340)
+            # the play button is a real click; measure_and_play clicks the middle of `player`, so the
+            # button click is done here and the player click is skipped by a one-point "player".
+            self.click(*btn)
+            self.nap(3.0)
+            self.move(self.w - 4, self.h - 4)
+            wav0 = os.path.getsize(wav) if os.path.exists(wav) else 0
+            t0 = time.time()
+            digests, clock = [], []
+            while time.time() - t0 < seconds:
+                sh = self.shot()
+                digests.append(self.digest(sh, player))
+                v = self.video_state()
+                clock.append((time.time() - t0, v))
+                time.sleep(2.0)
+            wall = time.time() - t0
+            levels = wav_levels(wav, start=wav0)
+            loud = sum(1 for x in levels if x > 40)
+            times = [v["t"] for _, v in clock if v]
+            changes = sum(1 for i in range(1, len(digests)) if digests[i] != digests[i - 1])
+            res = {"samples": len(digests), "changed": changes, "wall_s": round(wall, 1), "audio_rms_5s": levels,
+                   "loud_windows": loud, "page_clock_start": times[0] if times else None,
+                   "page_clock_end": times[-1] if times else None, "last_state": clock[-1][1] if clock else None}
+            results[codec] = res
+            self.check_playback(label, res, seconds, picture=want_pic, sound=want_snd)
+            err = (clock[-1][1] or {}).get("err") if clock else None
+            self.step(f"{label}: no media error", err == "none", f"last state {res['last_state']}")
+        self.localvideo_result = results
+
+    def video_state(self):
+        """The local video page's title, V=[st=playing t=1.50 rs=4 err=none can=probably]: as a dict."""
+        for url, title in self.tabs() or []:
+            m = re.match(r"V=\[st=(\S+) t=([\d.]+) rs=(\d) err=(\S+) can=(\S*)\]", title)
+            if m:
+                return {"st": m.group(1), "t": float(m.group(2)), "rs": int(m.group(3)), "err": m.group(4), "can": m.group(5)}
         return None
+
+    # ── consent banners (generic) ───────────────────────────────────────────
+    def highlight(self, after, before, region):
+        """(centre, bbox) of the find-in-page active-match highlight (orange pixels that `before`
+        did not have), or None when there are fewer than 40 of them."""
+        x0, y0, x1, y1 = region
+        xs, ys = [], []
+        for y in range(y0, y1):
+            row = after.rgb[(y * after.w + x0) * 3:(y * after.w + x1) * 3]
+            i = row.find(FIND_ACTIVE)
+            while i >= 0:
+                if i % 3 == 0 and before.px(x0 + i // 3, y) != FIND_ACTIVE:
+                    xs.append(x0 + i // 3)
+                    ys.append(y)
+                i = row.find(FIND_ACTIVE, i + 1)
+        if len(xs) < 40:
+            return None
+        bbox = (min(xs), min(ys), max(xs), max(ys))
+        xs.sort(); ys.sort()
+        return (xs[len(xs) // 2], ys[len(ys) // 2]), bbox
+
+    def isolated(self, after, bbox, pad=8):
+        """Is the highlighted text the whole content of its line segment (a button label), not a
+        word inside a sentence? The `pad` columns left and right of the highlight, over its height
+        (minus the glyph margins), must be one flat colour. 'Reject' inside 'rejected', or
+        'Accept all' inside 'If you choose to \u201cAccept all,\u201d', fails this."""
+        x0, y0, x1, y1 = bbox
+        for xa, xb in ((x0 - pad, x0 - 1), (x1 + 1, x1 + pad)):
+            px = [after.px(x, y) for y in range(y0 + 2, max(y0 + 3, y1 - 1)) for x in range(max(0, xa), min(after.w, xb + 1))]
+            if not px:
+                return False
+            # "flat": every channel within 24 of the median pixel (buttons are gradients or dithered)
+            ref = sorted(px, key=lambda c: c[0] + c[1] + c[2])[len(px) // 2]
+            flat = sum(1 for c in px if max(abs(c[0] - ref[0]), abs(c[1] - ref[1]), abs(c[2] - ref[2])) <= 24)
+            if flat < 0.97 * len(px):
+                return False
+        return True
+
+    def stable_highlight(self, base, region, shot_name=None):
+        """The highlight once it has stopped moving: the find bar paints (and scrolls) a second or so
+        after the key in this guest, so "nothing" needs three looks 0.5 s apart and a position two
+        looks that agree (at most 8 looks). (screen, (centre, bbox) or None)."""
+        prev, nones, s, hit = None, 0, None, None
+        for k in range(8):
+            self.nap(0.5)
+            s = self.shot(shot_name) if (shot_name and k == 0) else self.shot()
+            hit = self.highlight(s, base, region)
+            if hit is None:
+                nones += 1
+                if nones >= 3:
+                    break
+                prev = None
+                continue
+            nones = 0
+            if prev is not None and abs(hit[0][0] - prev[0]) < 2 and abs(hit[0][1] - prev[1]) < 2:
+                break
+            prev = hit[0]
+        return s, hit
+
+    def find_in_page(self, labels, shot_name=None, button_only=True, max_matches=8):
+        """Ctrl+F each label in turn, and Enter through its matches (find scrolls each into view).
+        (label, (x, y)) of the first match that is highlighted and, with button_only, stands
+        alone like a button label (isolated()); else (None, None). The find bar is closed."""
+        region = self.content()
+        base = self.shot()
+        self.key("ctrl", "f")
+        self.nap(1.5)                           # the find bar must have focus before the first letter (it ate letters of "reject all")
+        self.type("zq")                         # warm-up: the first letters typed into a fresh find bar are sometimes lost
+        self.nap(0.8)
+        found = (None, None)
+        self.find_trace = []                    # per label: [(highlight centre, passed the button test)]
+        for label in labels:
+            self.key("ctrl", "a")
+            self.type(label)
+            self.nap(0.5)
+            repeats, last = 0, None
+            for m in range(max_matches):
+                s, hit = self.stable_highlight(base, region, shot_name if (shot_name and m == 0) else None)
+                if not hit:
+                    break
+                centre, bbox = hit
+                ok_btn = self.isolated(s, bbox)
+                self.find_trace.append((label, m, centre, ok_btn))
+                if not button_only or ok_btn:
+                    found = (label, centre)
+                    break
+                if m and centre == last:
+                    repeats += 1                # the highlight did not move: the scroll is still under way, or wrapped round
+                    if repeats >= 2:
+                        break
+                last = centre
+                self.key("ret")                 # the next match
+                self.nap(0.5)
+            if found[0]:
+                break
+        self.key("esc")
+        self.nap(0.4)
+        return found
+
+    def handle_consent(self, name, passes=2, expect=0):
+        """Answer a cookie/consent banner like a person: find 'Reject all' (or its Dutch, French,
+        German form), otherwise 'Accept all' (or its forms), click it with the tablet, and check
+        that the banner is gone (the label is no longer on the page and the pixels around the
+        button changed). Returns {site, passes: [{button, kind, at, gone}], ok}; ok is False
+        only when a button was clicked and the banner stayed (an input bug until shown otherwise)."""
+        out = {"site": name, "passes": [], "ok": True}
+        tag = re.sub(r"[^a-z0-9]+", "-", name.lower())
+        for n in range(passes):
+            pre = self.shot()
+            label, pos = self.find_in_page(CONSENT_REJECT + CONSENT_ACCEPT)
+            trace = list(self.find_trace)
+            # A banner that is known to come (expect = seconds to wait): the dialog is drawn some
+            # seconds after the load event, and a click before it is there clicks nothing.
+            t_end = time.time() + (expect if n == 0 else 0)
+            while not pos and time.time() < t_end:
+                self.nap(3.0)
+                pre = self.shot()
+                label, pos = self.find_in_page(CONSENT_REJECT + CONSENT_ACCEPT)
+                trace = list(self.find_trace)
+            if not pos:
+                break
+            kind = "reject" if label in CONSENT_REJECT else "accept"
+            pre = self.shot(f"consent-{tag}-{n + 1}-before")      # the button, find bar closed
+            self.click(*pos)
+            self.nap(2.5)
+            self.move(self.w - 4, self.h - 4)
+            self.wait_loaded(20)
+            self.settle(10, quiet=1.0)
+            post = self.shot(f"consent-{tag}-{n + 1}-after")
+            around = (max(0, pos[0] - 70), max(0, pos[1] - 25), min(self.w, pos[0] + 70), min(self.h, pos[1] + 25))
+            changed = post.differs(pre, min_pixels=150, region=around)
+            again, _ = self.find_in_page([label])
+            gone = again is None and changed
+            out["passes"].append({"button": label, "kind": kind, "at": list(pos), "gone": gone,
+                                  "label_still_found": again is not None, "pixels_changed": changed})
+            out["passes"][-1]["find_trace"] = [t for t in trace if t[0] in CONSENT_REJECT]
+            self.consent_log.append(dict(out["passes"][-1], site=name))
+            if not gone:
+                out["ok"] = False
+                break
+        return out
+
+    def consent_step(self, c):
+        """One step per site: which button was clicked, and was the banner gone."""
+        if not c["passes"]:
+            self.step(f"consent {c['site']}: no banner button found", True,
+                      f"find-in-page matched none of {len(CONSENT_REJECT) + len(CONSENT_ACCEPT)} labels")
+            return
+        what = "; ".join(f"clicked '{p['button']}' ({p['kind']}) at {tuple(p['at'])}, banner "
+                         + (f" [matches of the reject labels, (label, n, at, looked like a button): {p['find_trace']}]" if p["kind"] == "accept" and p.get("find_trace") else "")
+                         + ("gone" if p["gone"] else f"STILL THERE (label found again: {p['label_still_found']}, pixels around the button changed: {p['pixels_changed']})")
+                         for p in c["passes"])
+        self.step(f"consent {c['site']}: {c['passes'][0]['kind']} button clicked", c["ok"], what)
 
     def memory(self):
         """The kernel's own memory account while a browser runs: the newest `[cpu]`
@@ -939,6 +1258,95 @@ def wav_levels(path, window=5.0, start=0):
     except (OSError, struct.error):
         pass
     return out
+
+
+# ── the host-side web server of the local tests ──────────────────────────────────────────────
+VIDEO_PAGE = """<!doctype html><meta charset=utf-8><title>V=[st=loading t=0.00 rs=0 err=none can=?]</title>
+<body style="margin:8px;background:#fff;font:20px sans-serif">
+<video id=v width=480 height=270 src="%(file)s" preload=auto style="display:block;background:#000"></video>
+<button id=b style="margin-top:30px;width:300px;height:80px;font-size:32px">PLAY</button>
+<script>
+var v = document.getElementById('v'), can = v.canPlayType('%(type)s') || 'no';
+function upd(err) { document.title = 'V=[st=' + (v.ended ? 'ended' : v.paused ? 'paused' : 'playing') + ' t=' + v.currentTime.toFixed(2) +
+  ' rs=' + v.readyState + ' err=' + (err || (v.error ? v.error.code : 'none')) + ' can=' + can + ']'; }
+setInterval(upd, 500); upd();
+document.getElementById('b').onclick = function () { v.play().catch(function (e) { upd(e.name); }); };
+</script>"""
+CONSENT_PAGE = """<!doctype html><meta charset=utf-8><title>consent=open</title>
+<body style="margin:0;background:#eef;font:18px sans-serif"><h1 style="margin:40px">A page with a banner</h1>
+<p style="margin:40px">Some text. Some more text.</p>
+<div id=bn style="position:fixed;left:0;right:0;bottom:0;height:150px;background:#fff;border-top:4px solid #036;padding:16px">
+We use cookies to make this page work.<br><br>%(buttons)s</div>
+<script>function done(w) { document.getElementById('bn').style.display = 'none'; document.title = 'consent=' + w; }</script>"""
+LOCAL_PAGES = {
+    "h264.html": VIDEO_PAGE % {"file": "h264.mp4", "type": 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'},
+    "vp9.html": VIDEO_PAGE % {"file": "vp9.webm", "type": 'video/webm; codecs="vp9, opus"'},
+    # the same clip split in its two halves: which one breaks?
+    "vp9v.html": VIDEO_PAGE % {"file": "vp9v.webm", "type": 'video/webm; codecs="vp9"'},
+    "opus.html": VIDEO_PAGE % {"file": "opus.webm", "type": 'audio/webm; codecs="opus"'},
+    "consent-en.html": CONSENT_PAGE % {"buttons": "<button onclick=\"done('accepted')\" style='font-size:20px;padding:10px'>Accept all</button> "
+                                                  "<button onclick=\"done('rejected')\" style='font-size:20px;padding:10px'>Reject all</button>"},
+    "consent-nl.html": CONSENT_PAGE % {"buttons": "<button onclick=\"done('accepted')\" style='font-size:20px;padding:10px'>Alles accepteren</button> "
+                                                  "<button onclick=\"done('rejected')\" style='font-size:20px;padding:10px'>Alles weigeren</button>"},
+    "consent-accept.html": CONSENT_PAGE % {"buttons": "<button onclick=\"done('accepted')\" style='font-size:20px;padding:10px'>I agree</button>"},
+}
+
+
+class LocalHandler(http.server.BaseHTTPRequestHandler):
+    """The test pages and the clips of --media-dir, with Range requests (the media stack seeks)."""
+    media_dir = "."
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        name = os.path.basename(self.path.split("?")[0])
+        if name in LOCAL_PAGES:
+            body, ctype, status, hdr = LOCAL_PAGES[name].encode(), "text/html; charset=utf-8", 200, {}
+        else:
+            path = os.path.join(self.media_dir, name)
+            if name not in ("h264.mp4", "vp9.webm", "vp9v.webm", "opus.webm") or not os.path.isfile(path):
+                self.send_error(404)
+                return
+            size = os.path.getsize(path)
+            ctype = "video/mp4" if name.endswith(".mp4") else "video/webm"
+            status, a, b = 200, 0, size - 1
+            m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    a = int(m.group(1))
+                    b = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+                else:
+                    a = max(0, size - int(m.group(2)))
+                status = 206
+            with open(path, "rb") as f:
+                f.seek(a)
+                body = f.read(b - a + 1)
+            hdr = {"Content-Range": f"bytes {a}-{b}/{size}"} if status == 206 else {}
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        for k, v in hdr.items():
+            self.send_header(k, v)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            pass
+
+
+def serve_local(port, media_dir):
+    """Serve the local test pages on 127.0.0.1:PORT of THIS host. The guest reaches it at
+    10.0.2.2:PORT (QEMU user-net's host address); nothing is forwarded to the outside."""
+    LocalHandler.media_dir = media_dir
+    class Srv(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+    srv = Srv(("127.0.0.1", port), LocalHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
 
 
 def make_args(a, workdir):
@@ -1021,6 +1429,9 @@ def main():
     ap.add_argument("--soak-hours", type=float, default=0.0, help="repeat sites + interaction in one session for this long")
     ap.add_argument("--starts", type=int, default=0, help="N fresh boots: start chrome, close the infobar, type a URL in the omnibox")
     ap.add_argument("--video-seconds", type=int, default=120)
+    ap.add_argument("--local-seconds", type=int, default=60, help="how long each local clip plays (--only localvideo)")
+    ap.add_argument("--local-port", type=int, default=18780, help="port of the host-side test server (127.0.0.1; the guest uses 10.0.2.2:PORT)")
+    ap.add_argument("--media-dir", default="", help="directory with h264.mp4 and vp9.webm (scripts/mk-test-video.sh)")
     a = ap.parse_args()
     if gs.OVMF is None:
         sys.exit("no OVMF firmware found")
@@ -1075,6 +1486,10 @@ def main():
         sys.exit(0 if good == a.starts else 1)
 
     extra = {}
+    if "localvideo" in only or "consent" in only:
+        if "localvideo" in only and not (os.path.isfile(os.path.join(a.media_dir, "h264.mp4")) and os.path.isfile(os.path.join(a.media_dir, "vp9.webm"))):
+            sys.exit("--only localvideo needs --media-dir with h264.mp4 and vp9.webm (scripts/mk-test-video.sh DIR)")
+        serve_local(a.local_port, a.media_dir)
 
     def body(g):
         if not g.start_chrome("file:///tmp/input-test.html"):
@@ -1101,6 +1516,11 @@ def main():
                 g.site_matrix(sites, tag=f"-r{r + 1}" if a.rounds > 1 else "")
         if "interact" in only:
             g.interaction_matrix()
+        if "consent" in only:
+            g.consent_selftest(a.local_port)
+        if "localvideo" in only:
+            g.localvideo(a.local_port, a.local_seconds)
+            extra["localvideo"] = getattr(g, "localvideo_result", None)
         if "youtube" in only:
             g.youtube(a.video_seconds)
             extra["youtube"] = getattr(g, "youtube_result", None)
@@ -1108,6 +1528,7 @@ def main():
             loads, lat = g.perf()
             extra["perf_loads_s"] = loads
             extra["perf_key_ms"] = [round(x) for x in lat]
+        extra["consent_clicks"] = g.consent_log
         extra["memory_end"] = g.memory()
 
     g, verdict, rc = one_boot(a, a.workdir, body)

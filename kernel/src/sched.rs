@@ -20,7 +20,11 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 // Chrome (even --single-process headless) spawns dozens of threads (thread pool,
 // compositor, IO, message pumps). 48 was fine for the shell + a few glibc apps; a
 // browser needs far more scheduler slots. Each slot costs one 16 KiB kernel stack.
-pub const MAX_TASKS: usize = 256;
+// BUG-147: 512. After BUG-140 no slot stays with an ended task, but a browser
+// session keeps up to 16 processes and their threads live: 214 of 256 in one
+// minimal session. A slot costs its 16 KiB kernel-task stack (STACKS) and a few
+// words; thread kernel stacks past the static 224 come from the heap on demand.
+pub const MAX_TASKS: usize = 512;
 const STACK_SIZE: usize = 16 * 1024;
 const CONTEXT_WORDS: usize = 20; // 15 GP registers + 5 (rip,cs,rflags,rsp,ss)
 
@@ -203,6 +207,74 @@ pub fn block_on(chan: u64) {
     s.tasks[cur].state = State::Blocked(chan);
 }
 
+// -- Wake hand-off (W23, task 4: key to screen) --
+//
+// A thread that wakes another (futex wake, a write the other waits for)
+// used to keep the CPU until its tick ended or it blocked: up to 10 ms per
+// hand-off, and a key passes a dozen threads of the browser on its way to the
+// screen, all on the one CPU that runs ring 3. With WAKE_YIELD the waking
+// system call ends with a yield, and the scheduler picks the task with the
+// least vruntime as at any switch (the woken one, if it waited long enough
+// to deserve it). The shell command wakeyield on|off switches it at run time;
+// keylat shows how long woken tasks waited for the CPU.
+//
+// OFF by default: measured in one browser session (docs/proof/chrome-w23),
+// woken tasks then got the CPU within 0.1 ms instead of 1-10 ms, but the key
+// to screen of the harness went from 483 to 1102 ms (median): every waking
+// thread gave its turn away and waited a round of thirty for the next one.
+// What stays on is DESK_KICK: after the hosted window drew, the next yield
+// of any task goes to the desktop loop, which puts the drawing on the screen.
+pub static WAKE_YIELD: AtomicBool = AtomicBool::new(false);
+static RESCHED: AtomicBool = AtomicBool::new(false);
+/// The desktop loop has something to put on the screen (the hosted window
+/// drew): the next switch goes to it even if it had its turn this tick.
+static DESK_KICK: AtomicBool = AtomicBool::new(false);
+/// When each task was last woken (TSC; 0 = not waiting for the CPU).
+static WOKEN_AT: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// Wake-to-run delays: under 0.1, 1, 5, 10, 20, 50, 100 ms, and longer.
+pub static WAKE_HIST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+pub const WAKE_HIST_MS: [&str; 8] = ["<0.1", "<1", "<5", "<10", "<20", "<50", "<100", ">=100"];
+
+fn woken(s: &Scheduler, idx: usize) {
+    WOKEN_AT[idx].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
+    if WAKE_YIELD.load(Ordering::Relaxed) && idx != s.current && s.current != 0 {
+        RESCHED.store(true, Ordering::Relaxed);
+    }
+}
+
+fn ran(idx: usize) {
+    let w = WOKEN_AT[idx].swap(0, Ordering::Relaxed);
+    if w == 0 {
+        return;
+    }
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    let us = unsafe { core::arch::x86_64::_rdtsc() }.saturating_sub(w) * 10_000 / per;
+    let b = match us {
+        0..=99 => 0,
+        100..=999 => 1,
+        1000..=4999 => 2,
+        5000..=9999 => 3,
+        10000..=19999 => 4,
+        20000..=49999 => 5,
+        50000..=99999 => 6,
+        _ => 7,
+    };
+    WAKE_HIST[b].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Did the running system call wake someone it should hand the CPU to?
+pub fn take_resched() -> bool {
+    RESCHED.swap(false, Ordering::Relaxed)
+}
+
+/// The hosted window drew: the desktop loop is next (see DESK_KICK).
+pub fn want_desktop() {
+    DESK_KICK.store(true, Ordering::Relaxed);
+    if WAKE_YIELD.load(Ordering::Relaxed) {
+        RESCHED.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
 pub fn unblock(idx: usize) {
     let mut s = SCHED.lock();
@@ -210,6 +282,7 @@ pub fn unblock(idx: usize) {
         s.tasks[idx].state = State::Ready;
         let floor = s.min_vr.saturating_sub(64);
         if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        woken(&s, idx);
     }
 }
 
@@ -222,6 +295,7 @@ pub fn unblock_any(idx: usize) {
         s.tasks[idx].state = State::Ready;
         let floor = s.min_vr.saturating_sub(64);
         if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        woken(&s, idx);
     }
 }
 
@@ -300,6 +374,7 @@ pub fn wake(chan: u64, n: usize) -> usize {
         if s.tasks[i].state == State::Blocked(chan) {
             s.tasks[i].state = State::Ready;
             woken += 1;
+            WOKEN_AT[i].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
         }
     }
     woken
@@ -756,6 +831,17 @@ static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 /// The desktop loop (task 0) left the CPU while it still had something to poll
 /// (a yield, or preempted at work), not halted in an idle machine.
 static T0_WANTS: AtomicBool = AtomicBool::new(false);
+/// The desktop loop is in its idle halt (set right before the hlt, cleared
+/// after it). A tick that finds it so was not work (see idle_tick).
+static T0_IDLE: AtomicBool = AtomicBool::new(false);
+
+/// The desktop loop's idle wait: halt until the next interrupt, and let the
+/// scheduler know that the time is idle, not work.
+pub fn desktop_idle_hlt() {
+    T0_IDLE.store(true, Ordering::Relaxed);
+    x86_64::instructions::hlt();
+    T0_IDLE.store(false, Ordering::Relaxed);
+}
 /// The tick in which the desktop loop was last given the CPU by the scheduler.
 static T0_TURN_TICK: AtomicU64 = AtomicU64::new(0);
 /// Turns the desktop loop got because a tick ended another task's turn.
@@ -869,6 +955,38 @@ pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
     schedule_core(rsp, true)
 }
 
+extern "C" {
+    /// The first byte of the loaded kernel image (PE/COFF, set by the linker).
+    static __ImageBase: u8;
+}
+static IMAGE_LO: AtomicU64 = AtomicU64::new(0);
+static IMAGE_HI: AtomicU64 = AtomicU64::new(0);
+
+/// Is `a` inside the loaded kernel image (headers, code, data: all mapped in
+/// every address space)? The bounds come from the image's own PE header,
+/// read once; an unreadable header answers false for every address.
+pub fn in_kernel_image(a: u64) -> bool {
+    let mut lo = IMAGE_LO.load(Ordering::Relaxed);
+    if lo == 0 {
+        // SAFETY: __ImageBase is the start of the loaded image; its DOS and PE
+        // headers are part of it.
+        unsafe {
+            let base = core::ptr::addr_of!(__ImageBase) as u64;
+            let mz = (base as *const u16).read_unaligned();
+            let lfanew = ((base + 0x3c) as *const u32).read_unaligned() as u64;
+            let ok = mz == 0x5a4d && lfanew < 0x1000
+                && ((base + lfanew) as *const u32).read_unaligned() == 0x0000_4550;
+            // PE32+: SizeOfImage at offset 56 of the optional header, which follows
+            // the 4-byte signature and the 20-byte file header.
+            let size = if ok { ((base + lfanew + 24 + 56) as *const u32).read_unaligned() as u64 } else { 0 };
+            IMAGE_HI.store(base + size, Ordering::Relaxed);
+            IMAGE_LO.store(base.max(1), Ordering::Relaxed);
+            lo = base.max(1);
+        }
+    }
+    a >= lo && a < IMAGE_HI.load(Ordering::Relaxed)
+}
+
 /// The shared scheduling core: save the outgoing rsp, pick the next runnable task
 /// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
 /// yield. Does NO EOI — the caller owns interrupt acknowledgement.
@@ -933,10 +1051,18 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     //    creator's low vruntime, won every tick for 380 s (run 71: 38090 of
     //    39664 ticks) while the desktop loop, the heartbeats and every other
     //    thread waited for it to catch up.
-    let idle_tick = cur == 0 && !via_yield && unsafe {
-        let rip = *((rsp + 120) as *const u64);
-        rip > 0x1000 && *((rip - 1) as *const u8) == 0xf4 // the tick landed after hlt
-    };
+    // Idle is what the desktop loop says it is: it sets T0_IDLE around its hlt.
+    // This used to read the byte before the interrupted rip and call the tick
+    // idle when that byte was 0xf4 (hlt). Two bugs in one read:
+    // - W23 / the TCG watchdog trips: 0xf4 is also -12 as a displacement or
+    //   an immediate (lea -0xc(%rbp), ...), common in the soft-float code the
+    //   loop draws with. A tick there counted the busy loop as idle, cleared
+    //   T0_WANTS, and the loop lost its turn at every tick to five busy
+    //   self-test processes: one pass of 25-57 s, "the loop meanwhile: Ready".
+    // - BUG-136: the read touched whatever the frame said (a frame of another
+    //   layout, a user rip), with SCHED held; a page fault there asks the
+    //   scheduler who runs and waits for its own lock.
+    let idle_tick = cur == 0 && !via_yield && T0_IDLE.load(Ordering::Relaxed);
     if cur == 0 && via_yield {
         // The desktop loop hands the CPU on after one pass of polling: that is
         // not a turn's worth of work. It stays at the pack (never behind it:
@@ -948,6 +1074,9 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     }
     if cur == 0 {
         T0_WANTS.store(!idle_tick, Ordering::Relaxed);
+    }
+    if !via_yield {
+        deskwatch::tick_sample(cur, rsp, s.tasks[0].state);
     }
     // 3. Mini-CFS: pick the runnable task with the SMALLEST vruntime. Start the scan at
     //    cur+1 with strict '<', so that equal-vruntime tasks rotate round-robin
@@ -989,11 +1118,20 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
             s.min_vr = bestv;
         }
     }
+    // The hosted window drew (want_desktop): at the next yield of any task the
+    // desktop loop puts it on the screen, not after the next tick.
+    if via_yield && cur != 0 && s.tasks[0].state == State::Ready && DESK_KICK.swap(false, Ordering::Relaxed) {
+        best = 0;
+        found = true;
+    }
     if best == 0 && cur != 0 {
         T0_TURN_TICK.store(now, Ordering::Relaxed);
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
+    }
+    if best != cur {
+        ran(best);
     }
     // Wedge diagnostic (gated): rate-limited log of what the scheduler picks — fires
     // from the scheduler itself, so it works even when the launcher task is starved.
@@ -1219,6 +1357,19 @@ pub fn task_count() -> usize {
     SCHED.lock().count
 }
 
+/// The scheduler table (BUG-140): slots handed out so far (high-water), slots
+/// whose task lives (not Dead), and Dead slots a spawn may take again (on the
+/// free list or marked RECLAIMABLE). Dead slots that are neither are held.
+pub fn slot_census() -> (usize, usize, usize) {
+    let s = SCHED.lock();
+    let live = (0..s.count).filter(|&i| s.tasks[i].state != State::Dead).count();
+    let reusable = (0..s.count)
+        .filter(|&i| s.tasks[i].state == State::Dead
+            && (s.free_slots.contains(&i) || RECLAIMABLE[i].load(Ordering::Relaxed)))
+        .count();
+    (s.count, live, reusable)
+}
+
 /// Pick a task slot: first reuse a RECLAIMED slot (a finished task whose resources
 /// were freed and which has no pending BgProc — see [`reclaim_task`]), otherwise
 /// grow the table. Returns None only if the table is full AND nothing is reclaimable.
@@ -1226,6 +1377,11 @@ pub fn task_count() -> usize {
 /// stack_bottom, …) leaks from its previous occupant.
 fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     let i = alloc_slot_raw(s)?;
+    // Whichever way the slot was found (free list, lazy sweep, a new one), it is
+    // taken now: a RECLAIMABLE mark left from its previous occupant must not let
+    // the sweep hand it out again while the new task lives or after it dies
+    // (BUG-140 marks the slots of ended fork-child tasks).
+    RECLAIMABLE[i].store(false, Ordering::Relaxed);
     // The new occupant starts in the launcher's fd space; a spawner that gives
     // it another one does so before the task can run (ring3/fdspace.rs).
     crate::ring3::fd_space_slot_reset(i);
@@ -1729,6 +1885,166 @@ pub mod deskwatch {
     static OVER_TOTAL: AtomicU64 = AtomicU64::new(0);
     static MAX_GAP_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
     pub const LIMIT_MS: u64 = 100;
+    /// The longest named step of the pass in progress (see [`step`]): its
+    /// length in ms and its name (pointer and length of a `&'static str`).
+    static STEP_AT: AtomicU64 = AtomicU64::new(0);
+    static LONG_MS: AtomicU64 = AtomicU64::new(0);
+    static LONG_PTR: AtomicU64 = AtomicU64::new(0);
+    static LONG_LEN: AtomicU64 = AtomicU64::new(0);
+
+    /// The work since the last `step` or `mark` was `name`. A long pass then
+    /// names its longest step in its `[desk]` line: "keys and drawing 57241 ms"
+    /// (the TCG watchdog trip of chrome-2026-11b) said where in 1100 lines of
+    /// the loop, not what.
+    pub fn step(name: &'static str) {
+        let t = now();
+        let d = ms(STEP_AT.swap(t, Ordering::Relaxed), t);
+        if d > LONG_MS.load(Ordering::Relaxed) {
+            LONG_MS.store(d, Ordering::Relaxed);
+            LONG_PTR.store(name.as_ptr() as u64, Ordering::Relaxed);
+            LONG_LEN.store(name.len() as u64, Ordering::Relaxed);
+        }
+    }
+
+    // Where a long pass spends its time: every timer tick after the pass has
+    // run for a second samples who has the CPU. For the desktop loop itself its
+    // interrupted rip (and, once, the kernel return addresses on its stack);
+    // for anyone else the task number. Printed with the `[desk]` line of a
+    // pass over a second (the TCG watchdog trips of W23, task 3).
+    const NS: usize = 6;
+    static S_RIP: [AtomicU64; NS] = [const { AtomicU64::new(0) }; NS];
+    static S_RIPN: [AtomicU64; NS] = [const { AtomicU64::new(0) }; NS];
+    static S_TASK: [AtomicU64; NS] = [const { AtomicU64::new(u64::MAX) }; NS];
+    static S_TASKN: [AtomicU64; NS] = [const { AtomicU64::new(0) }; NS];
+    static S_STACK: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+    static S_STACK_SET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    /// The state of the desktop loop at the ticks another task had: Ready,
+    /// Sleeping, Blocked (and the last channel it was blocked on).
+    static S_T0: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    static S_T0_CHAN: AtomicU64 = AtomicU64::new(0);
+
+    fn bump(keys: &[AtomicU64; NS], counts: &[AtomicU64; NS], key: u64, empty: u64) {
+        for i in 0..NS {
+            let k = keys[i].load(Ordering::Relaxed);
+            if k == key {
+                counts[i].fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            if k == empty {
+                keys[i].store(key, Ordering::Relaxed);
+                counts[i].store(1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+
+    /// Timer tick (scheduler lock held: atomics only). `frame` is the address of
+    /// the interrupted context of `cur` (15 registers, then the iret frame).
+    pub fn tick_sample(cur: usize, frame: u64, t0: super::State) {
+        let start = MARKS[0].load(Ordering::Relaxed);
+        let end = MARKS[PARTS - 1].load(Ordering::Relaxed);
+        if start == 0 || end >= start || ms(start, now()) < 1000 {
+            return; // no pass in progress, or not a long one (yet)
+        }
+        if cur == 0 {
+            // SAFETY: the timer entry pushed this frame on the task's kernel stack.
+            let (rip, cs, rsp) = unsafe {
+                (*((frame + 120) as *const u64), *((frame + 128) as *const u64), *((frame + 144) as *const u64))
+            };
+            if cs & 3 != 0 {
+                return;
+            }
+            bump(&S_RIP, &S_RIPN, rip, 0);
+            if !S_STACK_SET.swap(true, Ordering::Relaxed) {
+                // Return addresses into the kernel image above the interrupted rsp
+                // (a kernel stack: mapped, ours).
+                let mut n = 0;
+                let mut p = rsp & !7;
+                let stop = p + 0x600;
+                while p < stop && n < S_STACK.len() {
+                    let v = unsafe { (p as *const u64).read_volatile() };
+                    if super::in_kernel_image(v) {
+                        S_STACK[n].store(v, Ordering::Relaxed);
+                        n += 1;
+                    }
+                    p += 8;
+                }
+            }
+        } else {
+            bump(&S_TASK, &S_TASKN, cur as u64, u64::MAX);
+            match t0 {
+                super::State::Ready => { S_T0[0].fetch_add(1, Ordering::Relaxed); }
+                super::State::Sleeping(_) => { S_T0[1].fetch_add(1, Ordering::Relaxed); }
+                super::State::Blocked(c) => {
+                    S_T0[2].fetch_add(1, Ordering::Relaxed);
+                    S_T0_CHAN.store(c, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn samples() -> alloc::string::String {
+        let mut s = alloc::string::String::new();
+        let mut any = false;
+        for i in 0..NS {
+            let n = S_RIPN[i].load(Ordering::Relaxed);
+            if n > 0 {
+                s.push_str(&alloc::format!("{}{:#x} x{n}", if any { ", " } else { "; ticks of the loop at rip " }, S_RIP[i].load(Ordering::Relaxed)));
+                any = true;
+            }
+        }
+        let mut other = false;
+        for i in 0..NS {
+            let n = S_TASKN[i].load(Ordering::Relaxed);
+            if n > 0 {
+                s.push_str(&alloc::format!("{}t{} x{n}", if other { ", " } else { "; ticks of other tasks: " }, S_TASK[i].load(Ordering::Relaxed)));
+                other = true;
+            }
+        }
+        if other {
+            s.push_str(&alloc::format!("; the loop meanwhile: Ready x{}, Sleeping x{}, Blocked x{} (chan {:#x})",
+                S_T0[0].load(Ordering::Relaxed), S_T0[1].load(Ordering::Relaxed), S_T0[2].load(Ordering::Relaxed),
+                S_T0_CHAN.load(Ordering::Relaxed)));
+        }
+        if S_STACK_SET.load(Ordering::Relaxed) {
+            s.push_str(&alloc::format!("; anchor deskwatch::mark @ {:#x}", mark as usize as u64));
+            s.push_str("; loop stack:");
+            for a in S_STACK.iter() {
+                let v = a.load(Ordering::Relaxed);
+                if v != 0 {
+                    s.push_str(&alloc::format!(" {v:#x}"));
+                }
+            }
+        }
+        s
+    }
+
+    fn samples_reset() {
+        for i in 0..NS {
+            S_RIP[i].store(0, Ordering::Relaxed);
+            S_RIPN[i].store(0, Ordering::Relaxed);
+            S_TASK[i].store(u64::MAX, Ordering::Relaxed);
+            S_TASKN[i].store(0, Ordering::Relaxed);
+        }
+        for a in S_STACK.iter() {
+            a.store(0, Ordering::Relaxed);
+        }
+        for a in S_T0.iter() {
+            a.store(0, Ordering::Relaxed);
+        }
+        S_STACK_SET.store(false, Ordering::Relaxed);
+    }
+
+    fn longest_step() -> Option<(&'static str, u64)> {
+        let (p, l) = (LONG_PTR.load(Ordering::Relaxed), LONG_LEN.load(Ordering::Relaxed));
+        if p == 0 {
+            return None;
+        }
+        // SAFETY: p/l were taken from a `&'static str` by `step`.
+        let s = unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(p as *const u8, l as usize)) };
+        Some((s, LONG_MS.load(Ordering::Relaxed)))
+    }
 
     fn now() -> u64 {
         unsafe { core::arch::x86_64::_rdtsc() }
@@ -1753,8 +2069,15 @@ pub mod deskwatch {
                     OVER.fetch_add(1, Ordering::Relaxed);
                     let n = OVER_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
                     if n <= 60 || n % 50 == 0 {
+                        let mut step = match longest_step() {
+                            Some((name, d)) => alloc::format!("; longest step: {name} {d} ms"),
+                            None => alloc::string::String::new(),
+                        };
+                        if gap > 1000 {
+                            step.push_str(&samples());
+                        }
                         crate::serial_println!(
-                            "[desk] #{n} the desktop loop was away {gap} ms: its pass took {} ms (network and DevTools {}, devices and windows {}, menus {}, keys and drawing {}, hosted window and console {}), then {} ms without the CPU ({} other tasks were ready)",
+                            "[desk] #{n} the desktop loop was away {gap} ms: its pass took {} ms (network and DevTools {}, devices and windows {}, menus {}, keys and drawing {}, hosted window and console {}), then {} ms without the CPU ({} other tasks were ready){step}",
                             ms(m[0], m[PARTS - 1]), ms(m[0], m[1]), ms(m[1], m[2]), ms(m[2], m[3]), ms(m[3], m[4]),
                             ms(m[4], m[PARTS - 1]), ms(m[PARTS - 1], t), READY_AT_END.load(Ordering::Relaxed));
                     }
@@ -1763,6 +2086,12 @@ pub mod deskwatch {
         }
         if i < PARTS {
             MARKS[i].store(t, Ordering::Relaxed);
+        }
+        STEP_AT.store(t, Ordering::Relaxed);
+        if i == 0 {
+            LONG_MS.store(0, Ordering::Relaxed);
+            LONG_PTR.store(0, Ordering::Relaxed);
+            samples_reset();
         }
         if i == PARTS - 1 {
             let ready = match super::SCHED.try_lock() {

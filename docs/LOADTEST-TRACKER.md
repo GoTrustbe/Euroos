@@ -188,6 +188,7 @@ the code.
 | Same, R630 KVM: 204 + 20 entropy boots (and 20 under TCG), `soak` 2 h 05 + `churn proc 8` + 4 httpd clients, monkey soak 2 × 35 min, boot time, NVMe untouched, BUG-063 from the desktop | 2026-11-12 | ✅ 0 unseeded boots of 244; soak 2 744/2 744 ok | `proof/integ-2026-11b/` | before the fix 13 of 204 boots FAILED `[3d8]` and 11 were unseeded; after: 0 of 204, 0 of 20 jitter-only (KVM), 0 of 20 (TCG); soak heap +0.17 kB/min, 0 panics, httpd 917 858 answered / 0 failed; monkey 2 225 and 2 102 actions, no crash; public image 2.62 s; base image crashes 5 of 5 in the desktop BUG-063 scenario, final 0 of 5 |
 | BUG-080, BUG-081 (`feature/linux-rand`): `getrandom`, `/dev/urandom`, `/dev/random`, `AT_RANDOM` and the kernel's own callers on the CSPRNG; one early seeding. Host tests, TCG matrix, CI q35 matrix, reproducible build, public image on the open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/linux-rand-2026-11/` | 1 330 host tests; matrix 10/10, 0 worse and 0 changed against `integ-2026-11b`, `[lk]` 0 inversions, one `[entropy]` line in every leg (two in the `kernel` legs before); `[linux-rand]` OK in 10/10; q35 13/13; REPRODUCIBLE; ping, DNS, fetch, https on both NICs. Before the fix, the same probe: one `AT_RANDOM` for 8 of 8 processes of two boots, 32 of 32 `getrandom`/device results predicted from their first 8 bytes |
 | Same, R630 KVM: 104 short boots, before/after boots (also without RDRAND and RDSEED), `soak` 1 h + `churn proc 8` + 4 httpd clients, process start before/after, public image GUI smoke and boot time | 2026-11-12 | ✅ 104/104 boots seeded, soak 1 364/1 364 ok, gui-smoke 67/67 twice; 🟡 one configuration asks before the early seeding | `proof/linux-rand-2026-11/` | 104 boots: `[3d8]`, `[3d7]`, `[3d3]` FAILED in 0, unseeded 0, `[linux-rand]` OK in 104; 416 `AT_RANDOM` values, guards, `getrandom` results and device reads each, none twice. Soak: 1 366 commands per hour (previous 1 314), 1 423 glibc launches, 0 panics, httpd 440 088 answered / 0 failed. `churn proc 8` before/after, alternating: 4 994 against 5 044 ms median, inside the spread. Boot time 2.62 s base and 2.55 s final (median of 5), kernel entry to desktop 811 and 812 ms. With a blank virtio disk the install self-test asks for a salt before the early seeding (served by the same seeding, one status line; see the proof's Open) |
+| W23 on `feature/chrome-w23` (BUG-134/135/136, BUG-140 to 147): browser runs (R630 KVM), TCG matrix and repeated TCG boots, host tests, GUI smoke | 2026-11-13 | ✅ site matrix 3 rounds in one session, 0 aborts; 0 watchdog trips in 35 TCG boots; 0 markers worse under the same conditions; 🟡 key to screen 476 ms | `proof/chrome-w23/` | `[churn-forkthreads]` FAILED → OK; gui-smoke 67/67; cargo test 1 350/1 350; BUG-136 not reproduced (0 in 29 before) |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -2031,32 +2032,41 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Status:**   FIXED (`3c1892c`) · **Severity:** HIGH on 4 GiB (`[fork] arena alloc FAILED (256 MiB, pool has 131 MiB)`)
 - **Fix:**      128 MiB (the browser uses 80-86 MiB of it, `[fork]` line); fork copy 49-116 ms, exec wipe 50-101 ms.
 
-### BUG-134 — after the PDF viewer a new renderer aborts at its start ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for criterion 1 (the second round of the site matrix fails)
-- **Actual:**   `[abort] tN "CrRendererMain" tgkill(tgid=1, tid=N, sig=6)`, a 20-frame stack without symbols (the
-  same top seven frames every time), crash keys without a reason, child exit 134, "Aw, Snap! Error code 34304".
-  Runs a8, d1, d2 (round 2, the navigation away from the PDF), the browser soak (7 times). The renderer dies before
-  its V8 reservations (no `[mm-fail]` line of it).
-- **Ruled out:** the address reuse of BUG-131 alone (image with reuse disabled, run x1: the same abort). e1/e2 (PDF,
-  euro-os, Wikipedia, two rounds) pass without it: it needs the heavier sites before.
-- **Next:**     symbolise the stack against the chrome pack; RAM-file sweep disabled over a full matrix (x2 did not get
-  that far: BUG-135).
+### BUG-134 — after the PDF viewer a new renderer aborts at its start ✅ FIXED (BUG-140)
+- **Status:**   FIXED (`7b0629c`, W23) · **Severity:** HIGH for criterion 1 (the second round of the site matrix failed)
+- **Actual:**   `[abort] tN "CrRendererMain" tgkill(tgid=1, tid=N, sig=6)`, a 20-frame stack without symbols, child exit 134,
+  "Aw, Snap! Error code 34304". Runs a8, d1, d2, the browser soak; reproduced in W23 with three sites only (b1:
+  euro-os, Wikipedia, pdf, five rounds: four aborts from round 3 on).
+- **Cause:**    BUG-140. The scheduler table was full: every run that aborted reached task numbers t250 to t255. The
+  message of the abort went to the kernel log only (a `[linux-abi]` line); the same CHECK in an older log reads
+  `pthread_create: Resource temporarily unavailable (11)` then `Check failed: io_thread_->StartWithOptions(...)`.
+  The PDF viewer only made it come sooner (more processes, each with its threads).
+- **Proof:**    `proof/chrome-w23/README.md`: no abort in any W23 run on the fixed images (a1, a2: five rounds of the three
+  sites; m1, m3: the full matrix three times); the scheduler census after every site says "0 held by ended tasks".
 
-### BUG-135 — typed URLs do not navigate any more (after BUG-134, once after GitHub) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for criteria 1 and 2
-- **Actual:**   Ctrl+L, a URL, Enter: the tab stays on its page. After BUG-134 in a8, d1, d2 and the soak; once without
-  any abort, after GitHub (x2, RAM-file sweep disabled). Once two characters were lost (a8: a Google search for
-  `tps://www.openstreetmap.org/`). `cdiag` at the moment: the browser's main thread idle in poll, the X server's queues
-  empty, focus on the browser window: the keys were read and had no effect.
-- **Next:**     where the browser sends the key events (to the dead renderer's widget?); X event timestamps.
+### BUG-135 — typed URLs do not navigate any more (after BUG-134, once after GitHub) ✅ FIXED (BUG-140)
+- **Status:**   FIXED (`7b0629c`, W23) for "does not navigate"; the lost first characters are BUG-145
+- **Cause:**    BUG-140: with the table full the browser could not start the threads and processes a navigation
+  needs. b1 (the tree before): from round 3 every typed URL stayed on its page (7 steps); a2 (fixed): 15 of 15
+  navigations in five rounds; m1 and m3: 18 of 18 in three rounds of the full matrix.
+- **Not the same bug:** a URL that arrives without its first characters (a8: `tps://www.openstreetmap.org/`, W23 m1:
+  `s://www.openstreetmap.org/`) is BUG-145.
 
-### BUG-136 — a TCG boot (smp 4, 512 MiB) wedged on the scheduler lock in a page fault ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (1 of 10 matrix boots; a repeat reached the desktop)
-- **Actual:**   `user-smp4-iommu`: silent after `[glibc] spawned scheduled task 20` (gsdl with the 64 MiB fallback arena,
-  whose mmap window starts past its end). NMI: `Mutex<Scheduler>::lock`, IF=0, CR2 0x1000; the probe then stopped in
-  its own `sched::current()`.
-- **Next:**     the NMI probe and the repeated-fault line must use `current_lockfree`; find who holds SCHED when a
-  fault at 0x1000 is taken (the `idle_tick` read of `*(rip-1)` under SCHED is one candidate).
+### BUG-136 — a TCG boot (smp 4, 512 MiB) wedged on the scheduler lock in a page fault ✅ FIXED (causes removed, not reproduced)
+- **Status:**   FIXED (`7b0629c`, W23), with BUG-142, BUG-143 and BUG-144 · **Severity:** MEDIUM
+- **Reproduction:** not reproduced: 0 wedges in 29 boots of the tree before (`fix0b`: 40f853a plus the tests;
+  user-smp4-iommu, user-smp4-noiommu and kernel-smp4 at 512 MiB, 21 on the R630 and 8 on the build server), against 1 in 10
+  in chrome-2026-11b.
+- **What its trace shows, and what changed:**
+  - It wedged right after `gsdl` started in a 64 MiB fallback arena. That arena had its mmap window past its end
+    and its brk region over its stack (BUG-142): gsdl crashed in every 512 MiB boot (exit 139 in all 29
+    boots above). Now gsdl runs there: `GSDL: SDL_Init ok`, `window created`, `exit=0`.
+  - A page fault taken with the scheduler lock held waits for that lock in the fault path (`sched::current()`
+    in the repeated-fault line, BUG-144); CR2 was 0x1000. The one read the scheduler made under its lock through
+    an address it had not made itself (the byte before the interrupted rip, to tell idle from work) is gone
+    (BUG-143).
+  - The probe now gets to its stack scan and census (it stopped in its own `sched::current()`).
+- **Proof:**    `proof/chrome-w23/README.md` (after: the TCG matrix and further 512 MiB smp 4 boots, no wedge).
 
 ### BUG-137 — the demand pool drains during a long browser session ⬜ OPEN
 - **Status:**   OPEN · **Severity:** HIGH for criterion 4 (the browser is killed after ~74 min)
@@ -2066,6 +2076,135 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Candidates:** the disk page cache (`DISK_PAGE_CACHE`, never evicted); shared frames of named RAM files. Not
   attributed.
 - **Next:**     a census of demand frames by owner (process pages, shared frames, page cache) after every round.
+
+### BUG-140 — the scheduler slot of every task of an ended fork child stayed taken ✅ FIXED
+- **Status:**   FIXED (`7b0629c`, test `bb2e7d8`) · **Severity:** HIGH (the cause of BUG-134 and BUG-135)
+- **Found:**    2026-11-13 · W23, the task numbers in the logs of BUG-134 (t250 to t255) and of an older run (h1:
+  `pthread_create: Resource temporarily unavailable (11)` after task 255).
+- **Actual:**   only a worker thread that ended itself with exit(2) offered its slot again (RECLAIMABLE). The main task
+  of a fork child and every thread still waiting when the child ended (exit_group by its main or by a worker,
+  kill, abort, the end of the run) were marked Dead and kept their slot until the browser ended.
+- **Test:**     `[churn-forkthreads]` (`userland/glibc/gslots.c`): 40 children with 6 threads each, ended the three ways a
+  Chromium child ends. Before: `32 of 40 rounds ... pthread_create 11 ... task table 39->256 -> FAILED`. After:
+  `40 of 40 rounds ... PASS (exit 88) · task table 34->34 -> OK` (KVM, 4 GiB).
+- **Fix:**      `retire_task()`: kernel stack, futex entries, the registries that name a task by number (GLIBC_THREADS,
+  GLIBC_CTIDS, THREAD_NAMES), then RECLAIMABLE; in the exit_group of the child itself and in `fork_child_teardown`
+  (kill, end of run). The reuse hook clears capabilities, syscall profile and the RECLAIMABLE mark of the old
+  occupant. `fds` prints the table: "scheduler: N of 256 task slots handed out, L live, R free for reuse, H held
+  by ended tasks".
+- **Open:**     BUG-147 (live tasks come close to 256 in a long session).
+
+### BUG-141 — a fork that failed late kept the arena of the child ✅ FIXED
+- **Status:**   FIXED (`7b0629c`) · **Severity:** MEDIUM (each refused fork kept 128 MiB once the table was full)
+- **Cause:**    `do_glibc_fork` returned EAGAIN or ENOMEM after the arena, page tables and demand pages of the child
+  existed (no kernel stack, no scheduler slot, no memory for its demand pages) without giving them back; the
+  page-table failure path freed one frame of the arena.
+- **Fix:**      `fork_undo()`: what the exit of the child would have given back.
+
+### BUG-142 — a 64 MiB glibc arena had its mmap window past its end ✅ FIXED
+- **Status:**   FIXED (`7b0629c`, test `bb2e7d8`) · **Severity:** HIGH on 512 MiB machines (gsdl crashed in every boot;
+  see BUG-136)
+- **Actual:**   `[glibc] arena: 256 MiB unavailable (fragmented) -> using 64 MiB`, then `mmap anon 8 KiB -> ENOMEM:
+  arena mmap window full (break 0xa380000, end 0x9f76000)`, `gsdl (SDL2): exit=139`.
+- **Cause:**    the four launchers place brk at +32 MiB and the mmap window at +64 MiB whatever the size of the arena.
+- **Test:**     `cargo test -p euromm arena` (every size from 64 MiB: every region inside the arena): FAILED on the layout
+  before, OK after.
+- **Fix:**      `euromm::arena::glibc_layout`: from 128 MiB the old layout; smaller arenas the same order in the same
+  proportions (64 MiB: brk from +16, mmap window from +24 MiB, about 35 MiB). Now `GSDL: SDL_Init ok`,
+  `window created`, `gsdl (SDL2): exit=0` at 512 MiB.
+
+### BUG-143 — the scheduler took the busy desktop loop for idle: one pass of 25-57 s under TCG ✅ FIXED
+- **Status:**   FIXED (`7b0629c`) · **Severity:** HIGH under TCG (`[3g2-wire] WATCHDOG TRIPPED` in a third of the R630 TCG
+  boots of the self-test image), and the desktop lost turns on any machine
+- **Actual:**   `[desk] #12 the desktop loop was away 30715 ms ...` while it drew the status panel, the sidebar or a
+  window.
+- **Found how:** new in the stopwatch: the longest named step of a pass, and for a pass over a second where its ticks
+  went: "ticks of the loop at rip ... (soft-float `__addsf3`, `drop_shadow`) x8; ticks of other tasks: t7..t11
+  x517 each; the loop meanwhile: Ready x2649".
+- **Cause:**    a tick was idle when the byte before the interrupted rip was 0xf4 (hlt). 0xf4 is also -12 as a
+  displacement or an immediate, common in the soft-float code the loop draws with: the busy loop counted as idle,
+  lost T0_WANTS (its turn at every tick, BUG-127), and five CPU-bound self-test processes had the CPU.
+- **Fix:**      the loop says when it is idle (`desktop_idle_hlt`, T0_IDLE around its hlt).
+- **Proof:**    before: 22 trips in 81 TCG boots of images with the old test on the R630 (kernel-smp1: 14 in 48), 3 in 8 on the build server; after: 0 trips in 35 TCG boots (12 kernel-smp1, the matrix of 10, 13 at 512 MiB smp 4)
+  with a longest gap of 2.0-4.0 s (`proof/chrome-w23/`).
+
+### BUG-144 — the NMI probe and the repeated-fault line waited for the scheduler lock ✅ FIXED
+- **Status:**   FIXED (`7b0629c`) · **Severity:** MEDIUM for diagnosis (the probe of BUG-136 stopped in itself)
+- **Fix:**      `current_lockfree()` and a try-lock for the thread names in the probe and in `handle_demand_fault`.
+
+### BUG-145 — the first characters of a typed URL go to the page when its renderer is busy ⬜ OPEN (harness)
+- **Status:**   OPEN · **Severity:** LOW for the kernel; the matrix judges such a step "ok" (the URL lands in a search)
+- **Actual:**   after YouTube, Ctrl+L and `https://www.openstreetmap.org/` typed at once became a Google search for
+  `s://www.openstreetmap.org/` (W23 m1, round 1; a8: `tps://...`).
+- **Analysis:** the browser hands Ctrl+L to the page first and focuses the omnibox when the renderer answers "not
+  handled"; characters typed before that answer go to the page. A busy renderer answers late.
+- **Next (harness, `feature/chrome-harness`):** after Ctrl+L wait until the omnibox shows its selection (a screendump of
+  the omnibox) before typing, and judge a site step on the URL the tab shows, not on the host appearing in it.
+
+### BUG-146 — key to screen 300-500 ms ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (criterion 5)
+- **Measured (kernel, `[keylat]`, 30 keys per run):** scancode ring to X client 0.1-2 ms, X queue to client read 4 ms,
+  read to the first draw of the browser 74-156 ms, draw to screen 9-25 ms. The harness also counts the time to
+  the draw that shows the character, the USB path and its own screendumps: 369-483 ms median.
+- **Tried:** a wake hand-off (a waking system call yields): woken tasks then ran within 0.1 ms, the harness median went
+  from 483 to 1102 ms; off by default (`wakeyield on|off`). Kept: the desktop loop goes next after the hosted
+  window drew.
+- **Next:** the browser runs on one CPU (ring 3 only on the BSP), with thirty ready threads and 10 ms slices.
+
+### BUG-147 — live tasks come close to the 256 slots in one session ✅ FIXED
+- **Status:**   FIXED (`95a3bf2`, test `e5990d5`) · **Severity:** MEDIUM
+- **Measured:** after BUG-140 no slot is held by an ended task, but the browser keeps up to 16 processes (back/forward
+  cache, the PDF viewer): 214 of 256 live tasks (a1); thread kernel stacks: 224.
+- **Test:**     `[many-threads]` (`userland/glibc/gmanythreads.c`, 320 threads of one process alive at once): before `223 of 320
+  threads alive at once, pthread_create: Resource temporarily unavailable -> FAILED`, after `320 of 320 -> PASS`.
+- **Fix:**      512 task slots; thread kernel stacks 224 static, 224..480 from the kernel heap on first use (kept per slot).
+  Static memory +4 MiB (the 16 KiB kernel-task stack per slot). A session of five rounds: 210 live of 512.
+
+### BUG-160 — Chromium's audio output fails: every clip with sound stops at t=0 (`AUDIO_RENDERER_ERROR`) ✅ FIXED (BUG-170, BUG-171)
+- **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH for criterion 3
+- **Cause:**    BUG-170 (a new socket inherited O_NONBLOCK from a closed one with the same object number: the renderer's blocking
+  read of the audio sync socket answered EAGAIN, the renderer closed its end, the audio service's write was EPIPE), then
+  BUG-171 (the blocking read, once it blocked, spun and stopped the machine).
+- **Proof:**    `chrome-smoke.py --only localvideo` (KVM, `proof/chrome-w23b/`): VP9+Opus `currentTime` 0.0 -> 61.2 s, 12 of 12 five-second
+  windows of the QEMU wav above the noise floor (RMS 1158), no media error; Opus alone the same; before: 0.0 s, RMS 0, error 3.
+  H.264/AAC still fails: BUG-161 (the build has no such codecs).
+
+### BUG-161 — this Chromium build has no H.264/AAC ⬜ OPEN (build, not kernel)
+- **Actual:**   `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')` is empty, an `.mp4` fails with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (`error 4`). VP9/Opus/VP8 are supported.
+  YouTube serves VP9/AV1 + Opus to such a browser, so it does not block criterion 3; sites that only offer H.264 will not play.
+- **Next:**     decide whether `proprietary_codecs`/`ffmpeg_branding=Chrome` is wanted (licence); otherwise document it.
+
+### BUG-162 — a click on a page link is sometimes not followed ✅ NOT A EUROOS BUG (harness timing)
+- **Status:**   closed for the kernel · the harness change is described below
+- **Repeated:** 10 fresh boots × 3 clicks on the Download link of euro-os.eu/en/ at the coordinate of `chrome-smoke --only interact`
+  (`proof/chrome-w23b/link-clicks.txt`): 27 followed (0.7-1.1 s), 1 not, and the 2 after it in that boot clicked on the page the
+  test had gone back to. Every click reached the X client (press and release, `[xin]`).
+- **Cause:**    the click that was not followed came while euro-os.eu was still loading: the screendump before the click shows the
+  previous page (`input-test.html`) under the new tab title, with the stop button; 15 s later the page is there and the
+  pointer is over its Download button (screenshots in the proof). The harness waits for 1.5 s of unchanged picture, which a
+  page that has not painted yet also gives.
+- **Next (harness):** wait for the load to finish (`wait_loaded`, as the site matrix does) and for the target's pixels before
+  clicking a link.
+
+### BUG-170 — a new socket could be born non-blocking: Chromium's audio sync socket ✅ FIXED
+- **Status:**   FIXED (`d4d06ed`, test `83d87de`) · **Severity:** HIGH (BUG-160)
+- **Actual:**   `[audio-sys] ... 72(fd, F_GETFL) = 0x802` then `1(fd, 4 bytes) = -32` on the audio service's end of a fresh
+  socketpair; in `[syncsock]`: "a new socketpair is blocking (after a closed non-blocking one)" FAILED (0x802), the child's
+  blocking recvmsg EAGAIN.
+- **Cause:**    O_NONBLOCK is kept per object number (SOCK_NONBLOCK, FD_NONBLOCK) and was never removed when the object closed;
+  socketpair() set it only when asked. Object numbers are handed out again.
+- **Fix:**      `nonblock_forget()` at the last close of an object; socketpair() sets the flag either way.
+- **Test:**     `[syncsock]` (`userland/glibc/gsyncsock.c`): 9 of 17 FAILED -> 17 of 17 OK.
+
+### BUG-171 — a blocking read on a unix socket spun with interrupts off ✅ FIXED
+- **Status:**   FIXED (`d4d06ed`) · **Severity:** HIGH (the machine stopped answering a few seconds into the first clip once BUG-170 was
+  fixed: KVM run v1, every NMI in the renderer's `AudioOutputDevice` thread inside `unix_recv_blocking` / `yield_switch`)
+- **Cause:**    the wait was a loop of yields; a yield charges no vruntime, so the waiter was picked again at once.
+- **Fix:**      two quick yields, then a tick of sleep per look, as poll does. Runs v2, v3, v4: 60 s of sound per clip, the desktop
+  answering throughout.
+
+### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
+- **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

@@ -27,6 +27,16 @@ Legs:
   hwprobe base leg + typed `hwprobe` command    -> inventory lines over serial
 
 Usage: python3 scripts/run-metal-matrix.py [image] [--legs a,b,c]
+
+Environment:
+  EK_RESTRICT=1   every NIC runs with restrict=on (the guest cannot reach the host or the outside).
+                  The scan and printer legs still need their host mocks: they are reached through
+                  `guestfwd=tcp:10.0.2.2:PORT-cmd:...` (one scripts/slirp-guestfwd-bridge.py per guest
+                  connection, to the mock on 127.0.0.1:PORT). NOT `guestfwd=tcp:...-tcp:127.0.0.1:PORT`:
+                  that one forwards ALL guest connections over ONE host connection, which the
+                  one-request-per-connection mocks never answer a second time (the hang of the
+                  first attempt).
+  EK_ACCEL=kvm    add -accel kvm (default: QEMU's TCG)
 Exit code 0 = all legs pass. Never fakes success: a missing marker fails.
 """
 import json
@@ -41,6 +51,9 @@ import shutil
 IMG = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "eurokernel.img"
 OVMF = "/usr/share/ovmf/OVMF.fd"
 WORK = tempfile.mkdtemp(prefix="ek-matrix-")
+RESTRICT = os.environ.get("EK_RESTRICT") == "1"
+ACCEL = os.environ.get("EK_ACCEL", "")
+BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "slirp-guestfwd-bridge.py")
 BOOT_DEADLINE = int(os.environ.get("EK_BOOT_DEADLINE", "420"))  # bump on slow no-KVM CI
 RETRIES = 2  # the boot race is fixed (BUG-010); retries only guard infra flakes
 
@@ -50,9 +63,18 @@ AZ = {"a": "q", "q": "a", "z": "w", "w": "z", "m": "semicolon", " ": "spc"}
 SIDE = {}
 
 
+def restricted_net(forward_port=None):
+    """-netdev/-device for an e1000e behind restrict=on; with forward_port the guest's connections to
+    10.0.2.2:PORT go to the mock on the host's 127.0.0.1:PORT, one bridge process per connection."""
+    fwd = f",guestfwd=tcp:10.0.2.2:{forward_port}-cmd:{sys.executable} {BRIDGE} {forward_port}" if forward_port else ""
+    return ["-netdev", f"user,id=en0,restrict=on{(',host=10.0.2.4' + fwd) if fwd else ''}", "-device", "e1000e,netdev=en0"]
+
+
 def leg_devices(leg):
     """Extra QEMU args per leg (on top of the common q35 + xhci-kbd base)."""
-    if leg in ("base", "hwprobe", "power", "printer", "scan"):
+    if leg == "scan":
+        return restricted_net(8631) if RESTRICT else []
+    if leg in ("base", "hwprobe", "power"):
         return []
     if leg == "nvme":
         img = os.path.join(WORK, "nvme.img")
@@ -68,7 +90,7 @@ def leg_devices(leg):
                 "-drive", f"format=raw,file={img},if=none,id=sata0",
                 "-device", "ide-hd,drive=sata0,bus=ahci2.0"]
     if leg == "e1000e":
-        return ["-netdev", "user,id=en0", "-device", "e1000e,netdev=en0"]
+        return ["-netdev", "user,id=en0" + (",restrict=on" if RESTRICT else ""), "-device", "e1000e,netdev=en0"]
     if leg == "hda":
         return ["-device", "intel-hda,id=hda0", "-device", "hda-output,bus=hda0.0"]
     if leg == "usbhub":
@@ -110,8 +132,9 @@ def leg_devices(leg):
     if leg == "printer":
         # No special netdev: slirp already forwards guest -> 10.0.2.2:631 to the
         # host's service on :631 (same mechanism the OTA server on :8722 uses).
-        # The mock IPP server (start_side) listens on the host at :631.
-        return []
+        # The mock IPP server (start_side) listens on the host at :6631.
+        # With restrict=on slirp drops that connection: forward it (see EK_RESTRICT above).
+        return restricted_net(6631) if RESTRICT else []
     raise SystemExit(f"unknown leg {leg}")
 
 
@@ -171,7 +194,9 @@ def boot(leg, extra, log, qmp):
             "-device", "qemu-xhci,id=xhci"] + base_kbd +
             ["-device", "usb-tablet,bus=xhci.0",
             "-display", "none", "-serial", f"file:{log}",
-            "-qmp", f"unix:{qmp},server,nowait", "-no-reboot"] + extra)
+            "-qmp", f"unix:{qmp},server,nowait", "-no-reboot"] + extra
+            + (["-accel", ACCEL] if ACCEL else [])
+            + (["-nic", "user,model=e1000e,restrict=on"] if RESTRICT and not ("-nic" in extra or "-netdev" in extra) else []))
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 

@@ -1,0 +1,55 @@
+chrome-smoke: PASS
+kvm smp=2 mem=6144M input=usb nic=virtio-net-pci, 198 s, max console latency 50 ms; desktop loop while the browser ran: slowest console answer 216 ms, median 12 ms over 645 echoes
+
+ok   boot: desktop after 4 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 13.9 s (seconds after Enter: launched 3.2, window on screen 4.0, X connection 5.6, first child process 6.2, renderer 8.8), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+ok   consent consent-en.html: reject button clicked: clicked 'reject all' (reject) at (355, 633), banner gone
+ok   consent self-test consent-en.html: the page was told 'rejected': title 'consent=rejected'
+ok   consent consent-nl.html: reject button clicked: clicked 'alles weigeren' (reject) at (446, 632), banner gone
+ok   consent self-test consent-nl.html: the page was told 'rejected': title 'consent=rejected'
+ok   consent consent-accept.html: accept button clicked: clicked 'agree' (accept) at (219, 630), banner gone
+ok   consent self-test consent-accept.html: the page was told 'accepted': title 'consent=accepted'
+
+memory_start: no [cpu] heartbeat line yet
+
+consent_clicks: [
+ {
+  "button": "reject all",
+  "kind": "reject",
+  "at": [
+   355,
+   633
+  ],
+  "gone": true,
+  "label_still_found": false,
+  "pixels_changed": true,
+  "site": "consent-en.html"
+ },
+ {
+  "button": "alles weigeren",
+  "kind": "reject",
+  "at": [
+   446,
+   632
+  ],
+  "gone": true,
+  "label_still_found": false,
+  "pixels_changed": true,
+  "site": "consent-nl.html"
+ },
+ {
+  "button": "agree",
+  "kind": "accept",
+  "at": [
+   219,
+   630
+  ],
+  "gone": true,
+  "label_still_found": false,
+  "pixels_changed": true,
+  "site": "consent-accept.html"
+ }
+]
+
+memory_end: heap 117 MiB used, 394 MiB free; big 48/463 MiB (peak 58); files 66 MiB; demand 1584 MiB free

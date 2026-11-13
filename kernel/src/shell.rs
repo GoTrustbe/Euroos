@@ -481,6 +481,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             for l in crate::ring3::fd_census_lines() {
                 out.push(format!("  {l}"));
             }
+            // BUG-140: the scheduler table beside the descriptor tables. A slot
+            // that is neither live nor reusable is held by a task that ended.
+            let (count, live, reusable) = crate::sched::slot_census();
+            out.push(format!(
+                "  scheduler: {count} of {} task slots handed out, {live} live, {reusable} free for reuse, {} held by ended tasks",
+                crate::sched::MAX_TASKS, count - live - reusable));
             for l in out.iter() {
                 crate::serial_println!("[fds] {}", l.trim_start());
             }
@@ -620,6 +626,29 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "battery" | "power" => crate::acpi_power::status_lines(),
         "scan" => crate::scan::shell(fs, line),
         "print" => crate::print::shell(line),
+        // `keylat`: key to screen in the kernel, medians of the last keys (W23).
+        "keylat" => {
+            if arg1 == "reset" {
+                crate::xserver::keylat::reset();
+            }
+            let lines = crate::xserver::keylat::summary();
+            for l in lines.iter() {
+                crate::serial_println!("{l}");
+            }
+            lines
+        }
+        // "wakeyield on|off": the wake hand-off of the scheduler (W23).
+        "wakeyield" => {
+            match arg1 {
+                "on" => crate::sched::WAKE_YIELD.store(true, core::sync::atomic::Ordering::Relaxed),
+                "off" => crate::sched::WAKE_YIELD.store(false, core::sync::atomic::Ordering::Relaxed),
+                _ => {}
+            }
+            let l = format!("[wakeyield] wake hand-off {}",
+                if crate::sched::WAKE_YIELD.load(core::sync::atomic::Ordering::Relaxed) { "on" } else { "off" });
+            crate::serial_println!("{l}");
+            vec![l]
+        }
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.
             let all = crate::klog::snapshot();

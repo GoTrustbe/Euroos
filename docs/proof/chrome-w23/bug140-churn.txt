@@ -1,0 +1,11 @@
+# [churn-forkthreads] and its neighbours, KVM 4 GiB smp 2 (R630). before = fix0b (40f853a + the tests, bb2e7d8), after = fix1b (+ the BUG-140 fix)
+== before
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 412034→412034 (leak-free=true) · demand-pool 427008→427008 (true) · tasks 39→39 (true) · thread-kstacks 0→0 (true) · file-table 199→199 (true) · heap-used 12025784→12025784 (true) → OK ✓ (every process returns what it took)
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 39→39 · frames 412034→412034 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 39→39 · process-pool 427008→427008 · demand-pool 0→0 · frames 412034→412034 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 32 of 40 rounds (224 tasks of ended children), bad=9: round 32 (mode 2): the child could not create its threads (pthread_create 11) -> FAIL (exit 1) · task table 39→256 · thread-kstacks 0→0 · process-pool 427008→427008 · demand-pool 0→0 → FAILED
+== after
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=16/16 · frames 412034→412034 (leak-free=true) · demand-pool 427008→427008 (true) · tasks 34→34 (true) · thread-kstacks 0→0 (true) · file-table 199→199 (true) · heap-used 12025784→12025784 (true) → OK ✓ (every process returns what it took)
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=77 (want 77) · sums-correct=true · thread-kstacks 0→0 · tasks 34→34 · frames 412034→412034 → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 34→34 · process-pool 427008→427008 · demand-pool 0→0 · frames 412034→412034 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 34→34 · thread-kstacks 0→0 · process-pool 427008→427008 · demand-pool 0→0 → OK ✓

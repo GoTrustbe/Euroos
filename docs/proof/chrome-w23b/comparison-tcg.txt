@@ -1,0 +1,85 @@
+# markers-compare.py, same conditions (R630, TCG, restrict=on): w23g (7b0629c) against s5 (d4d06ed + BUG-147 = 95a3bf2 without the [many-threads] test)
+
+== user-smp4-iommu
+== tcg/mx1/user-smp4-iommu.log  vs  tcg/s5m/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== user-smp4-noiommu
+== tcg/mx1/user-smp4-noiommu.log  vs  tcg/s5m/user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== kernel-smp4
+== tcg/mx1/kernel-smp4.log  vs  tcg/s5m/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== storage-smp4-iommu-1g
+== tcg/mx1/storage-smp4-iommu-1g.log  vs  tcg/s5m/storage-smp4-iommu-1g.log
+-- WORSE: 1
+   fork: base FAILx9 | new FAILx10
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== combined-smp4-iommu-1g
+== tcg/mx1/combined-smp4-iommu-1g.log  vs  tcg/s5m/combined-smp4-iommu-1g.log
+-- WORSE: 1
+   fork: base FAILx9 | new FAILx10
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== user-smp1-iommu
+== tcg/mx1/user-smp1-iommu.log  vs  tcg/s5m/user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== user-smp1-noiommu
+== tcg/mx1/user-smp1-noiommu.log  vs  tcg/s5m/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== kernel-smp1
+== tcg/mx1/kernel-smp1.log  vs  tcg/s5m/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== storage-smp1-iommu-1g
+== tcg/mx1/storage-smp1-iommu-1g.log  vs  tcg/s5m/storage-smp1-iommu-1g.log
+-- WORSE: 1
+   fork: base FAILx9 | new FAILx10
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1
+
+== combined-smp1-iommu-1g
+== tcg/mx1/combined-smp1-iommu-1g.log  vs  tcg/s5m/combined-smp1-iommu-1g.log
+-- WORSE: 1
+   fork: base FAILx9 | new FAILx10
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   syncsock: OKx1

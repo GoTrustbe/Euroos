@@ -4,6 +4,24 @@
 bewijs-screenshots staan in `docs/proof/`, de logbestanden en methodiek in de
 sprintdocumenten (`SPRINT-PLAN-CHROME-*.md`).*
 
+## Stand 2026-11-13 (W23): drie rondes in een sessie
+
+Bewijs en cijfers: `proof/chrome-w23/README.md`; bugs BUG-134 t/m BUG-136 (gesloten) en
+BUG-140 t/m BUG-147 in `LOADTEST-TRACKER.md`. Kort:
+
+- De site-matrix drie keer achter elkaar in EEN sessie, zonder crash, en getypte URL's
+  navigeren elke keer (m3: 18 van 18). Oorzaak van BUG-134/135: de taakplaatsen van
+  beeindigde kindprocessen kwamen niet terug (BUG-140); na een paar sites was de
+  tabel van 256 vol en startte geen renderer meer.
+- Onder TCG staat de desktoplus niet meer 25-57 s stil (geen `WATCHDOG TRIPPED` meer):
+  de scheduler hield de drukke lus voor idle (BUG-143).
+- Niet: toets-tot-scherm < 100 ms (369-476 ms, BUG-146); de eerste letters van een URL
+  die direct na Ctrl+L getypt wordt terwijl de pagina druk is (BUG-145, harness).
+- Nieuw in de shell: `keylat` (toets-tot-scherm per stap, en hoe lang gewekte taken op
+  de CPU wachten), `wakeyield on|off` (proef, standaard uit), en `fds` toont de
+  schedulertabel. `[desk]`-regels noemen de langste stap van een doorgang en, boven een
+  seconde, waar de ticks heen gingen.
+
 ## Stand 2026-11-13: alle sites in een sessie, geen stilstand meer
 
 Bewijs en cijfers: `proof/chrome-2026-11b/README.md`; bugs BUG-098, BUG-120 t/m

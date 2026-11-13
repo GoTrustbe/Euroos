@@ -1,0 +1,4 @@
+== m0
+[many-threads] 320 threads of one process alive at once: 223 of 320 threads alive at once, pthread_create: Resource temporarily unavailable, 223 joined -> FAIL (exit 1) · thread-kstacks 0→0 → FAILED
+== m1
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓

@@ -1,0 +1,38 @@
+# Key to screen: the harness (chrome-smoke perf, 30 keys) and the kernel ([keylat], the same keys)
+
+== m1 (w23b-pub, after three rounds of the matrix)
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 369 ms, p90 543 ms, max 765 ms over 30 keys (30 characters arrived); one screendump takes 23 ms, which is in every number | X input modifiers=
+   scancode ring to X client  median     0.1 ms  p90    29.7  max   119.2
+   X queue to client read     median     4.0 ms  p90    11.5  max    22.9
+   read to first draw         median   156.0 ms  p90   317.9  max   708.0
+   draw to screen             median    25.0 ms  p90    42.1  max   202.6
+   total                      median   216.3 ms  p90   337.6  max   724.1
+
+== m3 (w23g-pub = 7b0629c, after three rounds of the matrix)
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 476 ms, p90 983 ms, max 1641 ms over 29 keys (30 characters arrived); one screendump takes 26 ms, which is in every number | X input modifiers
+   scancode ring to X client  median    10.5 ms  p90    39.6  max    69.0
+   X queue to client read     median     3.9 ms  p90    21.5  max    34.3
+   read to first draw         median   205.8 ms  p90   611.2  max  1069.2
+   draw to screen             median    16.9 ms  p90   175.1  max   258.4
+   total                      median   252.3 ms  p90   653.6  max  1104.4
+
+== ab1 (w23e-pub): one session, perf with the wake hand-off off, then on
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 483 ms, p90 851 ms, max 1313 ms over 30 keys (30 characters arrived); one screendump takes 26 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons
+[perfab] wake hand-off off: keys median 500 ms
+[perfab]   [keylat] last 64 keys (medians, max):
+[perfab]   [keylat]   ring to X client: median 2154 us, max 68283 us
+[perfab]   [keylat]   X queue to client read: median 4487 us, max 27140 us
+[perfab]   [keylat]   read to first draw: median 74443 us, max 517242 us
+[perfab]   [keylat]   draw to screen: median 8722 us, max 1210661 us
+[perfab]   [keylat]   total: median 113246 us, max 1289890 us
+[perfab]   [keylat] woken tasks waited for the CPU (ms; wake hand-off off): <0.1 130 <1 2765 <5 2303 <10 1130 <20 326 <50 213 <100 72 >=100 20
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 1102 ms, p90 1537 ms, max 2066 ms over 22 keys (30 characters arrived); one screendump takes 43 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) butto
+[perfab] wake hand-off on: keys median 1114 ms
+[perfab]   [keylat] last 64 keys (medians, max):
+[perfab]   [keylat]   ring to X client: median 113 us, max 1376730 us
+[perfab]   [keylat]   X queue to client read: median 4899 us, max 166300 us
+[perfab]   [keylat]   read to first draw: median 39566 us, max 1665797 us
+[perfab]   [keylat]   draw to screen: median 4707 us, max 1511397 us
+[perfab]   [keylat]   total: median 52202 us, max 2061366 us
+[perfab]   [keylat] woken tasks waited for the CPU (ms; wake hand-off on): <0.1 17809 <1 1757 <5 60 <10 20 <20 9 <50 5 <100 9 >=100 1
+[perfab] FAIL (2 step(s))

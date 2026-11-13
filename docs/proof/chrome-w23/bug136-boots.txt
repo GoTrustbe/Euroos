@@ -1,0 +1,54 @@
+# BUG-136: TCG boots with smp 4 at 512 MiB (the configuration of the wedge). gsdl = exit of the SDL test that runs in the 64 MiB fallback arena (139 = crashed); nmi = probes sent to a silent guest (0 = no wedge)
+## R630 (each QEMU pinned, restrict=on)
+tcg/u4b/user-smp4-iommu-1.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4b/user-smp4-iommu-2.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/u4b/user-smp4-iommu-3.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4b/user-smp4-iommu-4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4b/user-smp4-iommu-5.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4b/user-smp4-iommu-6.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/n4b/user-smp4-noiommu-1.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/n4b/user-smp4-noiommu-2.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/n4b/user-smp4-noiommu-3.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/n4b/user-smp4-noiommu-4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/n4b/user-smp4-noiommu-5.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/n4b/user-smp4-noiommu-6.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4c/user-smp4-iommu-1.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4c/user-smp4-iommu-2.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4c/user-smp4-iommu-3.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4c/user-smp4-iommu-4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/u4c/user-smp4-iommu-5.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4c/user-smp4-iommu-6.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/u4a/user-smp4-iommu-1.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=1
+tcg/u4a/user-smp4-iommu-2.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/u4a/user-smp4-iommu-3.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/u4a/user-smp4-iommu-4.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/u4a/user-smp4-iommu-5.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/u4a/user-smp4-iommu-6.log [w23a (BUG-140/142 fixes, old idle test)] desktop=1 gsdl=0 nmi=0 watchdog-trips=1
+tcg/mx0/user-smp4-iommu.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/mx0/user-smp4-noiommu.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/mx0/kernel-smp4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/mx1/user-smp4-iommu.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/mx1/user-smp4-noiommu.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/mx1/kernel-smp4.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g4a/user-smp4-iommu-1.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g4a/user-smp4-iommu-2.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g4a/user-smp4-iommu-3.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g4a/user-smp4-iommu-4.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g4a/user-smp4-iommu-5.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+## build server .16 (nice 10, restrict=on)
+tcg/b16a/user-smp4-iommu-1.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/b16a/user-smp4-iommu-2.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/b16a/user-smp4-iommu-3.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/b16a/user-smp4-iommu-4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/b16b/user-smp4-iommu-1.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/b16b/user-smp4-iommu-2.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/b16b/user-smp4-iommu-3.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=0
+tcg/b16b/user-smp4-iommu-4.log [fix0b = before] desktop=1 gsdl=139 nmi=0 watchdog-trips=1
+tcg/g16a/user-smp4-iommu-1.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16a/user-smp4-iommu-2.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16a/user-smp4-iommu-3.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16a/user-smp4-iommu-4.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16b/user-smp4-iommu-1.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16b/user-smp4-iommu-2.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16b/user-smp4-iommu-3.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0
+tcg/g16b/user-smp4-iommu-4.log [w23g = 7b0629c] desktop=1 gsdl=0 nmi=0 watchdog-trips=0

@@ -4246,6 +4246,12 @@ fn main() -> Status {
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
+        // BUG-140: the scheduler slots of the tasks of ended fork children ([churn-forkthreads]).
+        churn::fork_thread_churn(&mut allocator);
+        // BUG-170: the sync socket of Chromium's audio stream ([syncsock]).
+        churn::sync_socket_test(&mut allocator);
+        // BUG-147: more live threads than the old task table ([many-threads]).
+        churn::many_threads_test(&mut allocator);
         churn::fs_churn(&mut vfs);
         churn::net_churn();
         churn::surface_churn();
@@ -6117,7 +6123,7 @@ fn main() -> Status {
             // compositor blit — but we must STILL park the CPU. Without this hlt the loop
             // busy-polls input forever and pegs the (emulated) host core at ~100%, which
             // also starves input handling. The next timer tick or input IRQ wakes us.
-            x86_64::instructions::hlt();
+            sched::desktop_idle_hlt();
             continue;
         } else if app_blitted {
             // The app just exited (active() went false): force one full desktop
@@ -6732,6 +6738,7 @@ fn main() -> Status {
         }
         paint::flush_save(ctx.fs); // EuroPaint: write a pending Save to EuroFS
         settings_ui::tick(ctx.fs); // T2-hook: save changed EuroGuard rules, refresh the panel's snapshot
+        sched::deskwatch::step("keys, editors and saves");
         // Periodic system-integrity sweep (~5 min of guest ticks). Detects
         // on-disk tampering of /bin//lib while the desktop runs.
         {
@@ -6744,6 +6751,7 @@ fn main() -> Status {
                 integrity::check_and_report(ctx.fs, &bins, "periodic");
             }
         }
+        sched::deskwatch::step("integrity sweep");
         // EuroFiles: run queued file operations (new dir / rename / delete /
         // copy / move) with FS access, then reload the current directory.
         let ops = files::take_ops();
@@ -7048,6 +7056,7 @@ fn main() -> Status {
                 }
             }
         }
+        sched::deskwatch::step("file operations, launches and overlays");
         // The 2 s housekeeping. It used to sit in the branch below that runs only
         // when the tick does not coincide with a full repaint, so it did not run at
         // all while every iteration was one (BUG-057: no reaping of ended processes,
@@ -7062,20 +7071,26 @@ fn main() -> Status {
             // Clean up terminated processes (free frames) — safe from
             // task 0 on the boot PML4. Free RAM visibly recovers.
             ring3::reap_dead(ctx.mem);
+            sched::deskwatch::step("reaping ended processes");
             // S4: EuroInit supervision (restart stopped services) + eurologd
             // (kmsg ring periodically to /var/log/messages).
             init::supervise(ctx.mem, ctx.fs);
+            sched::deskwatch::step("service supervision");
             // Userspace drivers: restart a crashed e1000d (after quiescing its device).
             udrv::supervise(ctx.mem);
             udrv_blk::supervise(ctx.mem);
             udrv_bcm5720::supervise(ctx.mem);
             udrv_mr::supervise(ctx.mem);
+            sched::deskwatch::step("driver supervision");
             init::flush_log(ctx.fs);
+            sched::deskwatch::step("log flush");
             // G5: periodic background scrub (rate-limited ~60 s) → /var/log/fsck.log.
             scrub::maybe_run(ctx.fs, t);
+            sched::deskwatch::step("scrub");
             // Automatic updates: signed channel check 90 s after boot, then every 6 h
             // (policy in /etc/euroupdate.conf; never on the plain preview image).
             update::maybe_check(ctx.fs, t);
+            sched::deskwatch::step("update check");
         }
         if need_full { full_repaints += 1; }
         if need_full {
@@ -7098,6 +7113,7 @@ fn main() -> Status {
             notify::render_centre(&fb, width, height);
             // A hover tooltip, if one is showing, sits just under the cursor.
             tooltip::render(&fb, width, height);
+            sched::deskwatch::step("repaint: dialogs, menus, launcher, toasts");
             // A drag ghost while a file is being dragged out of EuroFiles.
             if let Some((ref path, _, _)) = file_drag {
                 let name = path.rsplit('/').next().unwrap_or(path);
@@ -7109,7 +7125,9 @@ fn main() -> Status {
             }
             // The Alt-Tab switcher overlay.
             switcher::render(&fb, width, height);
+            sched::deskwatch::step("repaint: drag ghost and switcher");
             help::render(&fb, width, height); // T3-hook: help panel + first-run tour, above the other overlays
+            sched::deskwatch::step("repaint: help panel and tour");
             // Workspace pager: one dot per virtual desktop, the active one filled.
             // Not over the help panel: on a 720-line screen the panel reaches down
             // to the pager and the dots sat on its bottom line.
@@ -7128,8 +7146,11 @@ fn main() -> Status {
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
+            sched::deskwatch::step("repaint: pager and cursor");
             fb.present();
     if let Some((bb, bw, bh, bs)) = fb.backbuffer() { virtio_gpu::present_frame(bb, bw, bh, bs); } // BB-2: live virtio-gpu scanout
+            xserver::keylat::painted(); // a full repaint draws the hosted window too
+            sched::deskwatch::step("repaint: present");
             // Capture the freshly rendered desktop if a screenshot was requested.
             if pending_shot {
                 if let Some(path) = screenshot::capture(&fb, ctx.fs) {
@@ -7181,6 +7202,7 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+                xserver::keylat::painted();
             }
             if euro_vis {
                 let (ex, ey, ew, eh) = compositor::window_body_rect(&windows[euro_idx]);
@@ -7205,6 +7227,7 @@ fn main() -> Status {
             compositor::draw_cursor(&fb, cmx, cmy);
             let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
             fb.present_rect(gx, gy, gw, gh);
+            xserver::keylat::painted();
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
         } else if px != cmx || py != cmy {
@@ -7222,12 +7245,14 @@ fn main() -> Status {
             let rh = oy.abs_diff(py) + compositor::CURSOR_H;
             fb.present_rect(rx, ry, rw, rh);
         }
+        sched::deskwatch::step("drawing");
 
         // Keep the network alive: answer ARP requests + recycle RX buffers.
         net::service();
         // The network worker does the inbound side; wake it if an interrupt's
         // wake found the scheduler lock busy.
         net::worker_poke();
+        sched::deskwatch::step("network service");
         // [net-up]: the background bring-up got its lease (release image).
         if net::take_up_event() {
             if let Some(c) = net::get() {
@@ -7246,8 +7271,10 @@ fn main() -> Status {
         if t % 16 == 0 {
             net::pump_all();
         }
+        sched::deskwatch::step("TCP clocks");
         // Automatic updates: one non-blocking slice of the background check per iteration.
         update::step(ctx.fs, t);
+        sched::deskwatch::step("update job");
 
         // One-shot self-test: after the live GTK window has been up a while, synthesize a
         // click on its Reset button (through the normal desktop click path) to prove
@@ -7289,6 +7316,7 @@ fn main() -> Status {
             }
         }
 
+        sched::deskwatch::step("demos and the rest");
         sched::deskwatch::mark(4);
         // A hosted app's own words, on the serial log. It never exits, so this is the
         // only place its stdout/stderr can appear at all. Alongside it: how much of the
@@ -7457,7 +7485,7 @@ fn main() -> Status {
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();
         } else {
-            x86_64::instructions::hlt();
+            crate::sched::desktop_idle_hlt();
         }
     }
 }
