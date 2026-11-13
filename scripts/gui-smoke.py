@@ -34,7 +34,7 @@ Exit status: 0 = every step passed, 1 = a step failed, 2 = crash or hang. A step
 that fails on a tracked, open bug (KNOWN_ISSUES below) is reported as "known" and
 does not count. Details: docs/GUI-TESTING.md.
 """
-import argparse, codecs, json, os, random, re, shlex, socket, struct, subprocess, sys, tempfile, threading, time, zlib
+import argparse, bisect, codecs, json, os, random, re, shlex, socket, struct, subprocess, sys, tempfile, threading, time, zlib
 
 OVMF = next((c for c in ("/usr/share/ovmf/OVMF.fd", "/usr/share/OVMF/OVMF.fd",
                          "/usr/share/edk2-ovmf/x64/OVMF.fd", "/usr/share/qemu/OVMF.fd") if os.path.exists(c)), None)
@@ -103,7 +103,11 @@ class Serial:
     the text for marker searches."""
 
     def __init__(self, path):
-        self.text = ""
+        # The text as chunks with their absolute start positions: appending is
+        # O(chunk), `since(pos)` joins only what lies after pos. One growing
+        # string cost a copy of the whole log per received chunk; the reader
+        # fell behind and the guest waited in its UART writes (BUG-125).
+        self.chunks, self.starts, self.total = [], [], 0
         self.crash = None
         self.lock = threading.Lock()
         self.closed = False
@@ -135,10 +139,17 @@ class Serial:
             if not data:
                 break
             chunk = decoder.decode(data)
+            if not chunk:
+                continue
             with self.lock:
-                self.text += chunk
-                if len(self.text) > 64 << 20:            # a soak must not eat the host
-                    self.text = self.text[-(32 << 20):]
+                self.chunks.append(chunk)
+                self.starts.append(self.total)
+                self.total += len(chunk)
+                # A soak must not eat the host: beyond 64 MiB the oldest half
+                # goes (positions stay absolute; text before it reads as gone).
+                if self.total - self.starts[0] > 64 << 20:
+                    k = bisect.bisect_right(self.starts, self.total - (32 << 20))
+                    del self.chunks[:k], self.starts[:k]
             window = tail + chunk
             tail = window[-256:]
             m = CRASH_RE.search(window)
@@ -148,11 +159,21 @@ class Serial:
 
     def mark(self):
         with self.lock:
-            return len(self.text)
+            return self.total
 
     def since(self, pos):
         with self.lock:
-            return self.text[pos:]
+            if not self.chunks or pos >= self.total:
+                return ""
+            k = max(bisect.bisect_right(self.starts, pos) - 1, 0)
+            cut = max(pos - self.starts[k], 0)
+            # Many small chunks are merged once they are asked for, so a
+            # search over the whole log does not join thousands every time.
+            if len(self.chunks) - k > 64:
+                merged = "".join(self.chunks[k:])
+                del self.chunks[k + 1:], self.starts[k + 1:]
+                self.chunks[k] = merged
+            return "".join(self.chunks[k:])[cut:] if cut else "".join(self.chunks[k:])
 
     def send_line(self, line):
         self.sock.sendall((line + "\n").encode())

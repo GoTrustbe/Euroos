@@ -1023,10 +1023,13 @@ pub fn fill_remap_tables_multiblock(pml4: u64, pdpt: u64, pd: u64,
 /// exe/lib pages could be re-faulted from disk, but the child must observe the
 /// parent's RUNTIME writes (heap, initialized data, chrome globals), so we copy every
 /// committed page. Returns false on pool exhaustion (caller tears the child down).
-pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
-    // SAFETY: identity-mapped table chains for both address spaces; single-threaded
-    // (IF=0 syscall). Frame copies read the parent's phys (identity) and write fresh
-    // pool frames (identity), both reachable with the current CR3.
+pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dyn FnMut()) -> bool {
+    // SAFETY: identity-mapped table chains for both address spaces. Frame copies
+    // read the parent's phys (identity) and write fresh pool frames (identity),
+    // both reachable with the current CR3. `between` runs after every page
+    // table (2 MiB of addresses) that had pages in it and may let other tasks
+    // run: the parent's table frames stay while the parent lives (munmap frees
+    // pages, not tables), and each entry is read and copied without a break.
     unsafe {
         let e4 = (parent as *const u64).add(idx).read_volatile();
         if e4 & PRESENT == 0 {
@@ -1045,6 +1048,9 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize) -> bool {
                     continue;
                 }
                 let pt = e2 & ADDR_MASK;
+                if i2 & 3 == 3 {
+                    between();
+                }
                 for i1 in 0..512usize {
                     let e1 = (pt as *const u64).add(i1).read_volatile();
                     if e1 & PRESENT == 0 {

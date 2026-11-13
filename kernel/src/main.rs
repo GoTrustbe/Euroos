@@ -5326,6 +5326,14 @@ fn main() -> Status {
     // does not hold the loop.
     boottime::phase("first-frame");
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // From here the console is quiet: per-event diagnostics stay in the kernel
+    // log (BUG-126), unless the boot option asks for all of it.
+    if !bootopt::serial_chatter() {
+        serial_println!("[serial] quiet console from here: per-event diagnostic lines go to the kernel log only (dmesg; `chatter on` or serial.chatter=on for all)");
+        serial::set_quiet(true);
+    }
+    // And what this loop prints itself no longer waits for the UART (BUG-129).
+    serial::set_deferred(true);
     boottime::desktop();
     // J1: the lock picture of a whole boot: most contended, and longest held
     // (an Irq-mode lock or any lock taken inside a syscall holds IF=0 that long).
@@ -5349,6 +5357,7 @@ fn main() -> Status {
     // native resolution and maps the mouse 1:1).
     appgfx::set_screen(width, height);
     loop {
+        sched::deskwatch::mark(0);
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
         // Service any pending network request from a graphics app (the browser):
@@ -5358,6 +5367,7 @@ fn main() -> Status {
         // The DevTools input bridge for a desktop-launched chrome: attach + ferry
         // page input (see cdp_install_input at the `chrome` command's spawn).
         ring3::cdp_pump();
+        sched::deskwatch::mark(1);
         // Interrupt-independent USB input HERE TOO: the boot launcher polls the
         // xHCI ring every iteration, but the desktop loop did not — so desktop
         // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
@@ -5501,6 +5511,7 @@ fn main() -> Status {
             }
         }
 
+        sched::deskwatch::mark(2);
         // ── Right-click context menus (the everyday-conveniences layer) ──
         // A right-press opens the menu for whatever is under the cursor; the
         // next left click chooses an item or dismisses it.
@@ -6115,6 +6126,7 @@ fn main() -> Status {
         let term_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::None).unwrap_or(false);
         let notes_focused = focused.map(|i| windows[i].app == suite_ui::SuiteApp::Notes).unwrap_or(false);
 
+        sched::deskwatch::mark(3);
         // ── Interactive shell / calculator: read keys. ──
         let mut term_dirty = false;
         let mut calc_dirty = false;
@@ -7266,6 +7278,7 @@ fn main() -> Status {
             }
         }
 
+        sched::deskwatch::mark(4);
         // A hosted app's own words, on the serial log. It never exits, so this is the
         // only place its stdout/stderr can appear at all. Alongside it: how much of the
         // machine the DESKTOP is using while the app runs. A browser that crawls when
@@ -7415,17 +7428,26 @@ fn main() -> Status {
         // Cooperatively yield so a hosted persistent glibc app (the live GTK window)
         // gets CPU promptly instead of only via timer preemption — the desktop loop
         // otherwise just hlt()s, which the Explore mapping flagged as starving it.
-        if xserver::x_windowed() {
-            crate::sched::yield_now();
-        }
-
         // Finishing sprint: HLT idle. Yield the CPU until the NEXT interrupt (timer
         // 100 Hz or keyboard/mouse/USB input) instead of spinning 100% — the CPU
         // sleeps energy-efficiently between frames; the timer tick guarantees ~10 ms
         // responsiveness and every input IRQ wakes the desktop immediately.
+        //
+        // Only when nobody else wants the CPU. With other tasks ready, a halt
+        // here threw away the rest of the tick every time the loop had its turn
+        // (half of all ticks while one renderer thread worked), and the loop
+        // then waited a full round of ready tasks for its next one: ten
+        // milliseconds each, 300 ms with thirty of them. Now it hands the CPU
+        // on, and the scheduler gives it back at the next tick (BUG-127).
         loop_iters += 1;
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
-        x86_64::instructions::hlt();
+        serial::kick();
+        sched::deskwatch::mark(5);
+        if crate::sched::any_other_ready() {
+            crate::sched::yield_now();
+        } else {
+            x86_64::instructions::hlt();
+        }
     }
 }
 
@@ -7977,6 +7999,7 @@ fn build_frame_allocator() -> FrameAllocator {
 /// Logs to COM1 and draws a red panic screen if the framebuffer is known.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    serial::emergency();
     // Serial panic dump: message + registers + backtrace + recent kmsg history.
     // write_raw goes directly to the UART (try_lock), so it works even if another
     // lock was held when the panic struck.

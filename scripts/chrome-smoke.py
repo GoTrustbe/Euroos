@@ -25,7 +25,7 @@ option update.check=off, visit only the sites of the matrix, log in nowhere.
 Exit status: 0 = every step passed, 1 = a step failed, 2 = the guest crashed or hung.
 Details: docs/CHROME-ON-EUROOS.md ("Testing"), docs/GUI-TESTING.md.
 """
-import argparse, hashlib, importlib.util, json, os, re, shlex, statistics, struct, sys, time, types, wave
+import argparse, hashlib, importlib.util, json, os, re, shlex, statistics, struct, sys, threading, time, types, wave
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("gui_smoke", os.path.join(HERE, "gui-smoke.py"))
@@ -72,6 +72,73 @@ BAD_RE = re.compile(r":FATAL:|\[abort\]|TERMINATED|arena alloc FAILED|POOL EXHAU
 gs.CRASH_RE = re.compile(gs.CRASH_RE.pattern.replace("|WATCHDOG", ""))
 
 
+class EchoProbe(threading.Thread):
+    """The console echo of gui-smoke, all the time: four times a second the serial
+    console is asked to echo a token and the answer is timed. The desktop loop
+    answers, so the slowest answer in a stretch of time is how long the loop stood
+    still in it (plus the few milliseconds an answer always takes)."""
+
+    def __init__(self, guest, period=0.25, nmi_after=2.0, nmi_max=12):
+        super().__init__(daemon=True)
+        self.g, self.period = guest, period
+        self.samples = []               # (time sent, ms until the answer; None = not yet)
+        self.lock = threading.Lock()
+        self.halt = False
+        # An answer that takes longer than `nmi_after` seconds: an NMI, and one
+        # more for every three further seconds the loop stands (the kernel's NMI probe
+        # prints the interrupted RIP, the stack and every task: the serial log
+        # then says WHERE it stood; scripts/nmisym.py names the addresses).
+        self.nmi_after, self.nmi_left, self.nmis = nmi_after, nmi_max, []
+
+    def run(self):
+        n = 0
+        while not self.halt and not self.g.serial.crash:
+            n += 1
+            token = f"cs-probe-{n}"
+            pos = self.g.serial.mark()
+            t0 = time.time()
+            with self.lock:
+                self.samples.append([t0, None])
+            try:
+                self.g.serial.send_line("echo " + token)
+            except OSError:
+                return
+            next_nmi = self.nmi_after
+            while not self.halt and time.time() - t0 < 120:
+                if "[scon] " + token in self.g.serial.since(pos):
+                    break
+                if self.nmi_left > 0 and time.time() - t0 > next_nmi:
+                    next_nmi += 3.0
+                    self.nmi_left -= 1
+                    try:
+                        self.g.qmp.cmd("inject-nmi")
+                        self.nmis.append(round(time.time() - t0, 2))
+                    except Exception:
+                        pass
+                time.sleep(0.004)
+            with self.lock:
+                self.samples[-1][1] = (time.time() - t0) * 1000
+            time.sleep(self.period)
+
+    def worst(self, since=0.0):
+        """(slowest answer in ms, number of answers) among the echoes sent after `since`;
+        an echo that is still waiting counts with the time it has waited so far."""
+        now = time.time()
+        with self.lock:
+            ms = [(m if m is not None else (now - t) * 1000) for t, m in self.samples if t >= since]
+        return (max(ms), len(ms)) if ms else (0.0, 0)
+
+    def median(self, since=0.0):
+        with self.lock:
+            ms = sorted(m for t, m in self.samples if t >= since and m is not None)
+        return statistics.median(ms) if ms else 0.0
+
+
+# A desktop that stands still this long during a step fails the step. The sprint's
+# goal is 100 ms; the number itself is in every step's detail and in the report.
+STALL_FAIL_MS = 1000
+
+
 class Chrome(gs.Guest):
     """The gui-smoke guest plus what a browser test needs."""
 
@@ -82,6 +149,59 @@ class Chrome(gs.Guest):
         self.infobars = 0
         self.bad_pos = 0
         self.layout_name = "us"
+        self.probe = None               # EchoProbe, from the first desktop on
+        self.stalls = []                # (step, slowest console answer in ms)
+
+    def start_probe(self):
+        if self.probe is None:
+            # The probe sends its NMI over the same QMP connection as the input
+            # events: one command at a time.
+            raw, lock = self.qmp.cmd, threading.Lock()
+
+            def locked(execute, **arguments):
+                with lock:
+                    return raw(execute, **arguments)
+            self.qmp.cmd = locked
+            self.probe = EchoProbe(self)
+            self.probe.start()
+
+    def deskstat(self):
+        """The kernel's own stopwatch on its desktop loop (`deskstat`): (longest
+        gap between two passes in ms, gaps over 100 ms) since the last call."""
+        pos = self.serial.mark()
+        self.serial.send_line("deskstat")
+        if not self.serial.wait_for("[deskstat] deskstat:", 10 * self.slow, pos):
+            return None
+        out = self.serial.since(pos)
+        m = re.search(r"\[deskstat\] deskstat: longest time between two passes of the desktop loop (\d+) ms, (\d+) over", out)
+        q = re.search(r"its console output waited at most (\d+) ms", out)
+        return (int(m.group(1)), int(m.group(2)), int(q.group(1)) if q else -1) if m else None
+
+    def ramfiles(self):
+        """The `ramfiles` shell command: its first line, or None."""
+        pos = self.serial.mark()
+        self.serial.send_line("ramfiles")
+        if not self.serial.wait_for("[ramfiles] ramfiles:", 10 * self.slow, pos):
+            return None
+        m = re.search(r"\[ramfiles\] ramfiles: (\d+) files hold (\d+) KiB of bytes and (\d+) KiB of holes", self.serial.since(pos))
+        return tuple(int(x) for x in m.groups()) if m else None
+
+    def stall(self, name, since):
+        """The slowest console answer since `since`, noted under `name`."""
+        if self.probe is None:
+            return 0.0
+        ms, n = self.probe.worst(since)
+        self.stalls.append((name, round(ms)))
+        return ms
+
+    def fds(self):
+        """The `fds` shell command: (processes, descriptors, objects, file objects in use) or None."""
+        pos = self.serial.mark()
+        self.serial.send_line("fds")
+        if not self.serial.wait_for("[fds] fds:", 10 * self.slow, pos):
+            return None
+        m = re.search(r"\[fds\] fds: (\d+) processes, (\d+) descriptors, (\d+) objects; (\d+) of (\d+)", self.serial.since(pos))
+        return tuple(int(x) for x in m.groups()) if m else None
 
     # ── input ───────────────────────────────────────────────────────────────
     def type(self, text):
@@ -313,7 +433,8 @@ class Chrome(gs.Guest):
         timeline = ", ".join(f"{k} {v:.1f}" for k, v in sorted(self.start_marks.items(), key=lambda kv: kv[1]))
         self.move(self.w - 4, self.h - 4)
         self.nap(0.5)
-        self.idle_icon = self.reload_icon()
+        self.calibrate_idle_icon()
+        self.start_probe()
         self.record("chrome starts from the Terminal", ok,
                     f"window at {self.win}, first page {hit[1] if hit else '?'} painted and settled after {secs:.1f} s "
                     f"(seconds after Enter: {timeline}), {n} colours in the content area")
@@ -323,6 +444,19 @@ class Chrome(gs.Guest):
         """The pixels of the toolbar's reload button: it shows a cross while a page loads."""
         x, y = self.cx(RELOAD_X, TOOLBAR_Y)
         return self.digest(s or self.shot(), (x - 9, y - 9, x + 9, y + 9))
+
+    def calibrate_idle_icon(self, timeout=12):
+        """The reload button as it looks when nothing loads: the picture that stays
+        the same for four looks in a row (1.6 s). Called on a local page."""
+        t0, last, same = time.time(), None, 0
+        while time.time() - t0 < timeout * self.slow:
+            d = self.reload_icon()
+            same = same + 1 if d == last else 1
+            last = d
+            if same >= 4:
+                break
+            time.sleep(0.4)
+        self.idle_icon = last
 
     def wait_loaded(self, timeout=60):
         """Until the browser itself says the load is over: the reload button is the
@@ -379,6 +513,7 @@ class Chrome(gs.Guest):
         for site in sites:
             name = site["name"]
             self.new_bad()
+            t_site = time.time()
             ok_nav, secs, detail = self.navigate(site["url"], site["host"])
             # The picture is judged when the BROWSER says the load is over (its reload
             # button is an arrow again), not when the tab has a URL and a title: the old
@@ -391,8 +526,16 @@ class Chrome(gs.Guest):
             # `loaded` is in the detail only: the reload-button comparison does not yet
             # recognise the idle arrow on every page, and then the picture is simply
             # judged after the full wait.
-            ok = ok_nav and n >= site["colours"] and not bad
+            stall = self.stall(f"site {name}{tag}", t_site)
+            census = self.fds()
+            ram = self.ramfiles()
+            desk = self.deskstat()
+            ok = ok_nav and n >= site["colours"] and not bad and stall < STALL_FAIL_MS
             why = f"{detail} after {secs:.1f} s, load {'finished' if loaded else 'NOT finished'} {painted:.1f} s later; content {n} colours, commonest {share:.0%}" + ("" if settled else ", still changing") \
+                + f"; desktop loop: slowest console answer {stall:.0f} ms" \
+                + (f"; fds: {census[0]} processes, {census[1]} descriptors, {census[2]} objects, {census[3]}/{census[4]} file objects" if census else "") \
+                + (f"; RAM files: {ram[0]} files, {ram[1] // 1024} MiB of bytes, {ram[2] // 1024} MiB of holes" if ram else "") \
+                + (f"; kernel stopwatch: longest gap between desktop passes {desk[0]} ms, {desk[1]} over 100 ms, console output queued at most {desk[2]} ms" if desk else "") \
                 + (f"; {len(bad)} failure line(s): {bad[0]}" if bad else "")
             self.step(f"site {name}: {site['url']}", ok, why)
             results.append((name, ok, secs, n))
@@ -775,6 +918,8 @@ def one_boot(a, workdir, body):
     except KeyboardInterrupt:
         verdict, rc = "interrupted", 1
     finally:
+        if g.probe is not None:
+            g.probe.halt = True
         g.stop()
     failed = [r for r in g.results if not r[1]]
     if rc == 0 and failed:
@@ -783,16 +928,22 @@ def one_boot(a, workdir, body):
 
 
 def write_report(a, workdir, g, verdict, t0, extra=None):
+    probe = getattr(g, "probe", None)
+    worst, answers = probe.worst() if probe else (0.0, 0)
     report = {"verdict": verdict, "image": os.path.abspath(a.image), "accel": "kvm" if a.kvm else "tcg", "smp": a.smp,
               "mem": a.mem, "input": a.input, "nic": a.nic, "seconds": int(time.time() - t0),
               "max_console_latency_ms": g.max_echo_ms,
+              "desktop_stall_ms": {"slowest_console_answer": round(worst), "median": round(probe.median()) if probe else 0,
+                                   "answers": answers, "per_step": getattr(g, "stalls", []),
+                                   "nmi_sent_after_s": probe.nmis if probe else []},
               "steps": [{"name": n, "ok": ok, "detail": d} for n, ok, d in g.results]}
     report.update(extra or {})
     with open(os.path.join(workdir, "report.json"), "w") as f:
         json.dump(report, f, indent=1)
     with open(os.path.join(workdir, "report.txt"), "w") as f:
         f.write(f"chrome-smoke: {verdict}\n{report['accel']} smp={a.smp} mem={a.mem} input={a.input} nic={a.nic}, {report['seconds']} s, "
-                f"max console latency {g.max_echo_ms} ms\n\n")
+                f"max console latency {g.max_echo_ms} ms; desktop loop while the browser ran: slowest console answer "
+                f"{round(worst)} ms, median {round(probe.median()) if probe else 0} ms over {answers} echoes\n\n")
         for n, ok, d in g.results:
             f.write(f"{'ok  ' if ok else 'FAIL'} {n}{': ' + d if d else ''}\n")
         for k, v in (extra or {}).items():
@@ -837,6 +988,8 @@ def main():
                 if not g.start_chrome("file:///tmp/input-test.html"):
                     return
                 g.close_infobars()
+                g.move(g.w - 4, g.h - 4)
+                g.calibrate_idle_icon()
                 g.click(*g.page(*FIELD_A)); g.type("first-key")
                 v = g.field("A")
                 g.step("page input right after start: typed text arrives", v == "first-key", f"field A = {v!r}")
@@ -869,6 +1022,8 @@ def main():
         if not g.start_chrome("file:///tmp/input-test.html"):
             return
         g.close_infobars()
+        g.move(g.w - 4, g.h - 4)
+        g.calibrate_idle_icon()
         g.step("chrome's infobars are closed or absent", g.infobars == 0, f"{g.infobars} left")
         extra["memory_start"] = g.memory()
         if a.soak_hours > 0:

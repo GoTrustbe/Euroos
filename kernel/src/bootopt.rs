@@ -32,6 +32,11 @@
 //!   one up to 1920x1080. An unknown or unavailable mode is ignored and logged.
 //!   Meant for testing the desktop at a smaller size.
 //!
+//! - `serial.chatter=on`: keep the per-event diagnostic lines of the Linux
+//!   layer on the serial console after the desktop has started (serial.rs
+//!   `QUIET`). They are always in the kernel log (`dmesg`); on the console they
+//!   cost the desktop its responsiveness, so the default is off.
+//!
 //! - `update.check=off`: no automatic update check (update.rs `maybe_check`):
 //!   nothing is fetched, staged or installed unless `euroupdate check` is typed.
 //!   For test guests that have a route to the internet.
@@ -50,6 +55,7 @@ static NVME_USER: AtomicBool = AtomicBool::new(false);
 static SCHED_WATCH: AtomicBool = AtomicBool::new(false);
 static TOUR_OFF: AtomicBool = AtomicBool::new(false);
 static UPDATE_CHECK_OFF: AtomicBool = AtomicBool::new(false);
+static SERIAL_CHATTER: AtomicBool = AtomicBool::new(false);
 static CHROME_INPUT_CDP: AtomicBool = AtomicBool::new(false);
 static FOUND: AtomicBool = AtomicBool::new(false);
 /// `display.mode`: width << 16 | height, 0 = not set.
@@ -90,6 +96,8 @@ fn apply(text: &str) {
                 ("ui.tour", "on") => TOUR_OFF.store(false, Ordering::Relaxed),
                 ("chrome.input", "cdp") => CHROME_INPUT_CDP.store(true, Ordering::Relaxed),
                 ("chrome.input", "x11") => CHROME_INPUT_CDP.store(false, Ordering::Relaxed),
+                ("serial.chatter", "on") => SERIAL_CHATTER.store(true, Ordering::Relaxed),
+                ("serial.chatter", "off") => SERIAL_CHATTER.store(false, Ordering::Relaxed),
                 ("update.check", "off") => UPDATE_CHECK_OFF.store(true, Ordering::Relaxed),
                 ("update.check", "on") => UPDATE_CHECK_OFF.store(false, Ordering::Relaxed),
                 ("display.mode", v) => match parse_mode(v) {
@@ -143,6 +151,11 @@ pub fn tour_off() -> bool {
 /// `chrome.input=cdp`: input for a hosted Chromium is also copied over DevTools.
 pub fn chrome_input_cdp() -> bool {
     CHROME_INPUT_CDP.load(Ordering::Relaxed)
+}
+
+/// `serial.chatter=on`: the serial console keeps every diagnostic line.
+pub fn serial_chatter() -> bool {
+    SERIAL_CHATTER.load(Ordering::Relaxed)
 }
 
 /// `update.check=off`: the periodic update check does nothing.

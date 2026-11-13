@@ -15,13 +15,200 @@ const COM1: u16 = 0x3F8;
 struct Uart {
     data: Port<u8>,
     lsr: Port<u8>,
+    /// The quiet filter (see `QUIET`): the first bytes of a line, held until
+    /// its tag is known, and what happens with the rest of the line.
+    held: [u8; 16],
+    held_n: usize,
+    line: LineState,
+    /// This print goes into the transmit queue instead of the port (see `DEFER`).
+    to_queue: bool,
 }
+
+/// Deferred console output for the desktop loop (BUG-129).
+///
+/// A print holds the CPU with interrupts off until the UART has taken every
+/// byte. Under a hypervisor each transmitter-load is two exits to the host,
+/// and a host that is busy (a screendump, the user-mode network) answers one
+/// in milliseconds, not microseconds; a real UART takes a character time per
+/// byte. The desktop loop prints a line per DevTools request, per console
+/// command, per heartbeat: one pass of it stood for 570 ms that way while a
+/// page loaded. Its lines now go into this queue (memory only) and the task
+/// `tx_task` sends them, one load at a time, with interrupts on in between.
+///
+/// Only task 0 defers. Everything else prints as before, so the order of the
+/// lines of one task is kept, and the lines of the desktop loop may come a
+/// moment later than those of other tasks. A fault, a panic, the NMI probe and
+/// a shutdown call `emergency()`: the queue is sent at once and nothing is
+/// deferred from then on.
+///
+/// The queue is only touched with the UART lock held.
+const TXQ_CAP: usize = 256 * 1024;
+struct TxQ {
+    buf: [u8; TXQ_CAP],
+    head: usize,
+    len: usize,
+    /// The line at the head has been sent in part.
+    midline: bool,
+}
+struct TxCell(core::cell::UnsafeCell<TxQ>);
+// SAFETY: every access is under the UART lock (see `txq`).
+unsafe impl Sync for TxCell {}
+static TXQ: TxCell = TxCell(core::cell::UnsafeCell::new(TxQ { buf: [0; TXQ_CAP], head: 0, len: 0, midline: false }));
+static DEFER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static EMERGENCY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static TX_PENDING: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static TX_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+/// Bytes that went through the queue, and times it was full (its content was
+/// then sent by the printing task itself, as without a queue).
+static TX_DEFERRED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_FULL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Since when the queue holds bytes (TSC; 0 = empty), and the longest stretch
+/// in which it was not empty since the last look: an upper bound on how late a
+/// line of the desktop loop reached the port.
+static TX_BUSY_SINCE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_BUSY_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The longest time (ms) the queue was not empty since the last call.
+pub fn take_queue_delay_ms() -> u64 {
+    let c = TX_BUSY_MAX.swap(0, Ordering::Relaxed);
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    c * 10 / per
+}
+
+/// SAFETY: the caller holds the UART lock.
+#[allow(clippy::mut_from_ref)]
+unsafe fn txq() -> &'static mut TxQ {
+    &mut *TXQ.0.get()
+}
+
+/// Start deferring the desktop loop's output (once: also starts the task).
+pub fn set_deferred(on: bool) {
+    if on && TX_TASK.load(Ordering::Relaxed) == usize::MAX {
+        match crate::sched::spawn_kernel(tx_task, -10) {
+            Some(t) => TX_TASK.store(t, Ordering::Relaxed),
+            None => return, // no task slot: stay synchronous
+        }
+    }
+    DEFER.store(on, Ordering::Relaxed);
+}
+
+/// (deferring?, bytes sent through the queue, times the queue was full, bytes waiting).
+pub fn deferred() -> (bool, u64, u64, usize) {
+    (DEFER.load(Ordering::Relaxed) && !EMERGENCY.load(Ordering::Relaxed), TX_DEFERRED.load(Ordering::Relaxed),
+     TX_FULL.load(Ordering::Relaxed), TX_PENDING.load(Ordering::Relaxed))
+}
+
+/// The desktop loop calls this at the end of a pass: send up to 256 bytes of
+/// what it queued (its answers to console commands are short lines, and they
+/// should not wait for the sender to get a turn), then wake the sender for
+/// whatever is left.
+pub fn kick() {
+    let mut sent = 0usize;
+    while sent < 256 && TX_PENDING.load(Ordering::Relaxed) > 0 {
+        let n = drain_load();
+        if n == 0 {
+            break;
+        }
+        sent += n;
+    }
+    if TX_PENDING.load(Ordering::Relaxed) > 0 {
+        let t = TX_TASK.load(Ordering::Relaxed);
+        if t != usize::MAX {
+            let _ = crate::sched::try_unblock_any(t);
+        }
+    }
+}
+
+/// Send everything that waits, now, and defer nothing from here on: for a
+/// panic, a fatal fault, the NMI probe, a shutdown. `resume()` undoes it.
+pub fn emergency() {
+    EMERGENCY.store(true, Ordering::Relaxed);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if PRINTING_CPU.load(Ordering::Acquire) == crate::apic::lapic_id().wrapping_add(1) {
+            return; // inside a print of this cpu: the queue is in use below us
+        }
+        if let Some(mut u) = UART.try_lock() {
+            u.finish_queue(true);
+        }
+    });
+}
+
+pub fn in_emergency() -> bool {
+    EMERGENCY.load(Ordering::Relaxed)
+}
+
+pub fn resume() {
+    EMERGENCY.store(false, Ordering::Relaxed);
+}
+
+/// Send one transmitter-load from the queue. Returns the bytes sent (0: the
+/// queue is empty). Interrupts are off only for this one load.
+fn drain_load() -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let Some(mut u) = UART.try_lock() else { return 1 };
+        u.send_from_queue(14)
+    })
+}
+
+/// The sender of the deferred output. Sleeps two ticks when there is nothing
+/// (and is woken earlier by `kick`).
+extern "C" fn tx_task() -> ! {
+    loop {
+        if drain_load() == 0 {
+            crate::sched::sleep_ticks(2);
+            crate::sched::yield_now();
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum LineState { Start, Pass, Mute }
+
+/// Quiet console: lines of the per-event diagnostic tags below go to the
+/// kernel log (`dmesg`, the panic dump) but not to the UART. Off during boot
+/// and the self-tests; on when the desktop loop starts, unless the boot option
+/// `serial.chatter=on` asks for everything (the shell command `chatter on|off`
+/// switches at run time).
+///
+/// Why: a browser session wrote a megabyte of these lines (one per mmap, per
+/// epoll_ctl, per DevTools event). Every sixteen bytes are two exits to the
+/// host under a hypervisor and a character time of waiting on a real UART,
+/// with interrupts off; the desktop loop, which prints the DevTools lines
+/// itself, stood for up to eighteen seconds while GitHub loaded (BUG-126).
+static QUIET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Bytes kept from the UART by the quiet filter.
+static MUTED_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn set_quiet(on: bool) {
+    QUIET.store(on, Ordering::Relaxed);
+}
+
+pub fn quiet() -> (bool, u64) {
+    (QUIET.load(Ordering::Relaxed), MUTED_BYTES.load(Ordering::Relaxed))
+}
+
+/// Is this the start of a line that stays out of the UART in quiet mode?
+fn quiet_tag(head: &[u8]) -> bool {
+    matches!(head,
+        b"[linux-abi]" | b"[cst]" | b"[scm]" | b"[fsdiag]" | b"[inet]" | b"[slife]"
+        | b"[cdp-in]" | b"[epctl]" | b"[glibc-thread]" | b"[mmaplib]" | b"[futex]"
+        | b"[threads]" | b"[pollset]" | b"[madvise]" | b"[epoll]" | b"[sio]" | b"[msc]"
+        | b"[sockfam]" | b"[sc]" | b"[cdp] <-" | b"[cdp] ->")
+}
+
+/// How many bytes the transmitter takes once it reports "empty": 16 with a
+/// 16550A FIFO (found at init), 1 without one.
+static TX_BURST: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
 
 impl Uart {
     const fn new() -> Self {
         Self {
             data: Port::new(COM1),
             lsr: Port::new(COM1 + 5),
+            held: [0; 16],
+            held_n: 0,
+            line: LineState::Start,
+            to_queue: false,
         }
     }
 
@@ -38,7 +225,36 @@ impl Uart {
             lcr.write(0x03); // 8N1, DLAB off
             fcr.write(0xC7); // FIFO on, clear, 14-byte threshold
             mcr.write(0x0B); // RTS/DSR/OUT2
+            // A 16550A answers "FIFOs enabled" in the top two bits of the
+            // interrupt identification register (same port as FCR, read).
+            let fifo = fcr.read() & 0xC0 == 0xC0;
+            TX_BURST.store(if fifo { 16 } else { 1 }, Ordering::Relaxed);
         }
+    }
+
+    /// Send up to one transmitter-load of `bytes`; returns how many went out.
+    /// With the FIFO on, "transmitter holding register empty" (LSR bit 5)
+    /// means the FIFO is empty, so sixteen bytes fit without asking again:
+    /// one status read and one string output instead of two port accesses per
+    /// byte. Under a hypervisor every port access is an exit to the host; on
+    /// hardware every status poll waits for a character time. This was the
+    /// largest single cost of a busy system with a talkative log (BUG-123).
+    fn write_burst(&mut self, bytes: &[u8]) -> usize {
+        let n = bytes.len().min(TX_BURST.load(Ordering::Relaxed));
+        if n == 0 {
+            return 0;
+        }
+        unsafe {
+            while self.lsr.read() & 0x20 == 0 {}
+            core::arch::asm!(
+                "rep outsb",
+                in("dx") COM1,
+                inout("rsi") bytes.as_ptr() => _,
+                inout("rcx") n => _,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+        n
     }
 
     fn write_byte(&mut self, b: u8) {
@@ -64,13 +280,165 @@ impl Uart {
 
 impl Write for Uart {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        for b in s.bytes() {
-            if b == b'\n' {
-                self.write_byte(b'\r');
-            }
-            self.write_byte(b);
-        }
+        self.write_bytes(s.as_bytes());
         Ok(())
+    }
+}
+
+impl Uart {
+    /// The quiet filter: pass `bytes` on to the transmitter, except the lines
+    /// whose tag is in `quiet_tag`. The state lives across calls (one line
+    /// arrives in pieces from the formatter) and is guarded by the UART lock.
+    fn write_filtered(&mut self, b: &[u8]) {
+        let mut i = 0;
+        while i < b.len() {
+            match self.line {
+                LineState::Pass | LineState::Mute => {
+                    let end = b[i..].iter().position(|&c| c == b'\n').map(|p| i + p + 1).unwrap_or(b.len());
+                    if self.line == LineState::Pass {
+                        self.write_bytes(&b[i..end]);
+                    } else {
+                        MUTED_BYTES.fetch_add((end - i) as u64, Ordering::Relaxed);
+                    }
+                    if b[end - 1] == b'\n' {
+                        self.line = LineState::Start;
+                        self.held_n = 0;
+                    }
+                    i = end;
+                }
+                LineState::Start => {
+                    let c = b[i];
+                    if self.held_n == 0 && c != b'[' {
+                        self.line = LineState::Pass; // no tag: this byte goes out above
+                        continue;
+                    }
+                    i += 1;
+                    self.held[self.held_n] = c;
+                    self.held_n += 1;
+                    let n = self.held_n;
+                    // "[cdp]" needs three more bytes: only its raw message
+                    // lines ("[cdp] <-", "[cdp] ->") are quiet.
+                    let cdp = n >= 5 && &self.held[..5] == b"[cdp]";
+                    let known = c == b'\n' || n == self.held.len() || (c == b']' && !cdp) || (cdp && n == 8);
+                    if !known {
+                        continue;
+                    }
+                    let held = self.held;
+                    if c != b'\n' && quiet_tag(&held[..n]) {
+                        MUTED_BYTES.fetch_add(n as u64, Ordering::Relaxed);
+                        self.line = LineState::Mute;
+                    } else {
+                        self.write_bytes(&held[..n]);
+                        self.line = if c == b'\n' { LineState::Start } else { LineState::Pass };
+                    }
+                    self.held_n = 0;
+                }
+            }
+        }
+    }
+
+    /// Take up to `max` bytes off the queue, at most to the end of a line,
+    /// and send them. The caller holds the UART lock. Returns the bytes sent.
+    fn send_from_queue(&mut self, max: usize) -> usize {
+        let mut tmp = [0u8; 256];
+        let max = max.min(tmp.len());
+        // SAFETY: UART lock held (we are a method of the locked Uart).
+        let q = unsafe { txq() };
+        let mut n = 0;
+        while n < max && q.len > 0 {
+            let b = q.buf[q.head];
+            q.head = (q.head + 1) % TXQ_CAP;
+            q.len -= 1;
+            tmp[n] = b;
+            n += 1;
+            if b == b'\n' {
+                break;
+            }
+        }
+        if n == 0 {
+            return 0;
+        }
+        q.midline = tmp[n - 1] != b'\n';
+        TX_PENDING.store(q.len, Ordering::Relaxed);
+        self.write_direct(&tmp[..n]);
+        if q.len == 0 {
+            let since = TX_BUSY_SINCE.swap(0, Ordering::Relaxed);
+            if since != 0 {
+                let d = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(since);
+                TX_BUSY_MAX.fetch_max(d, Ordering::Relaxed);
+            }
+        }
+        n
+    }
+
+    /// Send the whole queue (`all`), or only the rest of a line that was sent
+    /// in part, so that a direct print does not land in the middle of it.
+    fn finish_queue(&mut self, all: bool) {
+        loop {
+            // SAFETY: UART lock held.
+            let q = unsafe { txq() };
+            if q.len == 0 || !(all || q.midline) {
+                break;
+            }
+            self.send_from_queue(256);
+        }
+    }
+
+    fn queue_push(&mut self, bytes: &[u8]) {
+        // SAFETY: UART lock held.
+        if unsafe { txq() }.len + bytes.len() > TXQ_CAP {
+            // Full: the printer sends the backlog itself (nothing is dropped).
+            TX_FULL.fetch_add(1, Ordering::Relaxed);
+            self.finish_queue(true);
+            if bytes.len() > TXQ_CAP {
+                self.write_direct(bytes);
+                return;
+            }
+        }
+        let q = unsafe { txq() };
+        if q.len == 0 && !bytes.is_empty() {
+            TX_BUSY_SINCE.store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
+        }
+        let mut tail = (q.head + q.len) % TXQ_CAP;
+        for &b in bytes {
+            q.buf[tail] = b;
+            tail = (tail + 1) % TXQ_CAP;
+        }
+        q.len += bytes.len();
+        TX_PENDING.store(q.len, Ordering::Relaxed);
+        TX_DEFERRED.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        if self.to_queue {
+            self.queue_push(bytes);
+        } else {
+            self.write_direct(bytes);
+        }
+    }
+
+    fn write_direct(&mut self, bytes: &[u8]) {
+        // "\n" goes out as "\r\n"; everything between two newlines goes out in
+        // transmitter-loads.
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            let line = rest.iter().position(|&b| b == b'\n').unwrap_or(rest.len());
+            let mut run = &rest[..line];
+            while !run.is_empty() {
+                let n = self.write_burst(run);
+                run = &run[n..];
+            }
+            if line < rest.len() {
+                let mut crlf: &[u8] = b"\r\n";
+                while !crlf.is_empty() {
+                    let n = self.write_burst(crlf);
+                    crlf = &crlf[n..];
+                }
+                rest = &rest[line + 1..];
+            } else {
+                rest = &rest[line..];
+            }
+        }
     }
 }
 
@@ -138,16 +506,31 @@ pub fn _print(args: fmt::Arguments) {
         PRINTING_CPU.store(me, Ordering::Release);
         // Lock-free on purpose: the census prints with SCHED held, and current()
         // takes SCHED (run 39 wedged in exactly that nested print).
-        PRINTING_TASK.store(crate::sched::current_lockfree(), Ordering::Relaxed);
+        let task = crate::sched::current_lockfree();
+        PRINTING_TASK.store(task, Ordering::Relaxed);
+        // The desktop loop's lines go into the queue (BUG-129); every other
+        // print goes to the port, after the rest of a queued line that was
+        // sent in part, or after the whole queue in an emergency.
+        let emergency = EMERGENCY.load(Ordering::Relaxed);
+        let defer = task == 0 && !emergency && DEFER.load(Ordering::Relaxed);
+        if !defer {
+            uart.finish_queue(emergency);
+        }
+        uart.to_queue = defer;
         struct Tee<'a>(&'a mut Uart);
         impl Write for Tee<'_> {
             fn write_str(&mut self, s: &str) -> fmt::Result {
-                self.0.write_str(s)?;
+                if QUIET.load(Ordering::Relaxed) {
+                    self.0.write_filtered(s.as_bytes());
+                } else {
+                    self.0.write_str(s)?;
+                }
                 crate::klog::tee(s);
                 Ok(())
             }
         }
         let _ = Tee(&mut uart).write_fmt(args);
+        uart.to_queue = false;
         PRINTING_CPU.store(0, Ordering::Release);
     });
 }
@@ -178,6 +561,7 @@ pub fn read_byte() -> Option<u8> {
 pub fn write_raw(bytes: &[u8]) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         if let Some(mut uart) = UART.try_lock() {
+            uart.finish_queue(true);
             for &b in bytes {
                 if b == b'\n' {
                     uart.write_byte(b'\r');

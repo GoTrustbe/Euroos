@@ -486,6 +486,40 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             out
         }
+        // `ramfiles`: what the files that live in kernel memory are (W21).
+        // `deskstat`: the desktop loop's stopwatch (sched::deskwatch, W22).
+        "deskstat" => {
+            let (max, over, max_all, over_all) = crate::sched::deskwatch::take();
+            let l = format!(
+                "deskstat: longest time between two passes of the desktop loop {max} ms, {over} over {} ms since the last deskstat; {max_all} ms and {over_all} since boot; its console output waited at most {} ms",
+                crate::sched::deskwatch::LIMIT_MS, crate::serial::take_queue_delay_ms());
+            crate::serial_println!("[deskstat] {l}");
+            vec![l]
+        }
+        "chatter" => {
+            // `chatter [on|off]`: every diagnostic line on the serial console,
+            // or the quiet console (serial.rs QUIET, BUG-126).
+            match arg1 {
+                "on" => crate::serial::set_quiet(false),
+                "off" => crate::serial::set_quiet(true),
+                _ => {}
+            }
+            let (q, muted) = crate::serial::quiet();
+            let (d, sent, full, waiting) = crate::serial::deferred();
+            vec![format!(
+                "serial console: {} ({} KiB of per-event lines kept from it so far; they are in dmesg)",
+                if q { "quiet" } else { "everything" }, muted / 1024),
+                format!(
+                "desktop loop output: {} ({} KiB sent through the queue, {waiting} bytes waiting, queue full {full} times)",
+                if d { "deferred" } else { "direct" }, sent / 1024)]
+        }
+        "ramfiles" => {
+            let out = crate::ring3::ram_files_census();
+            for l in out.iter() {
+                crate::serial_println!("[ramfiles] {}", l.trim_start());
+            }
+            out
+        }
         "cdiag" => {
             // What a hosted glibc program (the browser) is doing right now: every
             // thread with its state and last syscall, the main thread's recent

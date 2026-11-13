@@ -398,9 +398,14 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     let rsp = frame.stack_pointer.as_u64();
     let cs = frame.code_segment.0;
     let rflags = frame.cpu_flags;
+    // The probe's lines go straight to the port, after what the desktop loop
+    // still had in its queue; deferring is on again when the probe ends.
+    let was = crate::serial::in_emergency();
+    crate::serial::emergency();
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
+    serial_println!("[nmi] CR2 (address of the last page fault) = {:#018x}", x86_64::registers::control::Cr2::read_raw());
     // The INSTRUCTIONS at the wedge: a lock spin (pause;jmp / cmpxchg) and a
     // poll loop (cmp mem;jne) look identical from the outside; 32 bytes of code
     // tell them apart at a glance.
@@ -410,10 +415,23 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
         // `mov r64, [rip+disp32]` (48 8b /r with mod=00 rm=101) anywhere in the
         // window - the absolute address of the polled static identifies WHICH
         // flag/lock the wedge waits on.
-        let base = rip.wrapping_sub(16);
+        // An NMI that landed in ring 3 looks at USER memory: never by a raw
+        // read (SMAP: a protection fault inside this handler, BUG-124) but
+        // through the page walk; what is not mapped reads as zeros.
+        let user = cs & 3 == 3;
+        let base = if user { rip.wrapping_sub(16) & !7 } else { rip.wrapping_sub(16) };
         let mut b = [0u8; 32];
-        for (i, bi) in b.iter_mut().enumerate() {
-            *bi = unsafe { ((base + i as u64) as *const u8).read_volatile() };
+        if user {
+            for k in 0..4u64 {
+                if let Some(q) = read_user_qword(base + k * 8) {
+                    b[(k * 8) as usize..(k * 8 + 8) as usize].copy_from_slice(&q.to_le_bytes());
+                }
+            }
+            serial_println!("[nmi] ring 3: code bytes from {base:#018x} (rip-{}), read through the page walk", rip - base);
+        } else {
+            for (i, bi) in b.iter_mut().enumerate() {
+                *bi = unsafe { ((base + i as u64) as *const u8).read_volatile() };
+            }
         }
         serial_println!("[nmi] code rip-16..: {:02x?}", &b[..16]);
         serial_println!("[nmi] code rip..   : {:02x?}", &b[16..]);
@@ -443,7 +461,8 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     let mut printed = 0;
     let mut p = rsp & !0x7;
     let end = (rsp + 0x800) & !0x7; // scan 2 KiB of the interrupted stack
-    while p < end && printed < 24 {
+    // A ring-3 stack holds no kernel return addresses (and is user memory).
+    while cs & 3 != 3 && p < end && printed < 24 {
         let v = unsafe { (p as *const u64).read_volatile() };
         if (0x2000_0000..0x8000_0000).contains(&v) {
             serial_println!("[nmi]   {v:#018x}");
@@ -457,6 +476,9 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     // is built for interrupt context (try-locks, no allocation).
     crate::sched::census_trylock();
     serial_println!("========== END NMI PROBE ==========");
+    if !was {
+        crate::serial::resume();
+    }
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
@@ -504,6 +526,7 @@ extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
         }
     }
     // Ring-0 #UD is a genuine kernel bug: halt as before.
+    crate::serial::emergency();
     serial_println!("[idt] INVALID OPCODE @ {ip:#x} (ring 0) -> halt");
     halt();
 }
@@ -558,6 +581,7 @@ extern "x86-interrupt" fn gp_handler(frame: InterruptStackFrame, code: u64) {
     }
     let rsp = frame.stack_pointer.as_u64();
     let ss = frame.stack_segment.0;
+    crate::serial::emergency();
     serial_println!("[idt] GENERAL PROTECTION FAULT code={code:#x} @ {ip:#x} cs={cs:#x} ss={ss:#x} rsp={rsp:#x}");
     // Y: capture a crash dump before we halt (recovery boot reads it).
     crate::crashdump::capture(13, code, ip, rsp, frame.cpu_flags.bits());
@@ -626,6 +650,8 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // instruction retried. No-op unless enabled + in-range, so the normal fault
     // handling below is untouched for every other case (incl. ring 0 kernel copies
     // that touch a not-yet-committed demand page during a syscall).
+    crate::ring3::FAULT_CODE.store(code.bits(), Ordering::Relaxed);
+    crate::ring3::FAULT_RIP.store(frame.instruction_pointer.as_u64(), Ordering::Relaxed);
     if crate::ring3::handle_demand_fault(
         addr,
         code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),
@@ -766,6 +792,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code: u64) -> ! {
+    crate::serial::emergency();
     serial_println!("[idt] DOUBLE FAULT @ {:#x}", frame.instruction_pointer.as_u64());
     crate::crashdump::capture(8, 0, frame.instruction_pointer.as_u64(), frame.stack_pointer.as_u64(), frame.cpu_flags.bits());
     halt()

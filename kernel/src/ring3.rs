@@ -1151,7 +1151,18 @@ static HB_LAST_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU6
 /// mtime for the stat in progress (set path-side, consumed by the shared writer).
 static STAT_MTIME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static STAT_MTIME_NSEC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-static CDP_RX: Mutex<alloc::vec::Vec<u8>> = Mutex::new(alloc::vec::Vec::new());
+/// Bytes received from the browser's DevTools pipe, and how far they have been
+/// read: messages are taken from the read position, and the read part goes in
+/// one move when it is half of the buffer (taking each message off the front
+/// moved all the rest every time).
+static CDP_RX: Mutex<(alloc::vec::Vec<u8>, usize)> = Mutex::new((alloc::vec::Vec::new(), 0));
+/// One call of the pump: messages, bytes, the slowest message (TSC cycles, its
+/// start, its first bytes).
+static CDP_PUMP_MSGS: AtomicU64 = AtomicU64::new(0);
+static CDP_PUMP_BYTES: AtomicU64 = AtomicU64::new(0);
+static CDP_PUMP_LAST: AtomicU64 = AtomicU64::new(0);
+static CDP_PUMP_WORST: AtomicU64 = AtomicU64::new(0);
+static CDP_PUMP_HEAD: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
 
 /// Append to the captured program output, BOUNDED: beyond ~6 MiB the oldest
 /// half is dropped. A desktop chrome session logs stderr for hours; keeping all
@@ -1478,7 +1489,11 @@ pub fn cdp_install(url: &str) {
     CDP_WAIT_MARK.store(0, Ordering::Relaxed);
     CAST_FRAMES.store(0, Ordering::Relaxed);
     LOAD_FIRED_AT.store(0, Ordering::Relaxed);
-    CDP_RX.lock().clear();
+    {
+        let mut rx = CDP_RX.lock();
+        rx.0.clear();
+        rx.1 = 0;
+    }
     CDP_SESSION.lock().clear();
     CDP_DOM.lock().clear();
     *CDP_URL.lock() = String::from(url);
@@ -1549,13 +1564,74 @@ fn cdp_next_msg() -> Option<String> {
         let mut pipes = pipes_lock();
         if !pipes[id].is_empty() {
             let drained: alloc::vec::Vec<u8> = pipes[id].drain(..).collect();
-            CDP_RX.lock().extend_from_slice(&drained);
+            CDP_RX.lock().0.extend_from_slice(&drained);
         }
     }
     let mut rx = CDP_RX.lock();
-    let pos = rx.iter().position(|&b| b == 0)?;
-    let msg: alloc::vec::Vec<u8> = rx.drain(0..=pos).collect();
-    Some(String::from_utf8_lossy(&msg[..msg.len() - 1]).into_owned())
+    let from = rx.1;
+    let pos = from + rx.0[from..].iter().position(|&b| b == 0)?;
+    let msg = String::from_utf8_lossy(&rx.0[from..pos]).into_owned();
+    rx.1 = pos + 1;
+    if rx.1 == rx.0.len() {
+        rx.0.clear();
+        rx.1 = 0;
+    } else if rx.1 >= 65536 && rx.1 * 2 >= rx.0.len() {
+        let read = rx.1;
+        rx.0.drain(..read);
+        rx.1 = 0;
+    }
+    drop(rx);
+    // The stopwatch of this pump call: the message before this one ends here.
+    let t = unsafe { core::arch::x86_64::_rdtsc() };
+    let last = CDP_PUMP_LAST.swap(t, Ordering::Relaxed);
+    if CDP_PUMP_MSGS.fetch_add(1, Ordering::Relaxed) > 0 {
+        cdp_pump_close_msg(t.wrapping_sub(last));
+    }
+    CDP_PUMP_BYTES.fetch_add(msg.len() as u64, Ordering::Relaxed);
+    CDP_PUMP_HEAD.lock().0 = msg.chars().take(90).collect();
+    Some(msg)
+}
+
+/// The message whose handling just ended took `cycles`: keep it if it is the
+/// slowest of this pump call.
+fn cdp_pump_close_msg(cycles: u64) {
+    if cycles > CDP_PUMP_WORST.load(Ordering::Relaxed) {
+        CDP_PUMP_WORST.store(cycles, Ordering::Relaxed);
+        let mut h = CDP_PUMP_HEAD.lock();
+        let cur = core::mem::take(&mut h.0);
+        h.1 = cur;
+    }
+}
+
+/// One step of the DevTools conversation, with a stopwatch: the desktop loop
+/// calls this in every pass, and a call that takes long is time in which no
+/// key, click or frame is handled (W22).
+pub fn cdp_pump() {
+    if !CDP_DRIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    CDP_PUMP_MSGS.store(0, Ordering::Relaxed);
+    CDP_PUMP_BYTES.store(0, Ordering::Relaxed);
+    CDP_PUMP_WORST.store(0, Ordering::Relaxed);
+    cdp_pump_inner();
+    let t1 = unsafe { core::arch::x86_64::_rdtsc() };
+    let n = CDP_PUMP_MSGS.load(Ordering::Relaxed);
+    if n > 0 {
+        cdp_pump_close_msg(t1.wrapping_sub(CDP_PUMP_LAST.load(Ordering::Relaxed)));
+    }
+    let ms = tsc_ms(t0, t1);
+    if ms >= 50 {
+        static SAID: AtomicU64 = AtomicU64::new(0);
+        let k = SAID.fetch_add(1, Ordering::Relaxed) + 1;
+        if k <= 40 || k % 50 == 0 {
+            let worst = tsc_ms(0, CDP_PUMP_WORST.load(Ordering::Relaxed));
+            let head = CDP_PUMP_HEAD.lock().1.clone();
+            crate::serial_println!(
+                "[cdp] #{k} one pump call took {ms} ms: {n} messages, {} bytes; the slowest took {worst} ms: {head}",
+                CDP_PUMP_BYTES.load(Ordering::Relaxed));
+        }
+    }
 }
 
 /// Value of a JSON string field, without a JSON parser: find `"key":"` and read to
@@ -1655,10 +1731,7 @@ fn cdp_begin_frame() {
 
 /// One step of the DevTools conversation. Called from the process-run loop; each
 /// call sends at most one command and consumes whatever answers have arrived.
-pub fn cdp_pump() {
-    if !CDP_DRIVE.load(Ordering::Relaxed) {
-        return;
-    }
+fn cdp_pump_inner() {
     let now = crate::interrupts::ticks();
     let step = CDP_STEP.load(Ordering::Relaxed);
 
@@ -2242,6 +2315,11 @@ pub fn cdp_pump() {
     while let Some(msg) = cdp_next_msg() {
         let head: String = msg.chars().take(160).collect();
         crate::serial_println!("[cdp] <- {head}");
+        // The raw message lines are quiet on the console (serial.rs QUIET); the
+        // one event a harness times a page load by gets a line of its own.
+        if head.contains("\"Page.loadEventFired\"") {
+            crate::serial_println!("[cdp] page load event (Page.loadEventFired)");
+        }
         // Re-attach flow (W19): after a cross-process navigation the page session
         // bound to the previous renderer stops carrying commands to the swapped-in
         // renderer, so a `reattach` step asks for the targets again (id 70) and
@@ -10411,14 +10489,22 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // ld.so must instead read the original, unrelocated image from disk, or it
     // sees relocated phdr p_vaddrs (base + DEMAND_BASE = a slot-4 fault). Freeing
     // the child's PML4 demand slot makes every exe page re-fault fresh.
-    unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
+    // In pieces with a window for the timer (BUG-128): this task is the only
+    // one in its address space, nobody sees the arena half wiped.
+    let t_start = unsafe { core::arch::x86_64::_rdtsc() };
+    unsafe { arena_fill(arena, None, frames * 4096); }
+    let t_wipe = unsafe { core::arch::x86_64::_rdtsc() };
     {
         use x86_64::registers::control::Cr3;
         let child_pml4 = Cr3::read().0.start_address().as_u64();
-        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &shared_phys_sorted());
+        let keep = shared_phys_sorted();
+        irq_window();
+        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault.
         unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
     }
+    let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
+    irq_window();
     let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
@@ -10460,10 +10546,11 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let rsp = unsafe { setup_user_stack_glibc(stack_top, &argv, &envp, &exe_info, ldso_base) };
 
     crate::serial_println!(
-        "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x}",
+        "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x} (arena wipe {} ms, demand pages dropped {} ms, new image {} ms)",
         crate::sched::current(),
         argv_owned.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default(),
-        ld_info.entry, rsp
+        ld_info.entry, rsp, tsc_ms(t_start, t_wipe), tsc_ms(t_wipe, t_drop),
+        tsc_ms(t_drop, unsafe { core::arch::x86_64::_rdtsc() })
     );
 
     // Retarget THIS task so the syscall return sysret's to ld.so's entry with a
@@ -10483,6 +10570,41 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         USER_RSP = rsp;
     }
     0 // rax = 0; we sysret to the fresh image, not back here
+}
+
+/// A window for the timer inside a long piece of syscall work: interrupts on
+/// for one instruction, so a tick that is due is taken (and the scheduler may
+/// run other tasks, the desktop loop first), then off again, with this task's
+/// own demand state loaded again. Only where no lock is held and the work can
+/// be looked at half done by nobody: the copy of a fork, the wipe of an exec.
+fn irq_window() {
+    // SAFETY: the caller holds no lock and has no half-updated global state;
+    // the scheduler saves and restores the syscall state of a task it switches
+    // away from inside a syscall (as it does for a yield in futex or epoll).
+    unsafe { core::arch::asm!("sti", "nop", "cli", options(nomem, nostack)) };
+    ensure_globals_for_current();
+}
+
+/// Milliseconds between two TSC readings (the tick calibration: 10 ms a tick).
+fn tsc_ms(from: u64, to: u64) -> u64 {
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    to.wrapping_sub(from) * 10 / per
+}
+
+/// Copy (`src` given) or zero an arena in pieces of 2 MiB with a timer window
+/// after each: 256 MiB in one piece was 40 to 60 ms with interrupts off.
+unsafe fn arena_fill(dst: u64, src: Option<u64>, bytes: usize) {
+    const PIECE: usize = 2 << 20;
+    let mut off = 0usize;
+    while off < bytes {
+        let n = (bytes - off).min(PIECE);
+        match src {
+            Some(s) => core::ptr::copy_nonoverlapping((s as usize + off) as *const u8, (dst as usize + off) as *mut u8, n),
+            None => core::ptr::write_bytes((dst as usize + off) as *mut u8, 0, n),
+        }
+        off += n;
+        irq_window();
+    }
 }
 
 fn do_glibc_fork() -> u64 {
@@ -10510,8 +10632,12 @@ fn do_glibc_fork() -> u64 {
             return (-12i64) as u64; // -ENOMEM
         }
     };
-    // Copy the parent arena (ld.so/libc/heap/stack) into the child's frames.
-    unsafe { core::ptr::copy_nonoverlapping(arena as *const u8, child_arena as *mut u8, arena_frames * 4096); }
+    // Copy the parent arena (ld.so/libc/heap/stack) into the child's frames, in
+    // pieces with a window for the timer (BUG-128). The forking thread stands in
+    // this syscall; its own stack and what it alone writes are copied whole.
+    let t_start = unsafe { core::arch::x86_64::_rdtsc() };
+    unsafe { arena_fill(child_arena, Some(arena), arena_frames * 4096); }
+    let t_arena = unsafe { core::arch::x86_64::_rdtsc() };
     // Child page tables (PML4/PDPT/PD) from the fork pool.
     let (pml4, pdpt, pd) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
@@ -10523,10 +10649,11 @@ fn do_glibc_fork() -> u64 {
     };
     crate::paging::fill_remap_tables_multiblock(pml4, pdpt, pd, arena, child_arena, nblocks);
     // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
-    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX) {
+    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
         crate::serial_println!("[fork] clone_demand_region OOM");
         return (-12i64) as u64;
     }
+    let t_demand = unsafe { core::arch::x86_64::_rdtsc() };
     // Child task: resume at the fork-return RIP on the child's own address space,
     // with rax=0 (spawn_thread forces it) and the parent's user RSP (same VA, own
     // frames via the arena copy).
@@ -10560,8 +10687,9 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] pid {pid}: no memory for the child's descriptor table (it starts with the standard streams only)");
     }
     crate::serial_println!(
-        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB)",
-        span >> 20
+        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB; arena copy {} ms, demand pages {} ms, rest {} ms)",
+        span >> 20, tsc_ms(t_start, t_arena), tsc_ms(t_arena, t_demand),
+        tsc_ms(t_demand, unsafe { core::arch::x86_64::_rdtsc() })
     );
     pid
 }
@@ -10762,8 +10890,39 @@ pub fn fault_counters() -> (u64, u64) {
     (FAULT_COUNT.load(Ordering::Relaxed), FAULT_CYCLES.load(Ordering::Relaxed))
 }
 
+pub static FAULT_CODE: AtomicU64 = AtomicU64::new(0);
+pub static FAULT_RIP: AtomicU64 = AtomicU64::new(0);
+
 pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    // The same page of the same task, again and again: a fault that is
+    // "handled" without the access succeeding afterwards. Said at the 64th,
+    // 4096th and 262144th time in a row.
+    {
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        static RUN: AtomicU64 = AtomicU64::new(0);
+        let key = (addr & !0xFFF) | (crate::sched::current() as u64 & 0xFFF);
+        if LAST.swap(key, Ordering::Relaxed) == key {
+            let n = RUN.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 64 || n == 4096 || n == 262_144 {
+                crate::serial_println!(
+                    "[demand] the same page faults again and again: {:#x} (address {addr:#x}) {n} times in a row, write={write} present={present}, error code {:#x}, rip {:#x}, task {} {:?}",
+                    addr & !0xFFF, FAULT_CODE.load(Ordering::Relaxed), FAULT_RIP.load(Ordering::Relaxed),
+                    crate::sched::current(), thread_name(crate::sched::current()));
+                if n == 64 {
+                    let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+                    crate::paging::dump_walk(cr3, addr);
+                }
+            }
+            // A present page, not a write, and still it faults after it was
+            // mapped 64 times: mapping it a 65th time will not help. Not ours.
+            if n >= 64 && present && !write {
+                return false;
+            }
+        } else {
+            RUN.store(0, Ordering::Relaxed);
+        }
+    }
     // Per-process isolation: the fault runs against the faulting task's own
     // demand-state (ownership model, see GLOBALS_OWNER).
     ensure_globals_for_current();
@@ -14120,6 +14279,98 @@ pub fn dump_epoll_sets() {
     }
 }
 
+/// Memory calls that failed since boot, and how many of them are still logged.
+pub static MM_FAILS: AtomicU64 = AtomicU64::new(0);
+static MM_FAIL_LOG_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(400);
+
+/// One line for a failed memory call: who, which call with which sizes, and
+/// what was left where it could have come from. "V8 process OOM" in a renderer
+/// says that an allocation failed, not which one; this line does.
+fn mm_fail(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, r: u64) {
+    let n = MM_FAILS.fetch_add(1, Ordering::Relaxed) + 1;
+    if MM_FAIL_LOG_LEFT.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    MM_FAIL_LOG_LEFT.fetch_sub(1, Ordering::Relaxed);
+    let cur = crate::sched::current();
+    let call = match num {
+        9 => alloc::format!("mmap(addr {a1:#x}, len {a2:#x} = {} KiB, prot {a3:#x}, flags {a4:#x}, fd {})", a2 / 1024, a5 as u32 as i32),
+        10 => alloc::format!("mprotect(addr {a1:#x}, len {a2:#x} = {} KiB, prot {a3:#x})", a2 / 1024),
+        25 => alloc::format!("mremap(addr {a1:#x}, old {a2:#x}, new {a3:#x} = {} KiB, flags {a4:#x})", a3 / 1024),
+        28 => alloc::format!("madvise(addr {a1:#x}, len {a2:#x}, advice {a3})"),
+        _ => alloc::format!("brk({a1:#x})"),
+    };
+    let (brk, brk_end) = (BRK_CUR.load(Ordering::Relaxed), BRK_END.load(Ordering::Relaxed));
+    let (win, win_end) = (HEAP_BREAK.load(Ordering::Relaxed), HEAP_END.load(Ordering::Relaxed));
+    let (hu, hf) = crate::allocator::stats();
+    let (bu, bf, _) = crate::allocator::big_stats();
+    crate::serial_println!(
+        "[mm-fail] #{n} t{cur} {:?} process {}: {call} = {} | arena mmap window {} KiB left of {} MiB, brk {} KiB left | demand addresses {} of {} GiB handed out | demand pool {} MiB free, process pool {} MiB free | kernel heap {} MiB used {} MiB free, big blocks {bu}/{bf} MiB",
+        thread_name(cur), fork_child_owner(cur).unwrap_or(0), r as i64,
+        win_end.saturating_sub(win) / 1024, win_end.saturating_sub(ARENA_BASE.load(Ordering::Relaxed)) >> 20,
+        brk_end.saturating_sub(brk) / 1024,
+        DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(DEMAND_BASE) >> 30, DEMAND_SIZE >> 30,
+        crate::procpool::demand_free_frames() / 256, crate::procpool::free_frames() / 256,
+        hu >> 20, hf >> 20);
+}
+
+/// `ramfiles` (shell): what the files that live in memory are. One line per
+/// kind (anonymous memory files, shared-memory files, then by directory) with
+/// count and size, and the largest ones by name.
+pub fn ram_files_census() -> alloc::vec::Vec<String> {
+    let mut kinds: alloc::vec::Vec<(String, usize, usize)> = alloc::vec::Vec::new();
+    let mut big: alloc::vec::Vec<(usize, String)> = alloc::vec::Vec::new();
+    let (mut owned, mut borrowed, mut n_owned) = (0usize, 0usize, 0usize);
+    {
+        let _g = crate::sched::IfOffGuard::new();
+        let files = FILES.lock();
+        for (path, data) in files.iter() {
+            let len = data.len();
+            if matches!(data, alloc::borrow::Cow::Borrowed(_)) {
+                borrowed += len;
+                continue;
+            }
+            owned += len;
+            n_owned += 1;
+            let kind: String = if path.starts_with("/memfd:") {
+                String::from("memfd (anonymous memory files)")
+            } else if path.contains(".org.chromium.Chromium") || path.starts_with("/dev/shm/") {
+                String::from("shared memory files (/dev/shm, /tmp/.org.chromium.Chromium.*)")
+            } else {
+                let mut parts = path.split('/').filter(|p| !p.is_empty());
+                match (parts.next(), parts.next(), parts.next()) {
+                    (Some(a), Some(b), Some(_)) => alloc::format!("/{a}/{b}/"),
+                    (Some(a), Some(_), None) => alloc::format!("/{a}/"),
+                    _ => String::from("/"),
+                }
+            };
+            match kinds.iter_mut().find(|k| k.0 == kind) {
+                Some(k) => {
+                    k.1 += 1;
+                    k.2 += len;
+                }
+                None => kinds.push((kind, 1, len)),
+            }
+            if len >= 256 * 1024 {
+                big.push((len, path.clone()));
+            }
+        }
+    }
+    kinds.sort_unstable_by(|a, b| b.2.cmp(&a.2));
+    big.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    let (bu, bf, _) = crate::allocator::big_stats();
+    let mut out = alloc::vec![alloc::format!(
+        "ramfiles: {n_owned} files hold {} KiB of bytes and {} KiB of holes in kernel memory (big-block pool {bu}/{bf} MiB); {} KiB more are read-only parts of the kernel image",
+        owned / 1024, 0, borrowed / 1024)];
+    for (kind, n, bytes) in kinds.iter().take(12) {
+        out.push(alloc::format!("  {:>8} KiB in {n:>5} files: {kind}", bytes / 1024));
+    }
+    for (len, path) in big.iter().take(10) {
+        out.push(alloc::format!("  {:>8} KiB  {}", len / 1024, path.chars().take(90).collect::<String>()));
+    }
+    out
+}
+
 /// Budget of the positioned-I/O trace (`fstrace N` in the shell).
 pub static FSTRACE_LEFT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
@@ -14139,6 +14390,11 @@ pub fn dump_main_syscalls() {
 
 fn linux_dispatch_inner(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let r = linux_dispatch_inner_raw(num, a1, a2, a3, a4, a5);
+    // A memory call that fails says so itself (W21): mmap, mprotect, mremap,
+    // madvise with an errno, and a brk that did not move.
+    if (matches!(num, 9 | 10 | 25 | 28) && (-4095..0).contains(&(r as i64))) || (num == 12 && a1 != 0 && r != a1) {
+        mm_fail(num, a1, a2, a3, a4, a5, r);
+    }
     // `fstrace N` (shell): the next N positioned reads and writes, whatever the file.
     if matches!(num, 17 | 18) && FSTRACE_LEFT.load(Ordering::Relaxed) > 0 {
         FSTRACE_LEFT.fetch_sub(1, Ordering::Relaxed);

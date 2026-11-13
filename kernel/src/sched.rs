@@ -130,6 +130,14 @@ pub fn census_trylock() {
         return;
     };
     crate::serial_println!("[census] {} tasks, current={}", s.count, s.current);
+    // Where the desktop loop (task 0) was when it last lost the CPU: its saved
+    // interrupt frame has the RIP at +120 (see schedule_tick). Not when it is
+    // the task that is running now.
+    if s.current != 0 && s.count > 0 && s.tasks[0].rsp > 0x1000 {
+        let (rip, cs) = unsafe { (*((s.tasks[0].rsp + 120) as *const u64), *((s.tasks[0].rsp + 128) as *const u64)) };
+        crate::serial_println!("[census] t0 (desktop loop) was preempted at rip={rip:#018x} cs={cs:#x} vruntime={} (current t{}: {}, min {})",
+            s.tasks[0].vruntime, s.current, s.tasks[s.current].vruntime, s.min_vr);
+    }
     for i in 0..s.count {
         let t = &s.tasks[i];
         match t.state {
@@ -745,6 +753,14 @@ pub fn df_selftest() {
 }
 static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 
+/// The desktop loop (task 0) left the CPU while it still had something to poll
+/// (a yield, or preempted at work), not halted in an idle machine.
+static T0_WANTS: AtomicBool = AtomicBool::new(false);
+/// The tick in which the desktop loop was last given the CPU by the scheduler.
+static T0_TURN_TICK: AtomicU64 = AtomicU64::new(0);
+/// Turns the desktop loop got because a tick ended another task's turn.
+pub static T0_TICK_TURNS: AtomicU64 = AtomicU64::new(0);
+
 pub static TRACE_SCHED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// TSC at the previous timer interrupt, ticks the clock had to add to stay on real
@@ -921,26 +937,60 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         let rip = *((rsp + 120) as *const u64);
         rip > 0x1000 && *((rip - 1) as *const u8) == 0xf4 // the tick landed after hlt
     };
-    if s.tasks[cur].state == State::Ready && !idle_tick {
+    if cur == 0 && via_yield {
+        // The desktop loop hands the CPU on after one pass of polling: that is
+        // not a turn's worth of work. It stays at the pack (never behind it:
+        // tasks it starts inherit its vruntime).
+        if s.tasks[0].vruntime < s.min_vr { s.tasks[0].vruntime = s.min_vr; }
+    } else if s.tasks[cur].state == State::Ready && !idle_tick {
         let step = vstep(s.tasks[cur].nice);
         s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(step);
+    }
+    if cur == 0 {
+        T0_WANTS.store(!idle_tick, Ordering::Relaxed);
     }
     // 3. Mini-CFS: pick the runnable task with the SMALLEST vruntime. Start the scan at
     //    cur+1 with strict '<', so that equal-vruntime tasks rotate round-robin
     //    (behavior-preserving with equal nice). Task 0 is always Ready -> fallback.
+    //
+    //    The desktop loop (task 0) is the exception (BUG-127). It is what the
+    //    user looks at and types into, and one pass of it is short:
+    //    - a timer tick that ends ANOTHER task's turn gives the CPU to the
+    //      desktop loop first, when it has asked for more (it yielded or was
+    //      preempted; not when it halted idle). It runs one pass and hands on,
+    //      so the next task gets the rest of the tick. The desktop is then never
+    //      further away than one tick, however many tasks are ready, and a busy
+    //      desktop loop gets at most every other tick.
+    //    - within one tick it gets no second turn from a task that yields or
+    //      blocks: threads that pass a futex back and forth must not pay for a
+    //      desktop pass every time.
+    //    - when it yields, the CPU goes to someone else if anyone is ready.
     let mut best = cur;
     let mut bestv = u64::MAX;
     let mut found = false;
-    for k in 1..=s.count {
-        let i = (cur + k) % s.count;
-        if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
-            bestv = s.tasks[i].vruntime;
-            best = i;
-            found = true;
+    let t0_had_turn = T0_TURN_TICK.load(Ordering::Relaxed) == now;
+    if !via_yield && cur != 0 && s.tasks[0].state == State::Ready && T0_WANTS.load(Ordering::Relaxed) {
+        best = 0;
+        found = true;
+        T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        for k in 1..=s.count {
+            let i = (cur + k) % s.count;
+            if i == 0 && ((cur != 0 && via_yield && t0_had_turn) || (cur == 0 && via_yield)) {
+                continue;
+            }
+            if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
+                bestv = s.tasks[i].vruntime;
+                best = i;
+                found = true;
+            }
+        }
+        if found {
+            s.min_vr = bestv;
         }
     }
-    if found {
-        s.min_vr = bestv;
+    if best == 0 && cur != 0 {
+        T0_TURN_TICK.store(now, Ordering::Relaxed);
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
@@ -1661,4 +1711,72 @@ pub fn ap_enqueue_worker(cpu: usize) -> bool {
     s.tasks[slot].rsp = ap_init_stack(cpu, slot, ap_worker_c);
     s.count += 1;
     true
+}
+
+/// The desktop loop's own stopwatch (W22): how long one pass of the loop takes,
+/// by part, and how long the loop then waits for the CPU. The time between the
+/// starts of two passes is how long a key, a click or a console line can lie
+/// unread; more than 100 ms of it is said on the serial console, with where it
+/// went. Only task 0 calls `mark`.
+pub mod deskwatch {
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    const PARTS: usize = 6;
+    static MARKS: [AtomicU64; PARTS] = [const { AtomicU64::new(0) }; PARTS];
+    static READY_AT_END: AtomicU64 = AtomicU64::new(0);
+    static MAX_GAP_MS: AtomicU64 = AtomicU64::new(0);
+    static OVER: AtomicU64 = AtomicU64::new(0);
+    static OVER_TOTAL: AtomicU64 = AtomicU64::new(0);
+    static MAX_GAP_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+    pub const LIMIT_MS: u64 = 100;
+
+    fn now() -> u64 {
+        unsafe { core::arch::x86_64::_rdtsc() }
+    }
+
+    fn ms(from: u64, to: u64) -> u64 {
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        to.saturating_sub(from) * 10 / per
+    }
+
+    /// Part `i` of the pass begins. 0 is the start of a pass: the previous pass
+    /// and the wait after it are judged here. PARTS-1 is the end of the pass.
+    pub fn mark(i: usize) {
+        let t = now();
+        if i == 0 {
+            let m: [u64; PARTS] = core::array::from_fn(|k| MARKS[k].load(Ordering::Relaxed));
+            if m[0] != 0 && m[PARTS - 1] >= m[0] {
+                let gap = ms(m[0], t);
+                MAX_GAP_MS.fetch_max(gap, Ordering::Relaxed);
+                MAX_GAP_TOTAL_MS.fetch_max(gap, Ordering::Relaxed);
+                if gap > LIMIT_MS {
+                    OVER.fetch_add(1, Ordering::Relaxed);
+                    let n = OVER_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n <= 60 || n % 50 == 0 {
+                        crate::serial_println!(
+                            "[desk] #{n} the desktop loop was away {gap} ms: its pass took {} ms (network and DevTools {}, devices and windows {}, menus {}, keys and drawing {}, hosted window and console {}), then {} ms without the CPU ({} other tasks were ready)",
+                            ms(m[0], m[PARTS - 1]), ms(m[0], m[1]), ms(m[1], m[2]), ms(m[2], m[3]), ms(m[3], m[4]),
+                            ms(m[4], m[PARTS - 1]), ms(m[PARTS - 1], t), READY_AT_END.load(Ordering::Relaxed));
+                    }
+                }
+            }
+        }
+        if i < PARTS {
+            MARKS[i].store(t, Ordering::Relaxed);
+        }
+        if i == PARTS - 1 {
+            let ready = match super::SCHED.try_lock() {
+                Some(s) => (1..s.count).filter(|&k| s.tasks[k].state == super::State::Ready).count() as u64,
+                None => 0,
+            };
+            READY_AT_END.store(ready, Ordering::Relaxed);
+        }
+    }
+
+    /// (longest gap in ms, gaps over the limit) since the last call, and the
+    /// same two over the whole run.
+    pub fn take() -> (u64, u64, u64, u64) {
+        (MAX_GAP_MS.swap(0, Ordering::Relaxed), OVER.swap(0, Ordering::Relaxed),
+         MAX_GAP_TOTAL_MS.load(Ordering::Relaxed), OVER_TOTAL.load(Ordering::Relaxed))
+    }
 }
