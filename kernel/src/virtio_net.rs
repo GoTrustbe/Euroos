@@ -28,6 +28,10 @@ use crate::virtio_pci::{feat, Queue, Transport, DESC_WRITE};
 // before the ring is recycled. Never more than the queue has descriptors.
 const RX_BUFS: usize = 128;
 const BUF_SIZE: usize = 2048;
+/// Transmit buffers, one per descriptor (BUG-130): never more than the queue has.
+const TX_BUFS: usize = 32;
+/// Frames dropped because the device kept every transmit buffer too long.
+static TX_DROPPED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub struct VirtioNet {
     tp: Transport,
@@ -36,7 +40,11 @@ pub struct VirtioNet {
     tx: Queue,
     rx_bufs: [u64; RX_BUFS],
     nrx: usize,
-    tx_buf: u64,
+    /// One buffer per transmit descriptor; `tx_sent` frames handed to the device
+    /// so far (wrapping, compared with the used index).
+    tx_bufs: [u64; TX_BUFS],
+    ntx: usize,
+    tx_sent: u16,
     hdr_len: usize,
 }
 
@@ -101,7 +109,12 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         compiler_fence(Ordering::SeqCst);
         rx.avail_idx_ptr().write_volatile(nrx as u16);
     }
-    let Ok(tx_buf) = falloc.allocate() else { return false };
+    let ntx = TX_BUFS.min(tx.size as usize);
+    let mut tx_bufs = [0u64; TX_BUFS];
+    for b in tx_bufs.iter_mut().take(ntx) {
+        let Ok(f) = falloc.allocate() else { return false };
+        *b = f;
+    }
 
     // MSI-X on the RECEIVE queue, before DRIVER_OK so the first frames are covered.
     let msix_n = tp.enable_msix(0, crate::interrupts::VIRTIO_NET_MSIX_VECTOR, crate::apic::lapic_id() as u8);
@@ -125,7 +138,7 @@ pub fn init(falloc: &mut FrameAllocator) -> bool {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], nrx, hdr_len, acc
     );
     unsafe {
-        NIC = Some(VirtioNet { tp, mac, rx, tx, rx_bufs, nrx, tx_buf, hdr_len });
+        NIC = Some(VirtioNet { tp, mac, rx, tx, rx_bufs, nrx, tx_bufs, ntx, tx_sent: 0, hdr_len });
     }
     true
 }
@@ -149,24 +162,34 @@ pub fn send(frame: &[u8]) -> bool {
         if hl + frame.len() > BUF_SIZE {
             return false;
         }
-        // Zero header: no checksum offload, no GSO (num_buffers is RX-only).
-        core::ptr::write_bytes(nic.tx_buf as *mut u8, 0, hl);
-        core::ptr::copy_nonoverlapping(frame.as_ptr(), (nic.tx_buf + hl as u64) as *mut u8, frame.len());
-        let d = nic.tx.desc(0);
-        (*d).addr = nic.tx_buf;
-        (*d).len = (hl + frame.len()) as u32;
-        (*d).flags = 0;
-        (*d).next = 0;
-        nic.tx.push_avail(0);
-        nic.tp.notify(&nic.tx);
-        // Wait (briefly) until the device has processed the descriptor.
-        for _ in 0..1_000_000 {
-            if nic.tx.used_idx() != nic.tx.last_used {
-                nic.tx.last_used = nic.tx.used_idx();
-                return true;
+        // A free descriptor: fewer than `ntx` frames still with the device. The
+        // device returns them in order for a plain single-descriptor chain
+        // (virtio-net), so frame number n uses descriptor n % ntx, free again
+        // once the used index has passed n. Wait for room rather than write
+        // over a frame the device has not copied yet (BUG-130).
+        let mut spins = 0u32;
+        while nic.tx_sent.wrapping_sub(nic.tx.used_idx()) as usize >= nic.ntx {
+            spins += 1;
+            if spins > 20_000_000 {
+                TX_DROPPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                return false;
             }
             core::hint::spin_loop();
         }
+        let k = (nic.tx_sent as usize) % nic.ntx;
+        let buf = nic.tx_bufs[k];
+        // Zero header: no checksum offload, no GSO (num_buffers is RX-only).
+        core::ptr::write_bytes(buf as *mut u8, 0, hl);
+        core::ptr::copy_nonoverlapping(frame.as_ptr(), (buf + hl as u64) as *mut u8, frame.len());
+        let d = nic.tx.desc(k as u16);
+        (*d).addr = buf;
+        (*d).len = (hl + frame.len()) as u32;
+        (*d).flags = 0;
+        (*d).next = 0;
+        nic.tx.push_avail(k as u16);
+        nic.tx_sent = nic.tx_sent.wrapping_add(1);
+        nic.tp.notify(&nic.tx);
+        nic.tx.last_used = nic.tx.used_idx();
         true
     }
 }
