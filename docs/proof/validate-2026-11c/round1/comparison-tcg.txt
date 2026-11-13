@@ -1,0 +1,150 @@
+== user-smp4-iommu (against linux-rand-2026-11/tcg-user-smp4-iommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-user-smp4-iommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== user-smp4-iommu (against integ-2026-11b/tcg-user-smp4-iommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-user-smp4-iommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== user-smp4-noiommu (against linux-rand-2026-11/tcg-user-smp4-noiommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-user-smp4-noiommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== user-smp4-noiommu (against integ-2026-11b/tcg-user-smp4-noiommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-user-smp4-noiommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== kernel-smp4 (against linux-rand-2026-11/tcg-kernel-smp4.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-kernel-smp4.markers  vs  /opt/euroos/validate-runs/proof/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== kernel-smp4 (against integ-2026-11b/tcg-kernel-smp4.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-kernel-smp4.markers  vs  /opt/euroos/validate-runs/proof/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== storage-smp4-iommu-1g (against linux-rand-2026-11/tcg-storage-smp4-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-storage-smp4-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== storage-smp4-iommu-1g (against integ-2026-11b/tcg-storage-smp4-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-storage-smp4-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== combined-smp4-iommu-1g (against linux-rand-2026-11/tcg-combined-smp4-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-combined-smp4-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== combined-smp4-iommu-1g (against integ-2026-11b/tcg-combined-smp4-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-combined-smp4-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== user-smp1-iommu (against linux-rand-2026-11/tcg-user-smp1-iommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-user-smp1-iommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== user-smp1-iommu (against integ-2026-11b/tcg-user-smp1-iommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-user-smp1-iommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== user-smp1-noiommu (against linux-rand-2026-11/tcg-user-smp1-noiommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-user-smp1-noiommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== user-smp1-noiommu (against integ-2026-11b/tcg-user-smp1-noiommu.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-user-smp1-noiommu.markers  vs  /opt/euroos/validate-runs/proof/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== kernel-smp1 (against linux-rand-2026-11/tcg-kernel-smp1.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-kernel-smp1.markers  vs  /opt/euroos/validate-runs/proof/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== kernel-smp1 (against integ-2026-11b/tcg-kernel-smp1.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-kernel-smp1.markers  vs  /opt/euroos/validate-runs/proof/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== storage-smp1-iommu-1g (against linux-rand-2026-11/tcg-storage-smp1-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-storage-smp1-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== storage-smp1-iommu-1g (against integ-2026-11b/tcg-storage-smp1-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-storage-smp1-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1
+== combined-smp1-iommu-1g (against linux-rand-2026-11/tcg-combined-smp1-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/linux-rand-2026-11/tcg-combined-smp1-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   rename: OKx1
+== combined-smp1-iommu-1g (against integ-2026-11b/tcg-combined-smp1-iommu-1g.markers)
+== /opt/euroos/wt-chrome/docs/proof/integ-2026-11b/tcg-combined-smp1-iommu-1g.markers  vs  /opt/euroos/validate-runs/proof/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   linux-rand: OKx1
+   rename: OKx1

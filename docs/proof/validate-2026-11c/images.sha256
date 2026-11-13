@@ -1,0 +1,17 @@
+# round 1: 7be30cb
+7cdaf5b1ebcdc8c5f6386e3d859a6acf92f0c8d82d296e8d020eff817da27c4e  st.img
+450544f667d56c0c849e5de71c3169f9605dac673e12924d7db9e23b990c05b8  pub.img
+# last code commit: f98da76
+45f39ff5d1577aa3918039f0297b13e857e482eadfe378f20ae310deda54b108  st.img
+38883670b3f1fc41a0780a71c96c2245854c01afb6943e684227d26dbf6156d0  pub.img
+# base for the before-and-after runs: public image of c6f033f plus the test commit (the probe in /bin)
+ca590cc2fff70ade7ecb96b2b899cebeab7d7aee2e4cf7f9da8bdacc5f656b23  pubbase.img
+# as they arrived on the R630
+7cdaf5b1ebcdc8c5f6386e3d859a6acf92f0c8d82d296e8d020eff817da27c4e  st.img
+450544f667d56c0c849e5de71c3169f9605dac673e12924d7db9e23b990c05b8  pub.img
+45f39ff5d1577aa3918039f0297b13e857e482eadfe378f20ae310deda54b108  stf.img
+38883670b3f1fc41a0780a71c96c2245854c01afb6943e684227d26dbf6156d0  pubf.img
+ca590cc2fff70ade7ecb96b2b899cebeab7d7aee2e4cf7f9da8bdacc5f656b23  pubbase.img
+fa9d766e8a27059a9c10a5d8dd7435d5e127dc51965090922ab4d26efb6e9019  stlive-base.img
+a55040d6002691461c3d7c2997945e925498bb8fd09f6a07c26184f59554ac90  stlive.img
+775f8f343a88366e40c11acc194fc939c114e5a15153383d2df9a4e9734bb2bb  stlive3.img

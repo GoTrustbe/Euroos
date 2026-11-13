@@ -1740,6 +1740,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      the destination is tombstoned like `unlink` does. A tombstoned file that no descriptor in any fd
   space holds and that has no shared mapping gives its bytes back at once (`eurofdspace::Tab::any`).
 - **Proof:**    three runs of the scenario without a FATAL; `proof/chrome-2026-11/README.md`.
+- **Regression tests:** `[rename]` (every self-test image: `userland/renprobe.c` as a freestanding program and
+  against glibc with demand paging; on `c6f033f` 20 and 24 of its checks fail, from the first rename on);
+  `scripts/rename-persist.py` (an installed system, across a restart and a power cut). The fix freed the bytes of
+  a file that was still mapped: BUG-110. `proof/validate-2026-11c/README.md`.
 
 ### BUG-092 — a hosted X client got no keys, no button release, no wheel, no AltGr ✅ FIXED
 - **Status:**   FIXED (`637a5e9`) · **Severity:** HIGH for the hosted browser
@@ -1784,6 +1788,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      the main window with the other mapped windows drawn on it at their X position; pointer events
   to the popup under the pointer, held by the window of the press; `QueryPointer` in the events' coordinates.
 - **Open:**     a popup is clipped to the browser window.
+- **Regression:** the frame then also showed the windows of X clients that were gone: BUG-113, fixed.
 
 ### BUG-098 — one fd space for the browser and all its children: "Too many open files" on the third site ⬜ OPEN
 - **Status:**   OPEN · **Severity:** HIGH for a browsing session (the site matrix does not pass in one session)
@@ -1809,6 +1814,96 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      a paint of the hosted client is its own branch of the loop. Load of the reference site to the
   final picture: 2.67 s before, 1.35 s and 1.31 s after. The key-to-screen number itself is not re-measured
   (the harness step did not register on the new image).
+
+### BUG-110 — a file that was still mapped lost its bytes when it was unlinked or replaced ✅ FIXED
+- **Status:**   FIXED (`7be30cb`) · **Severity:** HIGH (silent zeros in a mapping: a library, a font or icon cache, any
+  file of 1 MiB or more that a program maps and then closes) · a regression of BUG-091's fix, never in a merged tree
+- **Found:**    2026-11-12 · the `[rename]` self-test (`de92f08`), step D, glibc run with demand paging; validation of
+  `feature/chrome-workplace-2`.
+- **Actual:**   a file of 1 MiB is mapped (private), its descriptor closed, one page read. Then a new file is renamed
+  over it, and another such file is unlinked. Every page of the two mappings first read after that was zeros
+  (byte 4097).
+- **Analysis:** BUG-091's fix (`c57f9bd`) frees the bytes of a file that lost its name when "nobody" can reach it: a
+  descriptor in any fd space, or a shared mapping of the process that is running. A mapping that is filled page by
+  page (`DEMAND_FILE_MAPS`) reads the file at every first touch and was not counted; nor were the mapping lists of the
+  other processes, which are parked in `CHILD_MEM`. Before `c57f9bd` an unlinked file kept its bytes for good, so the
+  unlink half is new with that commit (the rename half read a neighbour's bytes before it: BUG-091).
+- **Fix:**      `file_referenced` also looks at the lazily filled mappings and at the lists in `CHILD_MEM`.
+- **Proof:**    `[rename]` FAILED (2 checks) on `de92f08`, OK on `7be30cb` and `f98da76` in every boot of the round
+  (`proof/validate-2026-11c/README.md`, sections 2 and 3).
+- **Open:**     such a file keeps its bytes until reboot (as a file unlinked while open does): nothing frees them when
+  the last mapping goes.
+
+### BUG-111 — a rename or an unlink by a Linux-ABI program does not reach the file system on disk ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH for a Linux program that saves a document from the Terminal (the save is gone
+  after a restart, and `cat` in the shell shows the old text in the same session) · not new: the same on `c6f033f`
+- **Found:**    2026-11-12 · `scripts/rename-persist.py` on an installed system (R630, KVM), validation of
+  `feature/chrome-workplace-2`.
+- **Actual:**   `renprobe save DIR 1` creates `a.txt`, `b.txt`, `c.txt`; the Terminal prints `[fs] … -> EuroFS synced`
+  for each. `renprobe save DIR 2` renames a new file over `a.txt`, replaces `b.txt` by unlink + rename and unlinks
+  `c.txt`: the program reads back version 2 and exits 0, no `[fs]` line is printed, and the shell's `cat` still shows
+  version 1 of all three, before and after a restart. After the restart a Linux program does not see the three files
+  at all (`renprobe check` opens none of them), although `ls` and `cat` in the shell do.
+- **Analysis:** the Linux ABI works on a file table in RAM (`ring3::FILES`). After a foreground program the Terminal
+  writes back the paths that were opened for writing and still exist under that name (`ring3::take_dirty`). A file
+  that got its name by `rename` was opened under another name; an `unlink` is not passed on at all. And a file
+  written in an earlier boot is on disk but not in the table of the next boot.
+- **Not affected:** `mv`, `rm`, `cp`, `write` in the shell and the desktop's own apps: they call EuroFS directly;
+  those renames survive a restart and a power cut, and `scrub` is clean (same proof, same script).
+- **Next:**     `vfs_rename` carries the dirty mark to the new name; the write-back also removes what the program
+  unlinked; a program's `open` falls through to EuroFS for a path the table does not know.
+
+### BUG-112 — the GTK demo (feature `live-demos`) stops after its first frame, and often does not load ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (the demo is in no image that is built by default; there is no GTK test in the
+  boot suite) · not new: the same on `c6f033f`
+- **Found:**    2026-11-12 · `gtk-live.py` and `gtk-diag.sh`, self-test image built with `--features live-demos`, R630,
+  KVM; validation of `feature/chrome-workplace-2`.
+- **Actual:**   (1) when the app loads, its window shows the title, `tick 0`, the entry and the button, and stays
+  like that: no `GGTK: live tick` line (its one-second timer never fires), and the keys and the click of the demo
+  test are delivered to its X connection and never read (`160 B of input queued unread` on the base, 704 bytes
+  queued on the branch). (2) In many starts the loader fails on one library or another
+  (`liblz4.so.1: failed to map segment from shared object`, `libcap.so.2: cannot read file data: Operation not
+  permitted`), or the window never appears.
+- **Analysis:** not done. For (2): the demo is started "alongside the desktop" while the boot still runs the self-tests
+  that come after the glibc suite, and those launch other processes; the failures differ from start to start.
+- **Proof:**    `proof/validate-2026-11c/gtk-demo.txt`, `screenshots/gtk-demo-*.png`.
+
+### BUG-113 — a hosted X app came up with the windows of X clients that were gone ✅ FIXED
+- **Status:**   FIXED (`f98da76`) · **Severity:** HIGH for a hosted X app that is not the first X client of the boot
+  (wrong picture, keys lost) · a regression of BUG-097's fix, never in a merged tree
+- **Found:**    2026-11-12 · `app run hello-x11` on the desktop of the self-test image, validation of
+  `feature/chrome-workplace-2`.
+- **Actual:**   the frame "Hello (window)" showed the Pango demo and the Cairo scene of the boot self-tests over the
+  app's own window; the key the app waits for went to window `0xa00001` of a self-test client. On `c6f033f` the
+  frame shows the app's window alone.
+- **Analysis:** a client that ends without closing its socket stays in the connection table with its windows mapped
+  (all six X clients of the boot self-tests; an app closed with the close button of its frame). `compose_windowed`
+  (BUG-097) draws every mapped window of every connection, and a key goes to the focus window or else to the window
+  presented last.
+- **Fix:**      `xserver::forget_clients()`: the desktop empties the connection table and what points into it right
+  before it starts a hosted app (the browser, `app run` of an x11 app, the GTK demo). At most one hosted app runs.
+- **Proof:**    `proof/validate-2026-11c/README.md`, section 3; `x11-app-*.txt`, `screenshots/x11-app-*.png`.
+- **Open:**     the connections are still not closed when their process ends; they are dropped at the next start.
+
+### BUG-114 — a hosted app that ended by itself leaves its frame, and the next start is refused ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-12 · `hello-x11` on the desktop, validation of `feature/chrome-workplace-2` (`f98da76`).
+- **Actual:**   the app gets its key, destroys its window and ends. The frame stays with the last picture, and
+  `app run hello-x11` answers "a hosted app is already running (close its window first)" until the frame is closed
+  with its close button. Also: the first start of a boot is resized to its frame (800x600), a later start keeps its
+  own 480x240 and is centred.
+- **Analysis:** not done. Whether the base does the same was not determined (there is no X trace on the base to tell
+  whether the key arrived).
+
+### BUG-115 — with virtio input the first-run tour sometimes ignores Esc ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (the tour then closes on the next click or key) · not new: the same on `c6f033f`
+- **Found:**    2026-11-13 · `gui-smoke.py --input virtio`, monkey soak of the public image (R630, KVM), validation of
+  `feature/chrome-workplace-2`: "first-run tour: shown on the first desktop, Esc closes it: no [tour] closed line".
+- **Actual:**   `[tour] first-run tour shown`, then `[vinput] Key { code: 1, pressed: true }` and its release: the Esc
+  reaches the kernel, the tour stays; the next click closes it ("closed by a click … outside the card"). Smoke pass
+  only, virtio input, five times each: the base failed 2 of 5, `f98da76` 0 of 5; `f98da76` failed it once in the
+  virtio monkey soak (`proof/validate-2026-11c/tour-virtio.txt`). Not seen with USB input.
+- **Next:**     where the desktop loop takes the Esc of a virtio keyboard while the tour is up.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

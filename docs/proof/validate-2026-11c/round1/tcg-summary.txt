@@ -1,0 +1,10 @@
+user-smp4-iommu: desktop=yes fault-lines=0 kernel-to-desktop=77563 ms seeded=1 | [lk] boot-total longest-held unix.listeners: acq=39 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max
+user-smp4-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=71351 ms seeded=1 | [lk] boot-total longest-held net.NET_LEGACY (rx ring): acq=594 contended=0 (0.00%) spins=0 max-wait=0 try-fail
+kernel-smp4: desktop=yes fault-lines=0 kernel-to-desktop=68752 ms seeded=1 | [lk] boot-total longest-held unix.listeners: acq=39 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max
+storage-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=273098 ms seeded=1 | [lk] boot-total longest-held unix.conn (per-connection): acq=110293 contended=0 (0.00%) spins=0 max-wait=0 try
+combined-smp4-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=328505 ms seeded=1 | [lk] boot-total longest-held ipc.channel (per-port): acq=294262 contended=0 (0.00%) spins=0 max-wait=0 try-fai
+user-smp1-iommu: desktop=yes fault-lines=0 kernel-to-desktop=76004 ms seeded=1 | [lk] boot-total longest-held net.PORTQ (TCP port queues): acq=1608 contended=0 (0.00%) spins=0 max-wait=0 try-
+user-smp1-noiommu: desktop=yes fault-lines=0 kernel-to-desktop=70883 ms seeded=1 | [lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=1563 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hol
+kernel-smp1: desktop=yes fault-lines=0 kernel-to-desktop=68556 ms seeded=1 | [lk] boot-total longest-held net.NET_LEGACY (rx ring): acq=2025854 contended=0 (0.00%) spins=0 max-wait=0 try-
+storage-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=264075 ms seeded=1 | [lk] boot-total longest-held ring3.CHILD_EXITS: acq=2043 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hol
+combined-smp1-iommu-1g: desktop=yes fault-lines=0 kernel-to-desktop=322002 ms seeded=1 | [lk] boot-total longest-held net.UDPQ: acq=553 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1171

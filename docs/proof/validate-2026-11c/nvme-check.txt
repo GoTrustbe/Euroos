@@ -1,0 +1,35 @@
+== public image of 7be30cb
+# public image, KVM -cpu host, SATA boot medium + a 64 MiB NVMe disk of /dev/urandom, 120 s
+before=c140f5db546048c95f8f69b44af8ae59f7ef01164fc8e6b1c4d1c25a20b8ec18
+after =c140f5db546048c95f8f69b44af8ae59f7ef01164fc8e6b1c4d1c25a20b8ec18
+NVME-UNTOUCHED
+[bootopt] no euroos-boot.conf (defaults): net.driver=user, storage.nvme=kernel
+[nvme] controller OK — model 'QEMU NVMe Ctrl', 131072 LBAs × 512 B = 64 MiB
+[iommu] domain nvme: 1 PCI function(s), 21 DMA page(s) registered
+[nvme] disk carries data: read-only self-test (sector 0 via PRP): OK ✓
+[nvme] SMART: temperature 323 K (50 °C), 0% used
+[euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme
+[entropy] CSPRNG seeded: 541 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (413 bits) · 0.650
+[iommu] no ACPI DMAR — NO hardware IOMMU. Device DMA is UNRESTRICTED: a malicious/buggy NVMe/USB/NIC can DMA over any physical memory, bypassing capabilities. (GitHub #11)
+[pci]   00:03.0  1b36:0010  Mass Storage (NVMe)
+[g2] NVMe disk carries unknown content: left untouched (no /nvme)
+[desktop] interactive loop started — input + shell live
+serial lines: 324
+
+== public image of f98da76
+# public image, KVM -cpu host, SATA boot medium + a 64 MiB NVMe disk of /dev/urandom, 120 s
+before=03754942923b84fd05841768a6a38bda74d0b7219e2ca5d75bf7729ff2b81619
+after =03754942923b84fd05841768a6a38bda74d0b7219e2ca5d75bf7729ff2b81619
+NVME-UNTOUCHED
+[bootopt] no euroos-boot.conf (defaults): net.driver=user, storage.nvme=kernel
+[nvme] controller OK — model 'QEMU NVMe Ctrl', 131072 LBAs × 512 B = 64 MiB
+[iommu] domain nvme: 1 PCI function(s), 21 DMA page(s) registered
+[nvme] disk carries data: read-only self-test (sector 0 via PRP): OK ✓
+[nvme] SMART: temperature 323 K (50 °C), 0% used
+[euro] NVMe disk is not EuroFS and not blank — booting a RAM root; it stays intact + mountable at /nvme
+[entropy] CSPRNG seeded: 526 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (398 bits) · 1.423
+[iommu] no ACPI DMAR — NO hardware IOMMU. Device DMA is UNRESTRICTED: a malicious/buggy NVMe/USB/NIC can DMA over any physical memory, bypassing capabilities. (GitHub #11)
+[pci]   00:03.0  1b36:0010  Mass Storage (NVMe)
+[g2] NVMe disk carries unknown content: left untouched (no /nvme)
+[desktop] interactive loop started — input + shell live
+serial lines: 324

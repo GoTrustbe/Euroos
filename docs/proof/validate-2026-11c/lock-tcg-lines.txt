@@ -1,0 +1,12 @@
+# [lk] boot-total order line of every matrix boot
+combined-smp1-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+combined-smp4-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp1: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+kernel-smp4: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp1-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+storage-smp4-iommu-1g: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-iommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp1-noiommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-iommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+user-smp4-noiommu: [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+# problems noted by the matrix (no desktop, NMI sent): 0

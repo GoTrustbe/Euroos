@@ -1,0 +1,21 @@
+# 7be30cb (before BUG-113): app run hello-x11, cdiag, a key, a click
+--- serial lines of the app, the X server's input and the Terminal:
+[e2e] $ app run hello-x11
+[e2e] Hello (window): launched in a window (task 34; caps 'console,file,proc', profile utility)
+[xin] state: modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x0 shown=0x1000001 E0-pending=false
+[xin] connection 0: 480 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(400001, 0, 0, 12c, dc, true)]
+[xin] connection 1: 480 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(600001, 0, 0, 1cc, a0, true)]
+[xin] connection 2: 480 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(800001, 0, 0, 190, 118, true)]
+[xin] connection 3: 480 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(a00001, 50, 50, 208, c8, true)]
+[xin] connection 4: 448 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(c00002, 0, 0, 1b8, 104, false)]
+[xin] connection 5: 448 B queued, 0 windows, larger than 1x1 (id, x, y, w, h, mapped): []
+[xin] connection 6: 0 B queued, 1 windows, larger than 1x1 (id, x, y, w, h, mapped): [(1000001, 3c, 3c, 320, 258, true)]
+[xserver] key sc=0x2d ext=false -> keycode 53 press state=0x0
+[xserver] -> input kind=2 detail=53 window=0xa00001 at(1019,90) queued=512 B
+[xserver] key sc=0xad ext=false -> keycode 53 release state=0x0
+[xserver] -> input kind=3 detail=53 window=0xa00001 at(1019,90) queued=544 B
+[xserver] -> input kind=6 detail=0 window=0x1000001 at(349,465) queued=32 B
+[xserver] -> input kind=6 detail=0 window=0x1000001 at(349,465) queued=32 B
+[xserver] -> input kind=4 detail=1 window=0x1000001 at(349,465) queued=64 B
+[xserver] DestroyWindow id=0x1000001
+[xserver] -> input kind=5 detail=1 window=0x800001 at(149,305) queued=512 B

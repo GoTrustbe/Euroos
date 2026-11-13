@@ -1,0 +1,74 @@
+== user-smp4-iommu
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== user-smp4-noiommu
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== kernel-smp4
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== storage-smp4-iommu-1g
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+== combined-smp4-iommu-1g
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+== user-smp1-iommu
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== user-smp1-noiommu
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== kernel-smp1
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=-1
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+== storage-smp1-iommu-1g
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+== combined-smp1-iommu-1g
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓

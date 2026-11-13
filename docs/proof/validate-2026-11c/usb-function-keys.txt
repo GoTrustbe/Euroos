@@ -1,0 +1,26 @@
+# Public image of f98da76, USB keyboard over QMP: Caps Lock and F3, F5, F6, F11, F12 between commands typed in the Terminal (xhci.rs gives them scancodes now).
+wait 'interactive loop started': True
+key esc
+typed 'echo one\\n'
+key caps_lock
+key f3
+key f5
+key f6
+key f11
+key f12
+key caps_lock
+typed 'echo two\\n'
+key caps_lock
+typed 'echo three\\n'
+key caps_lock
+typed 'echo four\\n'
+shot keys.png
+   | [e2e] $ echo one
+   | [e2e] one
+   | [e2e] $ echo two
+   | [e2e] two
+   | [e2e] $ echo three
+   | [e2e] three
+   | [e2e] $ echo four
+   | [e2e] four
+serial lines: 375; fault lines: 0

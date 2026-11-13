@@ -1,0 +1,30 @@
+# The lines of the X11, Cairo, Pango and other glibc self-tests in one boot of the self-test image (KVM, 2 GiB), c6f033f plus the test commit against 7be30cb.
+# Addresses, milliseconds and counters replaced by N. diff base new:
+128a129
+> [xserver] key sc=0xN ext=false -> keycode 38 press state=0xN
+129a131
+> [xserver] key sc=0xN ext=false -> keycode 56 press state=0xN
+130a133
+> [xserver] key sc=0xN ext=false -> keycode 54 press state=0xN
+132d134
+< [xserver] 128 B of input queued unread on connection 0 — who should be reading it?
+135,136c137
+< [xserver] -> input kind=6 detail=0 window=0xN at(150,100) queued=64 B
+< [xserver] client read 64 B (0 left queued) conn=0
+---
+> [xserver] client read 32 B (0 left queued) conn=0
+148d148
+< [chrome] chrome_crashpad_handler (REAL chrome binary): exit=0, lib-pages demand-loaded=114
+# lines compared: 282 and 282
+# the X clients of the suite, 7be30cb:
+[glibc] gxwin (X11 connect+render+PutImage+events+real-kbd): exit=1
+[glibc]   GXWIN: window mapped, filled, PutImage done; waiting for events...
+[glibc]   GXWIN: connect=1 render+putimage=1 expose=1 keys=3 button=0 -> PARTIAL
+[glibc] gcairo (Cairo 2D -> XPutImage): exit=0
+[glibc] gcairotext (Cairo+FreeType text): exit=0
+[glibc]   GXLIVE: live X app running (key=colour, click=move)
+[glibc]   GXLIVE: keys=0 clicks=0
+[glibc] gpango (Pango+HarfBuzz layout): exit=0
+[glibc] gsdl (SDL2): exit=0
+[glibc]   GSDL: SDL_Init ok
+[glibc]   GSDL: window created

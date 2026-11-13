@@ -1,0 +1,58 @@
+# The GTK demo (ggtk), self-test image built with --features live-demos, R630 KVM, 4 GiB, smp 2 (gtk-live.py, gtk-loop.sh, gtk-diag.sh).
+== c6f033f, first run (gtk-live.py, 240 s of screenshots)
+app started: True
+shot<=000 [glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===
+shot<=000 [glibc] ggtk live on task 33
+shot<=019 [linux-abi] GGTK: gtk_init ok
+shot<=021 [linux-abi] GGTK: window shown (counter + entry + button)
+shot<=022 [app]   GGTK: gtk_init ok
+shot<=022 [app]   GGTK: window shown (counter + entry + button)
+screenshots: 617
+== c6f033f, more runs (gtk-diag.sh)
+run 1: first library mapping at 0x1245e0000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 2: first library mapping at 0x124470000; gtk_init 1, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 3: first library mapping at 0x1244a0000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 4: first library mapping at 0x124420000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+done
+run 1: first library mapping at 0x124590000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 2: first library mapping at 0x124d6c000; gtk_init 1, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+   input queued unread lines per run: 4 4 4 4 4 4 2 
+== 7be30cb (before BUG-113), gtk-live.py
+app started: True
+shot<=000 [glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===
+shot<=000 [glibc] ggtk live on task 33
+shot<=018 [linux-abi] ggtk[linux-abi] : [linux-abi] error while loading shared libraries[linux-abi] : [linux-abi] liblz4.so.1[linux-abi] : [linux-abi] failed to map segment from shared object[linux-ab
+shot<=021 [app]   ggtk: error while loading shared libraries: liblz4.so.1: failed to map segment from shared object
+screenshots: 627
+== 7be30cb, gtk-loop.sh (runs that ended at the loader error are counted by their error line)
+run 1: first library mapping at 0x1244a0000; 0 init, 2 load failures, 0 demo-test lines, 0 input lines of the app
+run 2: first library mapping at 0x1245c0000; 2 init, 0 load failures, 0 demo-test lines, 0 input lines of the app
+run 1: first library mapping at 0x124430000; 0 init, 0 load failures, 0 demo-test lines, 0 input lines of the app
+== 7be30cb, gtk-diag.sh
+run 1: first library mapping at 0x124e3c000; gtk_init 0, window shown 0, load error: libbrotlidec.so.1: failed to map segment from shared object, live ticks 0, gtk-test lines 0, app input lines 0
+run 2: first library mapping at 0x124450000; gtk_init 0, window shown 0, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 3: first library mapping at 0x124410000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 4: first library mapping at 0x1245b0000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 5: first library mapping at 0x124410000; gtk_init 0, window shown 0, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 6: first library mapping at 0x1245f0000; gtk_init 0, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+done
+== f98da76 (the working tree that became it), gtk-diag.sh
+run 1: first library mapping at 0x1245f0000; gtk_init 1, window shown 1, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 2: first library mapping at 0x1244f0000; gtk_init 0, window shown 0, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+run 3: first library mapping at 0x124580000; gtk_init 0, window shown 0, load error: libXdmcp.so.6: failed to map segment from shared object, live ticks 0, gtk-test lines 0, app input lines 0
+run 4: first library mapping at 0x124d23000; gtk_init 0, window shown 0, load error: , live ticks 0, gtk-test lines 3, app input lines 0
+== f98da76, the run of the screenshot: lines of the app, the demo test and the X server's input state
+[xserver] a hosted app starts: 6 connection(s) of clients that are gone were forgotten
+[linux-abi] GGTK: gtk_init ok
+[linux-abi] GGTK: window shown (counter + entry + button)
+[app]   GGTK: gtk_init ok
+[app]   GGTK: window shown (counter + entry + button)
+[set-guard] EuroGuard rules across a restart: change-noticed=true, saved=true, forgotten-after-reset=true, loaded(2 domain change(s), 2 app rule(s)): blocked-domain-back=true, unblocked-system-domain-stays-unblocked=true, app-block-back=tru
+[gtk-test] focused + typed 'hi'
+[gtk-test] deliver_button to Reset @local(240,272) of 480x290
+[xin] -> kind=6 detail=0 conn=0 win=0x400002 local(240,272) root(240,272) queued=640 B
+[xin] -> kind=4 detail=1 conn=0 win=0x400002 local(240,272) root(240,272) queued=672 B
+[xin] -> kind=5 detail=1 conn=0 win=0x400002 local(240,272) root(240,272) queued=704 B
+[xin] state: modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x1 focus=0x0 shown=0x400002 E0-pending=false
+[xin] connection 0: 704 B queued, 3 windows, larger than 1x1 (id, x, y, w, h, mapped): [(400001, a, a, a, a, false), (400002, 0, 0, 1e0, 122, true)]
+[gtk-test] closed GTK window; free RAM 1226 -> 1226 MiB

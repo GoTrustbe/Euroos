@@ -2036,6 +2036,39 @@ pub fn x_app_active() -> bool { X_APP_ACTIVE.load(core::sync::atomic::Ordering::
 /// and draws it as a framed desktop window. Set by the desktop when it hosts an X app.
 pub static X_WINDOWED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Ordering::Relaxed); }
+
+/// A hosted app is about to start: it gets an EMPTY server. A client that ended
+/// without closing its socket (every X client of the boot self-tests; an app that
+/// was closed with the close button of its frame) stays in the table with its
+/// windows mapped. Since BUG-097 the frame shows every mapped window of every
+/// connection, so the next app came up with the pictures of the dead clients
+/// drawn over its own, and its keys went to the window of a dead client that was
+/// presented last (BUG-113). One hosted app runs at a time and none runs when
+/// the desktop calls this, so whatever is still connected is gone. It also
+/// gives the slots back: there are MAX_XCONN of them.
+pub fn forget_clients() {
+    let gone = {
+        let mut t = lock_home();
+        let n = t.iter().flatten().count();
+        for c in t.iter_mut() {
+            *c = None;
+        }
+        n
+    };
+    PRESENTED.lock().clear();
+    SELECTIONS.lock().clear();
+    SEL_OWNERS.lock().clear();
+    XFIXES_SELECT.lock().clear();
+    READER_CONNS.lock().clear();
+    FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
+    RETAINED_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+    IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+    LAST_ROOT.store(0, core::sync::atomic::Ordering::Relaxed);
+    *RETAINED_WINDOW.lock() = None;
+    if gone > 0 {
+        crate::serial_println!("[xserver] a hosted app starts: {gone} connection(s) of clients that are gone were forgotten");
+    }
+}
 pub fn x_windowed() -> bool { X_WINDOWED.load(core::sync::atomic::Ordering::Relaxed) }
 
 /// The RETAINED pixel buffer of a hosted X client's window: (w, h, pixels 0x00RRGGBB).

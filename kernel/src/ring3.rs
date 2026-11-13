@@ -8970,6 +8970,8 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/pieprog" => include_bytes!("../../userland/pieprog.elf.sig"),
         "/bin/muslreal" => include_bytes!("../../userland/muslreal.elf.sig"),
         "/bin/randprobe" => include_bytes!("../../userland/randprobe.elf.sig"),
+        "/bin/renprobe" => include_bytes!("../../userland/renprobe.elf.sig"),
+        "/bin/grenprobe" => include_bytes!("../../userland/glibc/grenprobe.sig"),
         "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
