@@ -13459,11 +13459,11 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
-        // 270 forks copy the arena 270 times: the small one for that mode.
+        // The small arena for every mode: 270 forks copy it 270 times, and on a
+        // 1 GiB machine the process pool (160 MiB) holds one child of 96 MiB and
+        // none of 192 (the forks these tests need were refused there).
         let prev_arena = GLIBC_ARENA_MIB.load(Ordering::Relaxed);
-        if mode == "forkmany" {
-            GLIBC_ARENA_MIB.store(prev_arena.min(96), Ordering::Relaxed);
-        }
+        GLIBC_ARENA_MIB.store(prev_arena.min(96), Ordering::Relaxed);
         let free0 = falloc.free_frames();
         let pp0 = crate::procpool::free_frames();
         let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", mode.as_bytes()], &[b"PATH=/bin"], caps);
