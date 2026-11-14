@@ -842,6 +842,7 @@ fn main() -> Status {
     // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
     {
         let usable_frames = (allocator.usable_bytes() / 4096) as usize;
+        procpool::RAM_TOTAL_KB.store(allocator.usable_bytes() / 1024, core::sync::atomic::Ordering::Relaxed);
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.

@@ -3486,11 +3486,12 @@ pagecache_kb {}
             .into_bytes()
         }
         b"/proc/meminfo" => {
-            // MemTotal: the QEMU RAM (256 MiB). MemFree/Available: live kernel-heap-free.
-            let free_kb = free as u64 / 1024;
+            // The same figures as sysinfo (MachineMem). MemAvailable: what is
+            // free plus the page cache, which gives itself back (BUG-153).
+            let m = machine_mem();
             alloc::format!(
-                "MemTotal:       262144 kB\nMemFree:        {free_kb:>8} kB\n\
-                 MemAvailable:   {free_kb:>8} kB\nBuffers:             0 kB\nCached:              0 kB\n"
+                "MemTotal:       {:>8} kB\nMemFree:        {:>8} kB\nMemAvailable:   {:>8} kB\nBuffers:               0 kB\nCached:         {:>8} kB\nSwapCached:            0 kB\nShmem:          {:>8} kB\nSwapTotal:      {:>8} kB\nSwapFree:       {:>8} kB\n",
+                m.total_kb, m.free_kb, m.free_kb + m.cache_kb, m.cache_kb, m.shared_kb, m.swap_total_kb, m.swap_free_kb
             )
             .into_bytes()
         }
@@ -15589,6 +15590,35 @@ pub fn mem_totals() -> MemTotals {
     t
 }
 
+/// The memory of the machine as programs see it (sysinfo, /proc/meminfo), kB.
+pub struct MachineMem {
+    pub total_kb: u64,
+    pub free_kb: u64,
+    pub shared_kb: u64,
+    pub cache_kb: u64,
+    pub swap_total_kb: u64,
+    pub swap_free_kb: u64,
+}
+
+/// Total: the RAM of the machine. Free: what the demand pool and the process
+/// pool have free (the memory a program can still get). Shared: the frames of
+/// the memory files (memfd, shared memory). Cache: the page cache of the
+/// packs. Swap: the swap partition, when there is one.
+pub fn machine_mem() -> MachineMem {
+    let t = mem_totals();
+    let (used, cap) = crate::swapmgr::usage();
+    let total_kb = crate::procpool::RAM_TOTAL_KB.load(Ordering::Relaxed);
+    let free_kb = ((t.pool_free + t.procpool_free) as u64 * 4).min(total_kb);
+    MachineMem {
+        total_kb,
+        free_kb,
+        shared_kb: t.shm_frames as u64 * 4,
+        cache_kb: t.pcache as u64 * 4,
+        swap_total_kb: cap as u64 * 4,
+        swap_free_kb: cap.saturating_sub(used) as u64 * 4,
+    }
+}
+
 /// The demand state of the process whose main task is `owner` (0: the launched
 /// process), as interval sets: (file mappings, shared windows, PROT_NONE,
 /// addresses handed out and not given back).
@@ -18983,18 +19013,28 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             ret
         }
         99 => {
-            // sysinfo(*info): fill uptime + ram so tools like `uptime`/`free` work.
+            // sysinfo(*info): the uptime and the memory of the machine
+            // (MachineMem): programs size their caches from it. It used to
+            // say 256 MiB, and wrote it into loads[2] (offset 24) instead of
+            // totalram (offset 32).
             if a1 != 0 {
                 let up = crate::interrupts::ticks() / 100;
                 if !in_user_arena(a1, 112) {
                     return EFAULT;
                 }
-                unsafe {
-                    core::ptr::write_bytes(a1 as *mut u8, 0, 112);
-                    (a1 as *mut i64).write(up as i64); // uptime (seconds)
-                    ((a1 + 24) as *mut u64).write(256 * 1024 * 1024); // totalram
-                    ((a1 + 32) as *mut u64).write(128 * 1024 * 1024); // freeram
-                    ((a1 + 104) as *mut u32).write(1); // mem_unit
+                let m = machine_mem();
+                let mut b = [0u8; 112];
+                b[0..8].copy_from_slice(&(up as i64).to_le_bytes()); // uptime (seconds)
+                b[32..40].copy_from_slice(&(m.total_kb * 1024).to_le_bytes()); // totalram
+                b[40..48].copy_from_slice(&(m.free_kb * 1024).to_le_bytes()); // freeram
+                b[48..56].copy_from_slice(&(m.shared_kb * 1024).to_le_bytes()); // sharedram
+                b[56..64].copy_from_slice(&(m.cache_kb * 1024).to_le_bytes()); // bufferram
+                b[64..72].copy_from_slice(&(m.swap_total_kb * 1024).to_le_bytes()); // totalswap
+                b[72..80].copy_from_slice(&(m.swap_free_kb * 1024).to_le_bytes()); // freeswap
+                b[80..82].copy_from_slice(&(crate::sched::live_tasks().min(65535) as u16).to_le_bytes()); // procs
+                b[104..108].copy_from_slice(&1u32.to_le_bytes()); // mem_unit
+                if !copy_to_user(a1, &b) {
+                    return EFAULT;
                 }
             }
             0
