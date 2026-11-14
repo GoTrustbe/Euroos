@@ -31,6 +31,14 @@ static BSP: AtomicUsize = AtomicUsize::new(0);
 /// Record the BSP's core index (its Local APIC id & 7).
 pub fn set_bsp(cpu: usize) {
     BSP.store(cpu & 7, Ordering::Release);
+    BSP_APIC.store(crate::apic::lapic_id() as usize, Ordering::Release);
+}
+
+/// The BSP's Local APIC id (recorded by `set_bsp`, which runs on the BSP): the
+/// target of the reschedule IPI.
+static BSP_APIC: AtomicUsize = AtomicUsize::new(0);
+pub fn bsp_apic_id() -> u8 {
+    BSP_APIC.load(Ordering::Relaxed) as u8
 }
 
 /// Declare `[lo, hi)` a kernel stack that only core `cpu` runs on.

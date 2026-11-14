@@ -33,6 +33,10 @@ pub static TICKS: AtomicU64 = AtomicU64::new(0);
 /// Separate vector for the per-CPU AP timer (apart from the BSP scheduler stub on 0x20).
 const AP_TIMER_VECTOR: u8 = 0x41;
 // Cross-CPU IPI vectors (Run 2).
+/// Reschedule IPI (S2 of docs/design/SMP-SCHEDULER.md): a wake that should
+/// preempt the running task sends it to the BSP; it is taken at the first
+/// instruction with IF=1, so a system call in progress ends first.
+pub const IPI_RESCHED_VECTOR: u8 = 0x42;
 pub const IPI_PING_VECTOR: u8 = 0x43; // generic ping / wakeup
 pub const IPI_HALT_VECTOR: u8 = 0x44; // stop a core (cli; hlt)
 pub const IPI_TLB_VECTOR: u8 = 0x45; // TLB shootdown (reload CR3)
@@ -55,7 +59,7 @@ pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 pub const YIELD_VECTOR: u8 = 0x4A;
 /// No fixed vector lies inside the userspace-driver pool.
 const _: () = {
-    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
+    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_RESCHED_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
     let mut i = 0;
     while i < fixed.len() {
         assert!(!(fixed[i] >= UDRV_VECTOR_BASE && (fixed[i] as usize) < UDRV_VECTOR_BASE as usize + UDRV_VECTORS), "a fixed vector lies in the udrv pool");
@@ -141,6 +145,12 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     // SAFETY: ap_stub_addr() is a valid interrupt handler in our (shared) CS.
     unsafe {
         idt[AP_TIMER_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::ap_stub_addr()));
+    }
+    // S2: the reschedule IPI enters the same context switch as a yield
+    // (`resched_switch`, with an EOI). Set by raw address like the yield stub.
+    // SAFETY: resched_stub_addr() is a valid interrupt handler in our CS.
+    unsafe {
+        idt[IPI_RESCHED_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::resched_stub_addr()));
     }
     // Cross-CPU IPI handlers (Run 2).
     idt[IPI_PING_VECTOR].set_handler_fn(ipi_ping_handler);

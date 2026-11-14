@@ -338,24 +338,16 @@ pub fn block_on(chan: u64) {
     s.tasks[cur].state = State::Blocked(chan);
 }
 
-// -- Wake hand-off (W23, task 4: key to screen) --
+// -- Wake preemption (S2 of docs/design/SMP-SCHEDULER.md) --
 //
-// A thread that wakes another (futex wake, a write the other waits for)
-// used to keep the CPU until its tick ended or it blocked: up to 10 ms per
-// hand-off, and a key passes a dozen threads of the browser on its way to the
-// screen, all on the one CPU that runs ring 3. With WAKE_YIELD the waking
-// system call ends with a yield, and the scheduler picks the task with the
-// least vruntime as at any switch (the woken one, if it waited long enough
-// to deserve it). The shell command wakeyield on|off switches it at run time;
-// keylat shows how long woken tasks waited for the CPU.
-//
-// OFF by default: measured in one browser session (docs/proof/chrome-w23),
-// woken tasks then got the CPU within 0.1 ms instead of 1-10 ms, but the key
-// to screen of the harness went from 483 to 1102 ms (median): every waking
-// thread gave its turn away and waited a round of thirty for the next one.
-// What stays on is DESK_KICK: after the hosted window drew, the next yield
-// of any task goes to the desktop loop, which puts the drawing on the screen.
-pub static WAKE_YIELD: AtomicBool = AtomicBool::new(false);
+// A wake used to wait for the end of the waker's tick (up to 10 ms), or, with
+// the W23 hand-off `wakeyield`, the waker yielded inside its system call and
+// waited a round of thirty ready threads for its next turn (harness median
+// 483 -> 1102 ms; removed). Now a wake whose task is at least 1 ms of vruntime
+// behind the running one sends IPI_RESCHED to the BSP: from a system call the
+// IPI fires at `sysret`, the waker keeps its place in vruntime order and is
+// only preempted, and the woken task runs at once. DESK_KICK stays: after the
+// hosted window drew, the next switch goes to the desktop loop.
 static RESCHED: AtomicBool = AtomicBool::new(false);
 /// The desktop loop has something to put on the screen (the hosted window
 /// drew): the next switch goes to it even if it had its turn this tick.
@@ -366,10 +358,36 @@ static WOKEN_AT: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASK
 pub static WAKE_HIST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 pub const WAKE_HIST_MS: [&str; 8] = ["<0.1", "<1", "<5", "<10", "<20", "<50", "<100", ">=100"];
 
+/// A woken task preempts the running one when its vruntime is at least this far
+/// below the running task's (weighted ns): 1 ms.
+const WAKE_PREEMPT: u64 = 1_000_000;
+
 fn woken(s: &Scheduler, idx: usize) {
-    WOKEN_AT[idx].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
-    if WAKE_YIELD.load(Ordering::Relaxed) && idx != s.current && s.current != 0 {
+    let now = rdtsc();
+    WOKEN_AT[idx].store(now, Ordering::Relaxed);
+    let cur = s.current;
+    if idx == cur || cur >= s.count {
+        return;
+    }
+    // The running task's vruntime including its turn so far. The desktop loop in
+    // its idle halt always gives way.
+    let want = if cur == 0 && T0_IDLE.load(Ordering::Relaxed) {
+        true
+    } else {
+        let live = s.tasks[cur].vruntime
+            .wrapping_add(vr_charge(now.saturating_sub(EXEC_START.load(Ordering::Relaxed)), s.tasks[cur].nice));
+        s.tasks[idx].vruntime.saturating_add(WAKE_PREEMPT) < live
+    };
+    if want {
         RESCHED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// After a wake (the scheduler lock dropped): send the reschedule IPI if the
+/// wake asked for preemption. From a system call it fires at `sysret`.
+fn kick_after_wake() {
+    if RESCHED.swap(false, Ordering::Relaxed) {
+        resched_ipi();
     }
 }
 
@@ -393,7 +411,9 @@ fn ran(idx: usize) {
     WAKE_HIST[b].fetch_add(1, Ordering::Relaxed);
 }
 
-/// Did the running system call wake someone it should hand the CPU to?
+/// Did the running system call wake someone it should hand the CPU to? The
+/// dispatch epilogue then sends the reschedule IPI (the wake functions already
+/// did when they could; this is the backstop).
 pub fn take_resched() -> bool {
     RESCHED.swap(false, Ordering::Relaxed)
 }
@@ -401,31 +421,34 @@ pub fn take_resched() -> bool {
 /// The hosted window drew: the desktop loop is next (see DESK_KICK).
 pub fn want_desktop() {
     DESK_KICK.store(true, Ordering::Relaxed);
-    if WAKE_YIELD.load(Ordering::Relaxed) {
-        RESCHED.store(true, Ordering::Relaxed);
-    }
 }
 
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
 pub fn unblock(idx: usize) {
+    {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) {
         s.tasks[idx].state = State::Ready;
         place_woken(&mut s, idx);
         woken(&s, idx);
     }
+    }
+    kick_after_wake();
 }
 
 /// Wake task `idx` from EITHER Blocked or Sleeping -> Ready. A timed futex waiter is
 /// parked as Sleeping(deadline) so it auto-wakes on timeout; an explicit FUTEX_WAKE
 /// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.
 pub fn unblock_any(idx: usize) {
+    {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
         place_woken(&mut s, idx);
         woken(&s, idx);
     }
+    }
+    kick_after_wake();
 }
 
 /// [`unblock_any`] for interrupt context: never waits for the scheduler lock.
@@ -436,7 +459,10 @@ pub fn try_unblock_any(idx: usize) -> bool {
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
         place_woken(&mut s, idx);
+        woken(&s, idx);
     }
+    drop(s);
+    kick_after_wake();
     true
 }
 
@@ -503,9 +529,11 @@ pub fn wake(chan: u64, n: usize) -> usize {
             s.tasks[i].state = State::Ready;
             place_woken(&mut s, i);
             woken += 1;
-            WOKEN_AT[i].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
+            self::woken(&s, i);
         }
     }
+    drop(s);
+    kick_after_wake();
     woken
 }
 
@@ -837,9 +865,52 @@ global_asm!(
     "iretq",
 );
 
+// S2: the reschedule IPI (IPI_RESCHED_VECTOR). Identical to `yield_switch`; its
+// Rust callee sends the EOI (a hardware interrupt) and switches like a tick that
+// does not count time: the woken task with the least vruntime runs now instead
+// of at the next tick.
+global_asm!(
+    ".global resched_switch",
+    "resched_switch:",
+    "cld",
+    "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "mov rdi, rsp",
+    "and rsp, -16",
+    "call resched_tick",
+    "mov rsp, rax",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "iretq",
+);
+
 extern "C" {
     fn timer_switch();
     fn yield_switch();
+    fn resched_switch();
+}
+
+/// Address of the reschedule-IPI stub (IPI_RESCHED_VECTOR in the IDT).
+pub fn resched_stub_addr() -> u64 {
+    resched_switch as usize as u64
+}
+
+/// Reschedule IPIs taken.
+pub static RESCHED_IPIS: AtomicU64 = AtomicU64::new(0);
+
+#[no_mangle]
+pub extern "sysv64" fn resched_tick(rsp: u64) -> u64 {
+    note_df(rsp);
+    crate::apic::eoi();
+    RESCHED_IPIS.fetch_add(1, Ordering::Relaxed);
+    schedule_core(rsp, false, false)
+}
+
+/// Ask the BSP to reschedule: a fixed IPI on IPI_RESCHED_VECTOR. From a system
+/// call (IF=0) it stays pending until `sysret`: the waker finishes its call and
+/// is preempted on its first user instruction (no yield inside the call).
+pub fn resched_ipi() {
+    crate::apic::send_ipi(crate::percpu::bsp_apic_id(), crate::interrupts::IPI_RESCHED_VECTOR);
 }
 
 pub fn stub_addr() -> u64 {
@@ -1229,7 +1300,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // the lock holder, the very task we just preempted, can never run to release it
     // (total silence, no fault). So TRY the lock and, if it's held, skip this preemption
     // tick: the holder frees it within microseconds and the next tick schedules normally.
-    schedule_core(rsp, false)
+    schedule_core(rsp, false, true)
 }
 
 /// Cooperative YIELD: a task that just blocked/slept itself calls this to switch
@@ -1240,7 +1311,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
 #[no_mangle]
 pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
     note_df(rsp);
-    schedule_core(rsp, true)
+    schedule_core(rsp, true, false)
 }
 
 extern "C" {
@@ -1278,7 +1349,7 @@ pub fn in_kernel_image(a: u64) -> bool {
 /// The shared scheduling core: save the outgoing rsp, pick the next runnable task
 /// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
 /// yield. Does NO EOI — the caller owns interrupt acknowledgement.
-fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
+fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     let mut s = match SCHED.try_lock() {
         Some(g) => g,
         None => {
@@ -1375,11 +1446,11 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
             T0_YIELDED.store(true, Ordering::Relaxed);
         }
     }
-    if !via_yield {
+    if tick {
         // A new tick: the desktop loop may have a pass again.
         T0_YIELDED.store(false, Ordering::Relaxed);
     }
-    if !via_yield {
+    if tick {
         deskwatch::tick_sample(cur, rsp, s.tasks[0].state);
     }
     // 3. Mini-CFS: pick the runnable task with the SMALLEST vruntime. Start the scan at
@@ -1418,13 +1489,13 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     }
     // The hosted window drew (want_desktop): at the next yield of any task the
     // desktop loop puts it on the screen, not after the next tick.
-    if via_yield && cur != 0 && s.tasks[0].state == State::Ready && DESK_KICK.swap(false, Ordering::Relaxed) {
+    if !tick && cur != 0 && s.tasks[0].state == State::Ready && DESK_KICK.swap(false, Ordering::Relaxed) {
         best = 0;
         found = true;
     }
     if best == 0 && cur != 0 {
         T0_TURN_TICK.store(now, Ordering::Relaxed);
-        if !via_yield {
+        if tick {
             T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
         }
     }

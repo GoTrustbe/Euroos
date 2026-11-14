@@ -15234,10 +15234,10 @@ fn linux_dispatch_timed(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
     // mid-arm stays consistent and the next entrant fixes ownership itself.
     ensure_globals_for_current();
     let r = linux_dispatch_swapped(num, a1, a2, a3, a4, a5);
-    // Wake hand-off (sched::WAKE_YIELD): this call woke a task, or the hosted
-    // window drew; give the CPU away now instead of at the end of the tick.
-    if crate::sched::take_resched() && syscall_yield_ok() {
-        yield_reacquire();
+    // S2: this call woke a task that should preempt the caller: the reschedule
+    // IPI stays pending while IF=0 and fires at sysret (no yield inside the call).
+    if crate::sched::take_resched() {
+        crate::sched::resched_ipi();
     }
     r
 }

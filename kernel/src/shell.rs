@@ -676,18 +676,6 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "hogs" => crate::schedstat::hogs_cmd(ctx.mem, arg1),
         "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
         "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
-        // "wakeyield on|off": the wake hand-off of the scheduler (W23).
-        "wakeyield" => {
-            match arg1 {
-                "on" => crate::sched::WAKE_YIELD.store(true, core::sync::atomic::Ordering::Relaxed),
-                "off" => crate::sched::WAKE_YIELD.store(false, core::sync::atomic::Ordering::Relaxed),
-                _ => {}
-            }
-            let l = format!("[wakeyield] wake hand-off {}",
-                if crate::sched::WAKE_YIELD.load(core::sync::atomic::Ordering::Relaxed) { "on" } else { "off" });
-            crate::serial_println!("{l}");
-            vec![l]
-        }
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.
             let all = crate::klog::snapshot();
