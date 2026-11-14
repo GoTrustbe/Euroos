@@ -1,6 +1,7 @@
 # Memory that comes back: frames for memory files, page-cache eviction, out of memory
 
-Status: implemented on `feature/chrome-mem` (BUG-150 to BUG-155). Measurements and
+Status: implemented on `feature/chrome-mem` (BUG-150 to BUG-155); section 7 on
+`feature/chrome-mem2` (BUG-156). Measurements and
 proof: `docs/proof/chrome-mem/README.md`. Code: `crates/euromm` (`ramfile`,
 `pagecache`, `oom`, host-tested against models) and `kernel/src/ring3.rs`,
 `kernel/src/paging.rs`.
@@ -12,7 +13,7 @@ A glibc process tree (the browser and its children) runs on three stores:
 | Store | Sized | Holds |
 |---|---|---|
 | demand pool | at launch: the RAM that is left, minus a margin | every 4 KiB page that is committed on a fault: anonymous memory, private copies of file pages, page tables of the demand region, the page cache of the packs, the frames of memory files |
-| process pool | at boot: up to half of the RAM | one identity arena per process (128 MiB for the browser), fork page tables |
+| process pool | at boot: up to half of the RAM | the identity arena of the launched process (128 MiB for the browser, one piece); per fork child its page tables and the arena pages it uses, as single frames (section 7) |
 | kernel heap | at boot: a quarter of the RAM, 64 to 512 MiB | kernel objects; the bytes of RAM files that have a name |
 
 The census (`memstat`, `[mem]`/`[memstat]` every 30 s and after `ramfiles`) names
@@ -121,11 +122,46 @@ finds none, its process is ended (`[oom] ... inside a system call`), where the
 kernel used to stop with `[idt] PAGE FAULT`. Every list the reclaim path needs is
 allocated with `try_reserve`; when that fails, nothing is evicted.
 
+## 7. The arena of a fork child (BUG-156, `feature/chrome-mem2`)
+
+The launched process keeps its arena in one piece, identity mapped with 2 MiB
+pages: the kernel reaches it by address, and it is one process. A fork child
+runs at the same addresses on memory of its own. That memory used to be a
+second piece of the same size (128 MiB), copied whole at every fork and zeroed
+whole at every execve, whatever the child used of it.
+
+Now a child has page tables over the arena addresses (one per 2 MiB, the PD
+entry carries `LAZY_PT`) and a frame of the process pool for a page that holds
+something (the PTE carries `OWNED`):
+
+| Event | What happens to the arena |
+|---|---|
+| `fork` | every page of the parent that is not all zeros is copied into a frame of the child (the parent is the launched process, or a lazy child); 8 MiB of the pool are left alone, else `ENOMEM` and everything goes back |
+| first touch of a page nobody wrote | page fault, a zeroed frame, from ring 3 or from a system call that copies into its caller (`paging::lazy_arena_fault`; it takes the process-pool lock and no other) |
+| `execve` | every frame goes back to the pool; the new image gets frames for what it touches |
+| end of the process, by whatever path | `free_fork_tables` frees the frames with the tables |
+| the pool has no frame for a touch | ring 3: the process is ended (`[oom] no frame in the process pool for an arena page`), 1 MiB before the pool is empty; the kernel may use that last 1 MiB |
+
+Why copy at fork and not copy-on-write: sharing would need the 2 MiB mapping
+of the launched process split into write-protected pages and write faults
+from ring 0 (system calls that copy into their caller) served as well. Not
+done in this round.
+Copying what is not zero keeps the semantics of the copy that was there and
+removes the cost that mattered: the browser has 23 MiB of 128 that are not
+zero when it forks, and after its execve a child holds 17 MiB.
+
+Measured (KVM, 4 GiB): an idle fork child of the 96 MiB test arena costs
+4.6 MiB of the process pool instead of 96; 40 at the same time instead of 16.
+
 ## 6. Not in this design
 
 - One pool instead of two: the process pool keeps up to half of the RAM for
   arenas whatever the browser needs (section 1). Measured in the proof README.
-- Copy-on-write fork: a fork still copies every committed private page.
+- Copy-on-write fork: a fork still copies every committed private page of the
+  demand region, and every arena page that is not all zeros (section 7).
+- Reclaim for the process pool: its pages have no backing store and the pool
+  is not counted in the census of the demand pool; a child's arena frames are
+  what the census prints as `arena=`.
 - Named RAM files in frames; a page cache for writable disk files (the writeback
   half of section 4 has no caller yet).
 - `sysinfo` and `/proc/meminfo` still report a fixed 256 MiB machine to programs.

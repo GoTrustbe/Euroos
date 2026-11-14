@@ -2322,27 +2322,67 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   is ended (wait status SIGKILL) and the main process gets its memory; a child that touches twice the pool is ended
   and the parent lives. The path "inside a system call" has no self-test (see the README, not done).
 
-### BUG-156 — idle utility processes of the browser never end; each keeps a 128 MiB arena ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for a long session (after 27 processes, 13 on 4 GiB, no renderer can be forked)
-- **Actual:**   in the two-hour sessions of `proof/chrome-mem/` the process count only grows: 6, 16, 19, 21, 24, 26,
-  27 (16 GiB, one census every ~12 min). The last census lists 17 `video_capture.CrUtility` (one per round of the
-  video steps), 2 `unzip.CrUtility`, `data_decoder`, `on_device_model`, each with 1 MiB of anonymous memory and a
-  128 MiB arena in the process pool. Then `[fork] arena alloc FAILED (128 MiB, pool has 137 MiB)` 64-116 times per
-  session and the site steps fail. The demand pool is not involved (10 GiB free); nobody is ended.
-- **Expected:** a utility process ends when the browser drops its connection (on Linux within seconds).
-- **Not known:** whether the child never sees the end of its Mojo channel (an end of the socket still open in a
-  process that was forked later would do that) or the browser never closes it.
-- **Also:**     the split of the RAM in a process pool (up to half) and a demand pool is what makes this bite at
-  10 GiB free; `design/MEMORY-RECLAIM.md` §6.
+### BUG-156 — every browser process kept a 128 MiB arena; the 13th did not fit 4 GiB, the 28th not 8 or 16 ✅ FIXED
+- **Status:**   FIXED (`8157a3d`; test `3966637`) · **Severity:** HIGH for a long session
+- **Actual:**   in the two-hour sessions of `proof/chrome-mem/` the process count only grew (6 ... 27 at 16 GiB), each
+  process with a 128 MiB arena in one piece from the process pool, then `[fork] arena alloc FAILED (128 MiB, pool has
+  137 MiB)` 64-116 times per session and the site steps failed; at 4 GiB the PDF step failed from round 1 (a 13th
+  process). The demand pool was not involved (10 GiB free).
+- **Cause:**    `do_glibc_fork` gave the child an arena as large as that of the launched process, contiguous, copied
+  whole (40-80 ms), and execve zeroed it whole (54 ms). The browser has 23 MiB of its 128 that are not zero when it
+  forks; a child holds 17 MiB after its execve.
+- **Fix:**      the arena of a fork child is page tables over the same addresses and a frame of its own per page that
+  holds something (`docs/design/MEMORY-RECLAIM.md` section 7): fork copies the pages that are not all zeros, a page
+  nobody wrote gets a zeroed frame at its first touch (ring 3 or a system call that copies into its caller), execve
+  gives every frame back, the end of the process frees them with its tables. The launched process keeps its arena in
+  one piece.
+- **Test:**     `[memt] forkidle` (`gmemt forkidle`): 40 idle children at the same time. Before (KVM): 4 GiB 16 of 40
+  made, 98 320 kB of process pool per idle child; 1 GiB 1 of 20. After: 40 of 40 and 4 616 kB; 20 of 20. Each child
+  checks the memory of its parent, zeros where nobody wrote, a `read()` by the kernel into a page it never touched;
+  a child that forks; the pool afterwards. `proof/chrome-mem2/memt-before-after.txt`.
+- **Sessions:** two hours each at 4, 8 and 16 GiB on `f08c678` (`proof/chrome-mem2/`): the six sites and the local VP9+Opus clip
+  per round, 11 rounds, 179 of 179 steps ok in each (the PDF 11 of 11 at 4 GiB, sound in 11 of 11 clips), 0 refused
+  forks, 0 kills, 9-12 processes throughout (130 forks: 49 ended by `exit`, 72 by the browser's SIGTERM at 4 GiB),
+  process pool never below 1 451 of 1 668 MiB free at 4 GiB.
+- **The idle utility processes** ("never end" in the first reading): measured with `fdpeers` (per child, who holds
+  the other end of each of its stream sockets) after every round. No end of a child's socket was held by two
+  processes in any census (no inherited end that would keep end-of-file away), and the process count stays level:
+  see the sessions line. The utility processes that stay are `network`, `storage` and `on_device_model`, whose other
+  ends the browser itself holds; the others end by `exit(0)` or by the browser's SIGTERM. The `video_capture`
+  utilities of the earlier sessions were started by the YouTube step, which these sessions do not have (bot check
+  from the datacentre, not bypassed): not seen again, not explained further.
+- **Not done:** the split of the RAM in a process pool (up to half) and a demand pool is unchanged; with children at
+  17 MiB the process pool is mostly unused now (`design/MEMORY-RECLAIM.md` section 6).
 
-### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH (once in 12 browser sessions on the image of `f9a8870`)
+### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ NOT REPRODUCED (the probe that hung is fixed)
+- **Status:**   NOT REPRODUCED in 20 sessions of the s4 kind on `28d5d33` (`proof/chrome-mem2/s4-repeats.txt`: 0 hangs) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
 - **Actual:**   run s4 of `proof/chrome-mem/` (4 GiB, site matrix, after the fourth site): "the desktop loop did not
-  answer the serial console within 40 s". NMI probe: `sched::schedule_core+0x27c`, IF=0, CR2 0x11c030d9000; 153 live
-  tasks, 572 MiB of the demand pool and 387 MiB of the process pool free; no `[oom]`, no refused fork before it.
-- **Not known:** the cause. The reuse of the task slots of ended fork children (BUG-151) is new in what the scheduler
-  sees and is not ruled out; BUG-136 is an older wedge on the scheduler lock.
-- **Next:**     the probe with every task's state (it printed an empty "ready tasks" list); repeat s4.
+  answer the serial console within 40 s". NMI probe: `sched::schedule_core+0x27c`, IF=0, CR2 0x11c030d9000.
+- **Read again (`proof/chrome-mem2/`):** the serial log of s4 shows a guest that RUNS up to the probe: the console answers
+  `cs-probe-746`, `cs-probe-747`, then the harness (`diag_stuck`, after a navigation that did not happen) sends its
+  diagnostic NMI, the probe prints six lines and nothing comes after. The hang began with the probe, on a guest that
+  had answered a second before; `schedule_core` is where the NMI happened to land (the scan of the task table, the
+  code bytes show the loop), not a place where the scheduler stood. The probe went on, from an NMI, with: the name of
+  the running task cloned into a `String` (the kernel heap: per-CPU caches that are only safe against interrupts,
+  and a lock), then a census that needs the scheduler lock, which `schedule_core` held. Which of the two it stood in
+  is not proven: the image is gone and the old probe passed 450 probes on running guests (3 sessions x 150).
+- **Also:**     the image of s4 had no `alloc_slot`/RECLAIMABLE fix (a task slot could be handed out twice); that
+  is fixed on `feature/chrome-integ` (merge `3990f17`) and is the other candidate.
+- **Fix:**      (`f2baa29`, `28d5d33`) the probe allocates nothing and waits for no lock: `sched::census_nolock` reads
+  the task table through a pointer taken at init and prints the tasks that could run (current, Ready, sleepers that
+  are due: state, pid, cr3, vruntime, syscall and tick counts, last syscall, the rip/cs/IF it resumes with) and the
+  others as `tN:B/S/Z`. The direct serial output stays on until the last probe has ended.
+- **Test:**     `chrome-mem-soak.py --nmi-storm 150`: 150 diagnostic NMIs, one a second, into a running 4 GiB browser
+  guest. First version of the new census (a line per task, 25 KiB per probe, 0.7 s inside the NMI; the old probe wrote 9 KiB, the short one 2.7): 3 of 3 sessions
+  stopped after 100-120 probes with `[timer-probe] FROZEN` (the probe itself kept the timer away). Short census:
+  3 of 3 sessions answer after 150 probes, 0 FROZEN lines.
+- **BUG-182** (recorded by the audio team on `feature/chrome-audio`: `[timer-probe] FROZEN`, about a second without
+  ticks while NIC interrupts arrive): the three runs of this team named there (nsa1-3) are the storm sessions above,
+  where the line follows `END NMI PROBE` every time: the cause there is the long probe, fixed. Their own run (av1,
+  integ image) has no NMI before the line; there the tick that ended the window was not logged (`[tick-late]` had
+  used up its 24 lines), so nothing names what held the timer. `f08c678`: the FROZEN line is followed by the whole
+  in-service register, the TSC since the last timer tick and the lost-tick total, and a late tick of 200 ms or more
+  is always logged (first 64). Not reproduced here; open on their branch.
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with

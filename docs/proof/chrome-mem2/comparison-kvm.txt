@@ -1,0 +1,35 @@
+# markers-compare.py, KVM self-test boots: feature/chrome-integ af6f415 (integ3-runs/kvm/f-*) -> f08c678
+
+== 1 GiB
+== /srv/euroos/integ3-runs/kvm/f-1g.log  vs  kvm/t2-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base OKx1 FAILx2 | new OKx1 FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 0
+
+== 2 GiB
+== /srv/euroos/integ3-runs/kvm/f-2g.log  vs  kvm/t2-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   churn-fork: base FAILx1 | new OKx1
+-- only in base: 1
+   fork: FAILx9
+-- only in new: 0
+
+== 4 GiB
+== /srv/euroos/integ3-runs/kvm/f-4g.log  vs  kvm/t2-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+== 8 GiB
+== /srv/euroos/integ3-runs/kvm/f-8g.log  vs  kvm/t2-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

@@ -1,0 +1,29 @@
+# p8: processes per census (every 10th), refused forks, kills, the last fdpeers and census
+processes: 6 8 9 10 10 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 12 8 9 11 9 10 11 12 10 11 12
+arena alloc FAILED=0 spawn-refused=0 oom=0 isolation=0 aborts=0 timer-probe=0 nmi-probes=0
+forks=131 (utility processes started 19, renderers 112) child exits by exit()=44, ended by SIGTERM of the browser=78; process pool: lowest free 3272 of 3466 MiB
+[mem] tick=3005 pool=3232 free=2842 pagecache=210 shm=16 (named 0, 137 files) processes=163 | kernel heap used=117 free=394 big=34/511 ramfile-bytes=7 in 199 files | process pool=3466 free=3378 | tasks=99/512 thread-kstacks=95/480
+[mem] tick=743068 pool=3232 free=2541 pagecache=239 shm=31 (named 4, 199 files) processes=420 | kernel heap used=121 free=390 big=86/511 ramfile-bytes=40 in 444 files | process pool=3466 free=3307 | tasks=161/512 thread-kstacks=157/480
+[fdpeers] task 32 "network.CrUtilit": fd5>main:42 fd16>main:45 fd24>t110:21 fd25>t87:21 fd27>t108:21 fd28>t63:20 fd38>t166:21 fd47>t162:21 | 8 stream sockets: other end held by the main process only 2, by another child too 6, by nobody 0
+[fdpeers] task 43 "storage.CrUtilit": fd5>main:52 fd6>main:67 fd21>t87:22 fd23>t110:23 fd24>t108:22 fd26>t162:22 fd27>t166:23 | 7 stream sockets: other end held by the main process only 2, by another child too 5, by nobody 0
+[fdpeers] task 63 "CrRendererMain": fd4>main:8 fd5>main:103 fd6>main:124 fd20>t32:28 fd27>t63:29 fd28>main:141 fd29>t63:27 | 7 stream sockets: other end held by the main process only 4, by another child too 3, by nobody 0
+[fdpeers] task 87 "CrRendererMain": fd4>main:8 fd5>main:203 fd10>main:132 fd21>t32:25 fd22>t43:21 fd25>t87:53 fd26>main:155 fd53>t87:25 | 8 stream sockets: other end held by the main process only 4, by another child too 4, by nobody 0
+[fdpeers] task 100 "on_device_model.": fd5>main:194 fd10>main:195 | 2 stream sockets: other end held by the main process only 2, by another child too 0, by nobody 0
+[fdpeers] task 108 "CrRendererMain": fd4>main:8 fd5>main:211 fd6>main:181 fd21>t32:27 fd22>t43:24 fd25>t108:43 fd26>main:199 fd43>t108:25 | 8 stream sockets: other end held by the main process only 4, by another child too 4, by nobody 0
+[fdpeers] task 110 "CrRendererMain": fd4>main:8 fd5>main:218 fd10>main:94 fd17>t110:40 fd21>t32:24 fd23>t43:23 fd26>main:152 fd40>t110:17 | 8 stream sockets: other end held by the main process only 4, by another child too 4, by nobody 0
+[fdpeers] task 162 "CrRendererMain": fd4>main:8 fd5>main:283 fd10>main:258 fd14>t162:20 fd20>t162:14 fd21>t32:47 fd22>t43:26 fd26>main:265 fd40>main:147 | 9 stream sockets: other end held by the main process only 5, by another child too 4, by nobody 0
+[fdpeers] task 166 "CrRendererMain": fd4>main:8 fd5>main:307 fd15>main:302 fd21>t32:38 fd23>t43:27 fd25>t166:40 fd26>main:305 fd40>t166:25 | 8 stream sockets: other end held by the main process only 4, by another child too 4, by nobody 0
+[fdpeers] 9 fork children with sockets
+[memstat] pid=1002 task=63 name="CrRendererMain" anon=14 (zero~0 no-access=0) file-private=15 tables=0 maps: pagecache=84 shm=0 swapped=0 | arena=17
+[memstat] pid=1009 task=100 name="on_device_model." anon=1 (zero~0 no-access=0) file-private=14 tables=0 maps: pagecache=34 shm=0 swapped=0 | arena=17
+[memstat] pid=1120 task=110 name="CrRendererMain" anon=15 (zero~0 no-access=0) file-private=15 tables=0 maps: pagecache=76 shm=1 swapped=0 | arena=17
+[memstat] pid=1121 task=108 name="CrRendererMain" anon=28 (zero~0 no-access=0) file-private=15 tables=1 maps: pagecache=80 shm=1 swapped=0 | arena=17
+[memstat] pid=1122 task=87 name="CrRendererMain" anon=56 (zero~1 no-access=0) file-private=15 tables=1 maps: pagecache=87 shm=5 swapped=0 | arena=17
+[memstat] pid=1126 task=166 name="CrRendererMain" anon=29 (zero~0 no-access=0) file-private=15 tables=1 maps: pagecache=81 shm=7 swapped=0 | arena=17
+[memstat] pid=1127 task=75 name="CrRendererMain" anon=7 (zero~0 no-access=0) file-private=15 tables=0 maps: pagecache=64 shm=0 swapped=0 | arena=17
+[memstat] pid=1128 task=99 name="CrRendererMain" anon=20 (zero~0 no-access=0) file-private=15 tables=0 maps: pagecache=73 shm=5 swapped=0 | arena=17
+[memstat] pid=1129 task=147 name="CrRendererMain" anon=17 (zero~1 no-access=0) file-private=14 tables=0 maps: pagecache=66 shm=2 swapped=0 | arena=17
+[memstat] pid=1 task=1 name="chrome" anon=62 (zero~0 no-access=0) file-private=15 tables=8 maps: pagecache=156 shm=17 swapped=0 | arena=128
+[memstat] pid=1000 task=32 name="network.CrUtilit" anon=8 (zero~0 no-access=0) file-private=14 tables=2 maps: pagecache=51 shm=24 swapped=0 | arena=17
+[memstat] pid=1001 task=43 name="storage.CrUtilit" anon=4 (zero~0 no-access=0) file-private=14 tables=0 maps: pagecache=36 shm=0 swapped=0 | arena=17
+[memstat] pid=1130 task=162 name="CrRendererMain" anon=22 (zero~1 no-access=0) file-private=15 tables=0 maps: pagecache=70 shm=5 swapped=0 | arena=17
