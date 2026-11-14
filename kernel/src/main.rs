@@ -100,6 +100,7 @@ mod tpm;
 mod entropy;
 mod linuxrand;
 mod renametest;
+mod aslrtest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -4266,6 +4267,8 @@ fn main() -> Status {
         renametest::selftest(&mut allocator);
         // BUG-111: a save by a Linux program reaches EuroFS and the next boot ([rename-disk]).
         renametest::disk_selftest(&mut allocator, &mut vfs);
+        // BUG-088: how many address bits of a Linux program change per start ([aslr]).
+        aslrtest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
