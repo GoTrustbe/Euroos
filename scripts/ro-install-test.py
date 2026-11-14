@@ -12,7 +12,10 @@ MODE=inject: BUG-200 on its own. Disk 0 is a QEMU null-co device: every write is
   The root blocks sit in the write-back cache; "after remount" must not be satisfied by those cache lines: the
   medium is empty, so GPT/ESP/hostname/user/euroid-store must all read false and the install must say FAILED.
 
-usage: [MODE=plain|inject] ro-install-test.py IMAGE OUTDIR [CPUS]
+MODE=ro0 (BUG-220): disk 0 is a blank READ-ONLY disk. The install fails, and the boot must then fall back to the RAM root
+  with a serial line ([euro] ... RAM root) and reach the desktop; it used to panic with "EuroFS format: IoError".
+
+usage: [MODE=plain|inject|ro0] ro-install-test.py IMAGE OUTDIR [CPUS]
 """
 import os, subprocess, sys, time
 IMG, OUT = sys.argv[1], os.path.abspath(sys.argv[2])
@@ -25,6 +28,8 @@ for f in (tgt, ro):
 drives = []
 if MODE == "inject":
     drives += ["-blockdev", "driver=null-co,node-name=n0,size=2147483648,read-zeroes=on", "-device", "virtio-blk-pci,drive=n0,disable-modern=on"]
+elif MODE == "ro0":
+    drives += ["-drive", f"id=t0,format=raw,file={tgt},if=none,readonly=on", "-device", "virtio-blk-pci,drive=t0,disable-modern=on"]
 else:
     drives += ["-drive", f"id=t0,format=raw,file={tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on",
                "-drive", f"id=t1,format=raw,file={ro},if=none,readonly=on", "-device", "virtio-blk-pci,drive=t1,disable-modern=on"]
@@ -39,6 +44,8 @@ def wait(needle, secs):
     while time.time() < end and needle not in txt() and p.poll() is None:
         time.sleep(2)
 wait("[q1x3] EuroInstall", 900)
+if MODE == "ro0":
+    wait("[desktop] interactive loop started", 900)
 if MODE == "plain":
     wait("[nmi-bound]", 900)       # the late self-test markers
 time.sleep(3)
@@ -53,7 +60,13 @@ def show(tag):
 line = show("[q1x3] EuroInstall")
 fa = show("[q1x3] target")
 check("install reported", bool(line))
-if MODE == "inject":
+if MODE == "ro0":
+    check("no kernel panic", "KERNEL PANIC" not in t)
+    ln = show("[euro] the install on disk 0 failed")
+    check("serial line: falls back to the RAM root", bool(ln) and "RAM root" in ln[0])
+    check("boot reaches the desktop", "[desktop] interactive loop started" in t)
+    check("on-screen message queued ([notify] ... RAM root)", any(x.startswith("[notify]") and "RAM" in x for x in t.splitlines()))
+elif MODE == "inject":
     after = line[0].split("GPT=")[-1].split("→")[0] if line else "=true"
     check("nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false", bool(line) and "=true" not in after)
     check("install verdict FAILED", bool(line) and line[0].rstrip().endswith("FAILED"))
