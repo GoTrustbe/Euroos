@@ -1,0 +1,16 @@
+# [pcmch], KVM 4 GiB, 2 vCPU, -device intel-hda -device hda-duplex (kboot-hda.sh). a0 = 1a50fba (test only), a1 = bf92f3c (fix); a1n = bf92f3c without HD-Audio
+== a0-4g: a0-4g end=marker after 301s failed-lines=2 crash-lines=0
+[pcmch]   FAIL 6 ch: the whole space offers channels [2,2] (0)
+[pcmch]   FAIL 6 ch: refine with the count: channels [6,6], frame bits [0,4294967295] (-22)
+[pcmch]   FAIL 6 ch: HW_PARAMS (-22)
+[pcmch]   FAIL 1 ch: the whole space offers channels [2,2] (0)
+[pcmch]   FAIL 1 ch: refine with the count: channels [1,1], frame bits [0,4294967295] (-22)
+[pcmch]   FAIL 1 ch: HW_PARAMS (-22)
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 5 of 11 -> FAILED (exit 1); ring: 6 ch -> nothing reached the ring FAIL 1 ch -> nothing reached the ring FAIL 2 ch -> (1234, -4321) want (1234, -4321) → FAILED
+== a1-4g: a1-4g end=marker after 299s failed-lines=0 crash-lines=0
+[alsa] @27755 hw_params: period 1024 frames, buffer 8192 frames, 6 channels (downmixed to stereo)
+[alsa] @27773 hw_params: period 1024 frames, buffer 8192 frames, 1 channels (downmixed to stereo)
+[alsa] @27791 hw_params: period 1024 frames, buffer 8192 frames, 2 channels
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+== a1n-4g: a1n-4g end=marker after 302s failed-lines=0 crash-lines=0
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: no playback device (errno 19): not run -> SKIP (exit 78); ring: - → OK (not run: no HD-Audio device)

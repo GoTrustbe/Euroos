@@ -1,0 +1,27 @@
+# chrome-smoke --only localvideo, a1-pub (bf92f3c). av1: CRASH/HANG at the H.264 step on [timer-probe] FROZEN (BUG-182, before any audio); av2: the rerun
+== av1
+[gui-smoke] FAIL local video h264+aac: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/h264.html; state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input state unknown
+[gui-smoke] FAIL local video h264+aac: the page loads from the host and the browser knows the codec: CRASH on serial: [timer-probe] FROZEN
+[chrome-smoke] CRASH/HANG: CRASH on serial: [timer-probe] FROZEN - 3/5 steps ok, report and screenshots in /srv/euroos/integ3-runs/runs/av1
+== av2
+[gui-smoke] FAIL local video h264+aac: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/h264.html; state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=fals
+[gui-smoke] FAIL local video h264+aac: the picture advances for 60 s: 0 of 28 consecutive screendumps of the player differ | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL local video h264+aac: the video's time increases: currentTime 0.0 -> 0.0 s in 60.6 s of wall clock | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL local video h264+aac: sound reaches the audio device for 60 s: 0 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-p
+[gui-smoke] FAIL local video h264+aac: no media error: last state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.36 -> 60.86 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 60.86, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9v.html; state {'st': 'paused', 't': 0.01, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 2.98 -> 61.94 s in 61.5 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 61.94, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/opus.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.96 -> 61.25 s in 61.3 s of wall clock
+[gui-smoke] ok   local video opus audio only: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1149, 1157, 1158, 1158, 1158, 1158, 1148, 1158])
+[gui-smoke] ok   local video opus audio only: no media error: last state {'st': 'playing', 't': 61.25, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[chrome-smoke] FAIL (5 step(s)) - 16/21 steps ok, report and screenshots in /srv/euroos/integ3-runs/runs/av2
+== av1 serial
+[timer-probe] FROZEN: 2281 Mcycles since the previous NIC irq but only 2 ticks (now 2483): ISR[20..3f]=0x00000000 IRR[20..3f]=0x00000001 TPR=0x0 PPR=0x40 LVT_TIMER=0x00020020 CUR=164200 halted-at rip=0x1002a8fe9db IF=true

@@ -2230,8 +2230,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   or the fork is undone; `retire_task` and `kill_glibc_group` give back the fork of a task they end.
 - **Also:**     every `[memt]` run has a 360 s deadline now (the checks are the same).
 
-### BUG-181 — audio with more than two channels is silent in Chromium (5.1 Opus of Wikimedia Commons) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (criterion 3 for any 5.1 source; stereo plays, BUG-160)
+### BUG-181 — audio with more than two channels is silent in Chromium (5.1 Opus of Wikimedia Commons) ✅ FIXED
+- **Status:**   FIXED (`bf92f3c`, test `1a50fba`, `proof/chrome-audio/`) · **Severity:** MEDIUM (criterion 3 for any 5.1 source; stereo plays, BUG-160)
 - **Actual:**   `Big_Buck_Bunny_4K.webm.480p.vp9.webm` (Wikimedia Commons; VP9 + 6-channel Opus) in the browser's own
   player: the picture advances (22 of 22 screendumps differ), the time runs, the tab shows its speaker, and the QEMU wav is
   silent for 180 s. Serial: `ALSA lib pcm.c:8822:(snd_pcm_set_params) Channels count (6) not available for PLAYBACK`,
@@ -2246,6 +2246,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Note:**     the 360p transcode that the memory team played (BUG-156 sessions, "stays at 0:00") answers 404 since; its time
   stalling at 0:00 fits BUG-160 (fixed: the 480p file of the same video runs here), not proven on that file; if it had
   6-channel audio too, its sound would be silent for this reason.
+
+- **Fix:**      the device takes 1-8 channels (`alsa.rs` hw_params: CHANNELS, FRAME_BITS and the byte sizes as the client
+  allows them) and `writei` downmixes into the stereo ring (ALSA order; fronts 1, centre/rears/sides 0.7071, rear centre
+  0.5, LFE dropped, normalised per side). Not a plug PCM: plug over this device never settled (runs 78-83).
+- **Test:**     `[pcmch]` (`gpcm.c`, raw ioctls as snd_pcm_set_params, 6/1/2 channels, the ring checked): 5 of 11 FAILED ->
+  15 of 15 OK. Wikimedia 480p (6-channel Opus): 0 -> 17 of 18 five-second windows with sound; local VP9+Opus unchanged (12/12).
+### BUG-182 — a second without timer ticks while NIC interrupts arrive (`[timer-probe] FROZEN`) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (the harness ends the run as CRASH/HANG; the guest goes on)
+- **Actual:**   `chrome-smoke --only localvideo` run av1 (`proof/chrome-audio/localvideo.txt`, image `bf92f3c`, KVM 2 vCPU,
+  6 GiB), at the H.264 page, before any audio was opened: `[timer-probe] FROZEN: 2281 Mcycles since the previous NIC irq but
+  only 2 ticks (now 2483): ISR[20..3f]=0 IRR[20..3f]=0x1 TPR=0x0 PPR=0x40 LVT_TIMER=0x00020020 CUR=164200 halted-at
+  rip=0x1002a8fe9db IF=true`, then `[desk] #9 ... 1021 ms without the CPU (24 other tasks were ready)` and an NMI probe with
+  task 0 in its idle hlt. The rerun (av2) did not show it. The same line, with the same IRR/PPR, is in three runs of the Fable
+  team on `feature/chrome-mem2` (`/srv/euroos/mem2-runs/runs/nsa1..3`), which do not have the audio change.
+- **Reading:** the BSP timer (vector 0x20) is pending in IRR and not taken for about a second while the NIC MSI-X (0x4B)
+  still arrives; PPR 0x40 is the NIC handler that runs the probe. Cause not found.
+- **Next:**     scheduler/interrupt owners (Fable team): the ISR above 0x3f at the probe, the LAPIC timer mode and whether the
+  BSP idle hlt is entered with the tick masked.
 
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
