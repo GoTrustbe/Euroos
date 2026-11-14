@@ -428,7 +428,7 @@ mod fdspace;
 // One descriptor table per process on top of them (BUG-098).
 #[path = "fdtab.rs"]
 mod fdtab;
-pub use fdtab::{census as fd_census, census_lines as fd_census_lines};
+pub use fdtab::{census as fd_census, census_lines as fd_census_lines, peer_lines as fd_peer_lines};
 
 /// A spin-locked value that exists once per fd space: `lock()` takes the one
 /// lock and yields the part of the calling task's space.

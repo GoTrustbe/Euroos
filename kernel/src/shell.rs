@@ -472,6 +472,19 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // descriptors it has open and its highest number; and how many objects
         // (open files, pipe ends, sockets, ...) exist behind all of them. Also
         // on the serial console, so a harness can read it.
+        // `fdpeers`: per fork child, who holds the other end of each of its
+        // stream sockets (BUG-156: a utility process that never sees the end
+        // of its channel). On the serial console.
+        "fdpeers" => {
+            let out = crate::ring3::fd_peer_lines();
+            for l in out.iter() {
+                for chunk in l.as_bytes().chunks(900) {
+                    crate::serial_println!("[fdpeers] {}", alloc::string::String::from_utf8_lossy(chunk));
+                }
+            }
+            crate::serial_println!("[fdpeers] {} fork children with sockets", out.len());
+            vec![format!("fdpeers: {} processes, written to the serial console", out.len())]
+        }
         "fds" => {
             let (procs, descs, objs, root) = crate::ring3::fd_census();
             let mut out = vec![format!(

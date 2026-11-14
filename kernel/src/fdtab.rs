@@ -697,6 +697,83 @@ pub fn census_lines() -> alloc::vec::Vec<String> {
         .collect()
 }
 
+/// BUG-156: for every fork child, its AF_UNIX stream sockets and who holds
+/// the OTHER end of each. A process that waits for the end of its channel
+/// gets end-of-file only when the last descriptor of the other end is closed,
+/// in whatever process that is: one end inherited by a process that was
+/// forked later keeps the channel open after the browser closed its own.
+/// One line per child: `fdN>` then the holders of the other end as
+/// `main:fd`, `tTASK:fd`, `nobody` (the child can read end-of-file), and
+/// `+Kx` for K references no table holds (descriptors in flight in a message,
+/// system calls in progress).
+pub fn peer_lines() -> alloc::vec::Vec<String> {
+    // (process, descriptor, object) of every socket-class object, and how
+    // many references each object has; taken under the lock, used outside it.
+    let (all, refs): (alloc::vec::Vec<(u64, usize, u64)>, alloc::vec::Vec<(u64, u32)>) = with(|s| {
+        let mut all = alloc::vec::Vec::new();
+        for (p, t) in s.procs.iter() {
+            for (fd, d) in t.iter() {
+                if d.obj as u64 >= GLOBAL_OBJ_BASE {
+                    all.push((*p, fd, d.obj as u64));
+                }
+            }
+        }
+        let mut objs: alloc::vec::Vec<u64> = all.iter().map(|e| e.2).collect();
+        objs.sort_unstable();
+        objs.dedup();
+        let refs = objs.into_iter().map(|o| (o, s.refs.get(key(fdspace::ROOT, o)))).collect();
+        (all, refs)
+    });
+    let keys: alloc::vec::Vec<Option<(u32, u8)>> = all.iter().map(|e| crate::net::unix_key(e.2)).collect();
+    let mut out = alloc::vec::Vec::new();
+    let mut procs: alloc::vec::Vec<u64> = all.iter().map(|e| e.0).filter(|&p| p != 0 && p < BG_PROC).collect();
+    procs.dedup();
+    for p in procs {
+        let mut line = alloc::format!("task {p} {:?}:", thread_name(p as usize));
+        let (mut socks, mut alone, mut shared, mut eof) = (0usize, 0usize, 0usize, 0usize);
+        for (i, e) in all.iter().enumerate().filter(|(_, e)| e.0 == p) {
+            let Some(pk) = crate::net::unix_peer_key(e.2) else { continue };
+            let _ = i;
+            socks += 1;
+            line.push_str(&alloc::format!(" fd{}>", e.1));
+            let mut holders = 0usize;
+            let mut others = false;
+            let mut peer_obj = 0u64;
+            for (j, h) in all.iter().enumerate() {
+                if keys[j] != Some(pk) {
+                    continue;
+                }
+                peer_obj = h.2;
+                if holders > 0 {
+                    line.push('+');
+                }
+                holders += 1;
+                if h.0 == 0 {
+                    line.push_str(&alloc::format!("main:{}", h.1));
+                } else {
+                    others = true;
+                    line.push_str(&alloc::format!("t{}:{}", h.0 & (BG_PROC - 1), h.1));
+                }
+            }
+            let r = refs.iter().find(|x| x.0 == peer_obj).map(|x| x.1 as usize).unwrap_or(0);
+            if holders == 0 {
+                line.push_str(if crate::net::unix_fd_at_eof(e.2) { "nobody(eof)" } else { "nobody" });
+                eof += 1;
+            } else if r > holders {
+                line.push_str(&alloc::format!("+{}x", r - holders));
+            }
+            if holders > 0 && others {
+                shared += 1;
+            } else if holders > 0 {
+                alone += 1;
+            }
+        }
+        line.push_str(&alloc::format!(" | {socks} stream sockets: other end held by the main process only {alone}, by another child too {shared}, by nobody {eof}"));
+        out.push(line);
+    }
+    out
+}
+
 // ── the gate ────────────────────────────────────────────────────────────────
 
 /// Which arguments of system call `num` are descriptors: (plain, directory).

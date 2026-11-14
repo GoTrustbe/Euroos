@@ -299,6 +299,10 @@ def main():
                 g.ramfiles()            # a census with the clip still on the page
             if a.nmi_storm and rnd == 1 and not nmi_storm(g, a.nmi_storm):
                 break
+            # BUG-156: per child process, who holds the other end of its sockets
+            # (a utility process that never sees the end of its channel).
+            g.serial.send_line("fdpeers")
+            g.nap(2.0)
             mem.append((int(time.time() - t0), g.memory()))
             print(f"[chrome-mem-soak] round {rnd} done after {int(time.time() - t0)} s: {mem[-1][1]}", flush=True)
             extra["soak_rounds"], extra["soak_memory"] = rnd, mem
