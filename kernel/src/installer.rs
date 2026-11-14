@@ -97,11 +97,13 @@ struct Target {
     name: String,
     mib: u64,
     blank: bool,
+    /// The disk refuses writes (a read-only virtio-blk device): nothing can be installed on it (BUG-201).
+    read_only: bool,
 }
 
 impl Target {
     fn selectable(&self) -> bool {
-        self.blank && self.mib * MIB >= euroinstall::minimum_disk_bytes()
+        self.blank && !self.read_only && self.mib * MIB >= euroinstall::minimum_disk_bytes()
     }
 }
 
@@ -153,15 +155,15 @@ fn scan_targets() -> Vec<Target> {
             continue;
         }
         let mib = crate::virtio_blk::capacity_sectors_dev(d) * 512 / MIB;
-        out.push(Target { bus: Bus::Virtio(d), name: alloc::format!("virtio disk {d}"), mib, blank: crate::instexec::disk_is_blank(d) });
+        out.push(Target { bus: Bus::Virtio(d), name: alloc::format!("virtio disk {d}"), mib, blank: crate::instexec::disk_is_blank(d), read_only: crate::virtio_blk::is_read_only_dev(d) });
     }
     if crate::nvme::present() {
         let mib = crate::nvme::capacity_sectors() * 512 / MIB;
-        out.push(Target { bus: Bus::Nvme, name: String::from("NVMe disk"), mib, blank: crate::instexec::nvme_is_blank() });
+        out.push(Target { bus: Bus::Nvme, name: String::from("NVMe disk"), mib, blank: crate::instexec::nvme_is_blank(), read_only: false });
     }
     for idx in 0..crate::ahci::disk_count() {
         let mib = crate::ahci::disk_sectors(idx) * 512 / MIB;
-        out.push(Target { bus: Bus::Ahci(idx), name: alloc::format!("SATA disk {idx}"), mib, blank: crate::instexec::ahci_is_blank(idx) });
+        out.push(Target { bus: Bus::Ahci(idx), name: alloc::format!("SATA disk {idx}"), mib, blank: crate::instexec::ahci_is_blank(idx), read_only: false });
     }
     out
 }
@@ -242,6 +244,10 @@ impl Wizard {
                 };
                 if !t.blank {
                     self.error = String::from("That disk is in use. Only a blank disk can be installed to.");
+                    return None;
+                }
+                if t.read_only {
+                    self.error = String::from("That disk is read-only: nothing can be written to it. Choose another disk.");
                     return None;
                 }
                 if !t.selectable() {
@@ -620,6 +626,8 @@ pub fn render(fb: &FrameBuffer, win_x: usize, win_y: usize, win_w: usize, win_h:
                 .map(|t| {
                     let note = if !t.blank {
                         alloc::format!("{} · in use", size_label(t.mib))
+                    } else if t.read_only {
+                        alloc::format!("{} · read-only", size_label(t.mib))
                     } else if !t.selectable() {
                         alloc::format!("{} · too small", size_label(t.mib))
                     } else {
