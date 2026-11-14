@@ -249,6 +249,15 @@ extern "x86-interrupt" fn net_msix_handler(_frame: InterruptStackFrame) {
             LEFT.fetch_sub(1, Ordering::Relaxed);
             let (isr1, lvt, cur) = crate::apic::timer_probe();
             let (tpr, ppr, irr1) = crate::apic::priority_probe();
+            // BUG-182: which vectors are in service (this handler is 0x4b: bit
+            // 11 of word 2), and how long ago the timer was last taken. A
+            // long time: the timer did not come (interrupts off, or the
+            // processor was not running); the next [tick-late] line names
+            // where that ended. A short time: the clock, not the timer.
+            let isr = crate::apic::isr_words();
+            serial_println!("[timer-probe] BUG-182: ISR words 0..7 = {:08x?}; {} Mcycles since the last timer tick was taken; {} ticks added for late ticks so far",
+                isr, tsc.saturating_sub(crate::sched::last_tick_tsc()) / 1_000_000,
+                crate::sched::LOST_TICKS.load(Ordering::Relaxed));
             serial_println!("[timer-probe] FROZEN: {} Mcycles since the previous NIC irq but only {} ticks (now {now}): ISR[20..3f]={isr1:#010x} IRR[20..3f]={irr1:#010x} TPR={tpr:#x} PPR={ppr:#x} LVT_TIMER={lvt:#010x} CUR={cur} halted-at rip={:#x} IF={}",
                 tsc.saturating_sub(last_tsc) / 1_000_000, now.saturating_sub(last),
                 _frame.instruction_pointer.as_u64(), _frame.cpu_flags.bits() & 0x200 != 0);

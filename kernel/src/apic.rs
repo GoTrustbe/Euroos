@@ -97,6 +97,18 @@ pub fn timer_probe() -> (u32, u32, u32) {
     unsafe { (rd(0x110), rd(REG_LVT_TIMER), rd(REG_TIMER_CUR)) }
 }
 
+/// BUG-182: the whole in-service register (vectors 0x00..0xff, 32 per word).
+/// A vector that stays in service (a handler that left without its EOI, or
+/// that was switched away from before it) masks every vector of its class
+/// and below: the timer (0x20) is the lowest there is.
+pub fn isr_words() -> [u32; 8] {
+    let mut w = [0u32; 8];
+    for (i, x) in w.iter_mut().enumerate() {
+        *x = unsafe { rd(0x100 + 0x10 * i as u64) };
+    }
+    w
+}
+
 /// The priority side of the same probe: TPR (0x80) and PPR (0xa0) mask every
 /// vector at or below their class, which would silence the timer (0x20) while a
 /// class-4 MSI-X still arrives; IRR bits 0x20..0x3f say whether a timer interrupt

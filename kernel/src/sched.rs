@@ -959,6 +959,10 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+/// TSC at the timer interrupt that was taken last (BUG-182).
+pub fn last_tick_tsc() -> u64 {
+    LAST_TICK_TSC.load(Ordering::Relaxed)
+}
 static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 #[no_mangle]
@@ -982,7 +986,12 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
             add += lost;
             LOST_TICKS.fetch_add(lost, Ordering::Relaxed);
             let n = LATE_TICKS_LOGGED.fetch_add(1, Ordering::Relaxed);
-            if n < 24 || (n + 1) % 128 == 0 {
+            // BUG-182: a window of 200 ms or more is always said (the first
+            // 64): the one-second window of that bug came after the 24 lines
+            // below were used up, and nothing named where it ended.
+            static LONG_LOGGED: AtomicU64 = AtomicU64::new(0);
+            let long = lost >= 20 && LONG_LOGGED.fetch_add(1, Ordering::Relaxed) < 64;
+            if n < 24 || (n + 1) % 128 == 0 || long {
                 let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
                 let cur = current();
                 let (sn, sa1, _) = crate::ring3::last_syscall(cur);
