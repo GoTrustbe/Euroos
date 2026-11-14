@@ -13704,6 +13704,9 @@ static FORK_PARKED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 /// * cowfork (gmem2): a fork of a 64 MiB process takes page tables, not a copy;
 ///   parent, child and grandchild see the memory of the fork and never what
 ///   another writes afterwards, also when the kernel writes (copy-on-write);
+/// * ramnamed (gmem2): a file with a name in /tmp is frames of the demand pool,
+///   not kernel heap, with ENOSPC at the limit of the memory files;
+/// * sysinfo (gmem2): sysinfo() and /proc/meminfo report the pools;
 /// * forkkill: the run is killed by the launcher's deadline while it is inside
 ///   a fork that has taken the child's arena, tables and demand pages; all of
 ///   it comes back (BUG-180). The fork is held there by FORK_PARK_NEXT.
@@ -13719,7 +13722,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
     let prev_deadline = GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0), ("cowfork", 0, 0)] {
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0), ("cowfork", 0, 0), ("ramnamed", 0, 0), ("sysinfo", 0, 0)] {
         let kill = mode == "forkkill";
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
@@ -13736,7 +13739,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         let free0 = falloc.free_frames();
         let pp0 = crate::procpool::free_frames();
         // The modes of the second round are in gmem2.
-        let (elf, argv0): (&[u8], &[u8]) = if matches!(mode, "cowfork") { (GMEM2_ELF, b"/bin/gmem2") } else { (GMEMT_ELF, b"/bin/gmemt") };
+        let (elf, argv0): (&[u8], &[u8]) = if matches!(mode, "cowfork" | "ramnamed" | "sysinfo") { (GMEM2_ELF, b"/bin/gmem2") } else { (GMEMT_ELF, b"/bin/gmemt") };
         let (out, exit) = run_glibc(falloc, elf, ldlinux_bytes(), &[argv0, arg], &[b"PATH=/bin"], caps);
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
         FORK_PARK_NEXT.store(0, Ordering::Relaxed);
