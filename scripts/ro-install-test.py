@@ -7,11 +7,10 @@ MODE=plain (default): disk 0 is a normal blank disk, disk 1 a blank READ-ONLY di
   - the install on disk 0 must verify OK;
   - the wizard target list ([wizard-targets], BUG-201) must not offer disk 1 (read-only);
   - the late markers [randid] (BUG-086/087) and [nmi-bound] (BUG-202) must be OK.
-MODE=inject: BUG-200 on its own. Disk 0 is NOT read-only, but QEMU's blkdebug fails every write to the blocks 16..143
-  of the EuroFS root (sector 919552 + 8*block; 919552 = 2048 + 256 MiB ESP + two 96 MiB slots; the boot-file writer
-  zeroes the first 16 blocks itself, with raw writes). The root blocks reach the cache without error, the flush fails, and "after remount"
-  must not be satisfied by cache lines: that block is not on the medium, so the mount cannot succeed and
-  hostname/user/euroid-store must read false.
+MODE=inject: BUG-200 on its own. Disk 0 is a QEMU null-co device: every write is accepted and thrown away, every read
+  returns zeros, so NOTHING reaches the medium and no write is refused (the install cannot notice that at write time).
+  The root blocks sit in the write-back cache; "after remount" must not be satisfied by those cache lines: the
+  medium is empty, so GPT/ESP/hostname/user/euroid-store must all read false and the install must say FAILED.
 
 usage: [MODE=plain|inject] ro-install-test.py IMAGE OUTDIR [CPUS]
 """
@@ -25,12 +24,7 @@ for f in (tgt, ro):
     subprocess.run(["qemu-img", "create", "-f", "raw", f, "2G"], check=True, stdout=subprocess.DEVNULL)
 drives = []
 if MODE == "inject":
-    conf = os.path.join(OUT, "blkdebug.conf")
-    rules = []
-    for blk in range(16, 144):   # the root blocks 16..143 (sectors 919552 + 8*blk): a flush of any of them fails
-        rules += ["[inject-error]", 'event = "write_aio"', 'errno = "5"', f'sector = "{919552 + 8 * blk}"', 'immediately = "on"', ""]
-    open(conf, "w").write(chr(10).join(rules))
-    drives += ["-drive", f"id=t0,format=raw,file=blkdebug:{conf}:{tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on"]
+    drives += ["-blockdev", "driver=null-co,node-name=n0,size=2147483648,read-zeroes=on", "-device", "virtio-blk-pci,drive=n0,disable-modern=on"]
 else:
     drives += ["-drive", f"id=t0,format=raw,file={tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on",
                "-drive", f"id=t1,format=raw,file={ro},if=none,readonly=on", "-device", "virtio-blk-pci,drive=t1,disable-modern=on"]
@@ -60,8 +54,8 @@ line = show("[q1x3] EuroInstall")
 fa = show("[q1x3] target")
 check("install reported", bool(line))
 if MODE == "inject":
-    after = line[0].split("after remount")[-1].split("→")[0] if line else "=true"
-    check("after remount nothing reads back from the cache (hostname/user/euroid-store = false)", bool(line) and "=true" not in after)
+    after = line[0].split("GPT=")[-1].split("→")[0] if line else "=true"
+    check("nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false", bool(line) and "=true" not in after)
     check("install verdict FAILED", bool(line) and line[0].rstrip().endswith("FAILED"))
 else:
     check("install on the writable disk 0 verified OK", bool(line) and line[0].rstrip().split("→")[-1].strip().startswith("OK"))
