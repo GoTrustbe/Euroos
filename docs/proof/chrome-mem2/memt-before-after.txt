@@ -1,0 +1,57 @@
+# [memt], KVM 2 vCPU. t0-st = 3966637 (the test, before the fix), t1-st = the fix (8157a3d)
+== t0-4g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt]   forkidle: FAIL 40 idle children at the same time: 16 made (first errno of a refused one 12)
+[memt]   forkidle: FAIL an idle child costs 98320 kB of the process pool (at most 8192; 1708032 kB were free)
+[memt]   forkidle: FAIL a child that forks hands on its own arena (pid -1, status 0xffffffffffffffff)
+[memt] forkidle: GMEMT forkidle: FAILED 3/6 (exit 1); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → FAILED
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410872 free (was 410872), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 7 modes → FAILED
+[linux-abi] FAIL 40 idle children at the same time: 16 made (first errno of a refused one 12)
+[linux-abi] FAIL an idle child costs 98320 kB of the process pool (at most 8192; 1708032 kB were free)
+[memt]   forkidle: FAIL 40 idle children at the same time: 16 made (first errno of a refused one 12)
+[memt]   forkidle: FAIL an idle child costs 98320 kB of the process pool (at most 8192; 1708032 kB were free)
+== t0-1g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt]   forkidle: FAIL 20 idle children at the same time: 1 made (first errno of a refused one 12)
+[memt]   forkidle: FAIL an idle child costs 98316 kB of the process pool (at most 8192; 163840 kB were free)
+[memt]   forkidle: FAIL a child that forks hands on its own arena (pid -1, status 0xffffffffffffffff)
+[memt] forkidle: GMEMT forkidle: FAILED 3/6 (exit 1); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → FAILED
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107510 free (was 107510), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 7 modes → FAILED
+[linux-abi] FAIL 20 idle children at the same time: 1 made (first errno of a refused one 12)
+[linux-abi] FAIL an idle child costs 98316 kB of the process pool (at most 8192; 163840 kB were free)
+[memt]   forkidle: FAIL 20 idle children at the same time: 1 made (first errno of a refused one 12)
+[memt]   forkidle: FAIL an idle child costs 98316 kB of the process pool (at most 8192; 163840 kB were free)
+== t1-4g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410870 free (was 410870), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[linux-abi] ok   40 idle children at the same time: 40 made (first errno of a refused one 0)
+[linux-abi] ok   an idle child costs 4616 kB of the process pool (at most 8192; 1708032 kB were free)
+== t1-1g
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107509 free (was 107509), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[linux-abi] ok   20 idle children at the same time: 20 made (first errno of a refused one 0)
+[linux-abi] ok   an idle child costs 4612 kB of the process pool (at most 8192; 163840 kB were free)
+== a fork of the test (t1-4g)
+[fork] pid 1332 -> child task 6 (own pml4=0x1780000 arena of 96 MiB: 2372 KiB copied, 95932 KiB of zero pages left out; the parent uses 39 MiB of it up to its mmap window top and 0 KiB of brk; arena copy 61 ms, demand pages 0 ms, rest 0 ms)

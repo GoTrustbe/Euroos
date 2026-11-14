@@ -1,0 +1,2725 @@
+   Compiling cfg-if v1.0.4
+   Compiling version_check v0.9.5
+   Compiling zeroize v1.8.2
+   Compiling typenum v1.20.1
+   Compiling subtle v2.6.1
+   Compiling const-oid v0.9.6
+   Compiling cpufeatures v0.2.17
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling semver v1.0.28
+   Compiling generic-array v0.14.7
+   Compiling scopeguard v1.2.0
+   Compiling opaque-debug v0.3.1
+   Compiling rustc_version v0.4.1
+   Compiling lock_api v0.4.14
+   Compiling static_assertions v1.1.0
+   Compiling twox-hash v1.6.3
+   Compiling spin v0.9.8
+   Compiling curve25519-dalek v4.1.3
+   Compiling eurolock v0.1.0 (/opt/euroos/wt-mem2/crates/eurolock)
+   Compiling der v0.7.10
+   Compiling syn v2.0.117
+   Compiling eurofs v0.1.0 (/opt/euroos/wt-mem2/crates/eurofs)
+   Compiling base16ct v0.2.0
+   Compiling eurodoc v0.1.0 (/opt/euroos/wt-mem2/crates/eurodoc)
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling getrandom v0.2.17
+   Compiling digest v0.10.7
+   Compiling rand_core v0.6.4
+   Compiling sha2 v0.10.9
+   Compiling signature v2.2.0
+   Compiling inout v0.1.4
+   Compiling ed25519 v2.2.3
+   Compiling cipher v0.4.4
+   Compiling hmac v0.12.1
+   Compiling universal-hash v0.5.1
+   Compiling chacha20 v0.9.1
+   Compiling poly1305 v0.8.0
+   Compiling aead v0.5.2
+   Compiling hkdf v0.12.4
+   Compiling ff v0.13.1
+   Compiling crypto-bigint v0.5.5
+   Compiling sec1 v0.7.3
+   Compiling group v0.13.0
+   Compiling chacha20poly1305 v0.10.1
+   Compiling rfc6979 v0.4.0
+   Compiling euroflate v0.1.0 (/opt/euroos/wt-mem2/crates/euroflate)
+   Compiling zerocopy v0.8.54
+   Compiling eurolocale v0.1.0 (/opt/euroos/wt-mem2/crates/eurolocale)
+   Compiling europq v0.1.0 (/opt/euroos/wt-mem2/crates/europq)
+   Compiling euronet v0.1.0 (/opt/euroos/wt-mem2/crates/euronet)
+   Compiling euroaml v0.1.0 (/opt/euroos/wt-mem2/crates/euroaml)
+   Compiling elliptic-curve v0.13.8
+   Compiling europrint v0.1.0 (/opt/euroos/wt-mem2/crates/europrint)
+   Compiling ecdsa v0.16.9
+   Compiling primeorder v0.13.6
+   Compiling eurofat v0.1.0 (/opt/euroos/wt-mem2/crates/eurofat)
+   Compiling eurousb v0.1.0 (/opt/euroos/wt-mem2/crates/eurousb)
+   Compiling p256 v0.13.2
+   Compiling p384 v0.13.1
+warning: fields `spf` and `num_fats` are never read
+   --> crates/eurofat/src/lib.rs:728:5
+    |
+726 | struct Reader<'a> {
+    |        ------ fields in this struct
+727 |     img: &'a [u8],
+728 |     spf: u32,
+    |     ^^^
+729 |     reserved: u32,
+730 |     num_fats: u32,
+    |     ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling euroscan v0.1.0 (/opt/euroos/wt-mem2/crates/euroscan)
+   Compiling eurotpm v0.1.0 (/opt/euroos/wt-mem2/crates/eurotpm)
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling eurodocio v0.1.0 (/opt/euroos/wt-mem2/crates/eurodocio)
+   Compiling euroentropy v0.1.0 (/opt/euroos/wt-mem2/crates/euroentropy)
+   Compiling europkg v0.1.0 (/opt/euroos/wt-mem2/crates/europkg)
+warning: `eurofat` (lib) generated 1 warning
+   Compiling eurowasm v0.1.0 (/opt/euroos/wt-mem2/crates/eurowasm)
+   Compiling euroaccess v0.1.0 (/opt/euroos/wt-mem2/crates/euroaccess)
+warning: field `type_idx` is never read
+   --> crates/eurowasm/src/lib.rs:155:5
+    |
+154 | struct Func {
+    |        ---- field in this struct
+155 |     type_idx: u32,
+    |     ^^^^^^^^
+    |
+    = note: `Func` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `type_idx` is never read
+   --> crates/eurowasm/src/lib.rs:166:5
+    |
+163 | struct ImportFn {
+    |        -------- field in this struct
+...
+166 |     type_idx: u32,
+    |     ^^^^^^^^
+    |
+    = note: `ImportFn` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+   Compiling euroinstall v0.1.0 (/opt/euroos/wt-mem2/crates/euroinstall)
+   Compiling euromedia v0.1.0 (/opt/euroos/wt-mem2/crates/euromedia)
+   Compiling ed25519-dalek v2.2.0
+warning: `eurowasm` (lib) generated 2 warnings
+   Compiling x25519-dalek v2.0.1
+   Compiling eurodns v0.1.0 (/opt/euroos/wt-mem2/crates/eurodns)
+   Compiling eurotls v0.1.0 (/opt/euroos/wt-mem2/crates/eurotls)
+   Compiling europol v0.1.0 (/opt/euroos/wt-mem2/crates/europol)
+   Compiling eurowallet v0.1.0 (/opt/euroos/wt-mem2/crates/eurowallet)
+   Compiling euroca v0.1.0 (/opt/euroos/wt-mem2/crates/euroca)
+   Compiling ppv-lite86 v0.2.21
+   Compiling eurofuzz v0.1.0 (/opt/euroos/wt-mem2/crates/eurofuzz)
+   Compiling euromdns v0.1.0 (/opt/euroos/wt-mem2/crates/euromdns)
+   Compiling eurordp v0.1.0 (/opt/euroos/wt-mem2/crates/eurordp)
+   Compiling eurovpn v0.1.0 (/opt/euroos/wt-mem2/crates/eurovpn)
+   Compiling euroagent v0.1.0 (/opt/euroos/wt-mem2/crates/euroagent)
+   Compiling rand_chacha v0.3.1
+   Compiling eurorepro v0.1.0 (/opt/euroos/wt-mem2/crates/eurorepro)
+   Compiling rand v0.8.6
+   Compiling euroidm v0.1.0 (/opt/euroos/wt-mem2/crates/euroidm)
+   Compiling euroattest v0.1.0 (/opt/euroos/wt-mem2/crates/euroattest)
+   Compiling euroverity v0.1.0 (/opt/euroos/wt-mem2/crates/euroverity)
+   Compiling eurovault v0.1.0 (/opt/euroos/wt-mem2/crates/eurovault)
+   Compiling euronts v0.1.0 (/opt/euroos/wt-mem2/crates/euronts)
+   Compiling eurofde v0.1.0 (/opt/euroos/wt-mem2/crates/eurofde)
+   Compiling eurocoreutils v0.1.0 (/opt/euroos/wt-mem2/crates/eurocoreutils)
+   Compiling europack v0.1.0 (/opt/euroos/wt-mem2/crates/europack)
+   Compiling euroid v0.1.0 (/opt/euroos/wt-mem2/crates/euroid)
+warning: unused import: `ALLOW_ALL`
+ --> crates/euroid/src/model.rs:8:39
+  |
+8 |     Caps, GroupId, Timestamp, UserId, ALLOW_ALL, CAP_ALL, CAP_AGENT_SPAWN, CAP_AUDIT_READ, CAP_NET,
+  |                                       ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling euroaudit v0.1.0 (/opt/euroos/wt-mem2/crates/euroaudit)
+   Compiling eurowifi v0.1.0 (/opt/euroos/wt-mem2/crates/eurowifi)
+   Compiling eurosmb v0.1.0 (/opt/euroos/wt-mem2/crates/eurosmb)
+   Compiling euronfs v0.1.0 (/opt/euroos/wt-mem2/crates/euronfs)
+   Compiling euronotes v0.1.0 (/opt/euroos/wt-mem2/crates/euronotes)
+   Compiling eurocalc v0.1.0 (/opt/euroos/wt-mem2/crates/eurocalc)
+   Compiling eurocrash v0.1.0 (/opt/euroos/wt-mem2/crates/eurocrash)
+   Compiling eurocontacts v0.1.0 (/opt/euroos/wt-mem2/crates/eurocontacts)
+   Compiling euroaudio v0.1.0 (/opt/euroos/wt-mem2/crates/euroaudio)
+   Compiling eurontfs v0.1.0 (/opt/euroos/wt-mem2/crates/eurontfs)
+warning: `euroid` (lib) generated 1 warning (run `cargo fix --lib -p euroid` to apply 1 suggestion)
+   Compiling euromegaraid v0.1.0 (/opt/euroos/wt-mem2/crates/euromegaraid)
+   Compiling euroacpi v0.1.0 (/opt/euroos/wt-mem2/crates/euroacpi)
+   Compiling eurodisplay v0.1.0 (/opt/euroos/wt-mem2/crates/eurodisplay)
+   Compiling eurogpu v0.1.0 (/opt/euroos/wt-mem2/crates/eurogpu)
+   Compiling eurojs v0.1.0 (/opt/euroos/wt-mem2/crates/eurojs)
+   Compiling eurofsid v0.1.0 (/opt/euroos/wt-mem2/crates/eurofsid)
+   Compiling eurowl v0.1.0 (/opt/euroos/wt-mem2/crates/eurowl)
+   Compiling eurogdb v0.1.0 (/opt/euroos/wt-mem2/crates/eurogdb)
+   Compiling eurobcm5720 v0.1.0 (/opt/euroos/wt-mem2/crates/eurobcm5720)
+   Compiling euroclock v0.1.0 (/opt/euroos/wt-mem2/crates/euroclock)
+   Compiling eurovirtio v0.1.0 (/opt/euroos/wt-mem2/crates/eurovirtio)
+   Compiling eurosign v0.1.0 (/opt/euroos/wt-mem2/crates/eurosign)
+   Compiling euroreken v0.1.0 (/opt/euroos/wt-mem2/crates/euroreken)
+   Compiling euroweb v0.1.0 (/opt/euroos/wt-mem2/crates/euroweb)
+   Compiling eurocalendar v0.1.0 (/opt/euroos/wt-mem2/crates/eurocalendar)
+   Compiling euronvme v0.1.0 (/opt/euroos/wt-mem2/crates/euronvme)
+   Compiling eurosandbox v0.1.0 (/opt/euroos/wt-mem2/crates/eurosandbox)
+   Compiling euroobserve v0.1.0 (/opt/euroos/wt-mem2/crates/euroobserve)
+   Compiling eurofw v0.1.0 (/opt/euroos/wt-mem2/crates/eurofw)
+   Compiling euroarchive v0.1.0 (/opt/euroos/wt-mem2/crates/euroarchive)
+   Compiling eurofiles v0.1.0 (/opt/euroos/wt-mem2/crates/eurofiles)
+   Compiling euromail v0.1.0 (/opt/euroos/wt-mem2/crates/euromail)
+   Compiling eurosafe v0.1.0 (/opt/euroos/wt-mem2/crates/eurosafe)
+   Compiling euromm v0.1.0 (/opt/euroos/wt-mem2/crates/euromm)
+   Compiling europortal v0.1.0 (/opt/euroos/wt-mem2/crates/europortal)
+   Compiling europrefs v0.1.0 (/opt/euroos/wt-mem2/crates/europrefs)
+   Compiling eurogeo v0.1.0 (/opt/euroos/wt-mem2/crates/eurogeo)
+   Compiling euromusic v0.1.0 (/opt/euroos/wt-mem2/crates/euromusic)
+   Compiling eurofont v0.1.0 (/opt/euroos/wt-mem2/crates/eurofont)
+   Compiling euromime v0.1.0 (/opt/euroos/wt-mem2/crates/euromime)
+   Compiling eurowatchdog v0.1.0 (/opt/euroos/wt-mem2/crates/eurowatchdog)
+   Compiling euroupdate v0.1.0 (/opt/euroos/wt-mem2/crates/euroupdate)
+   Compiling eurokeymap v0.1.0 (/opt/euroos/wt-mem2/crates/eurokeymap)
+   Compiling eurodrv v0.1.0 (/opt/euroos/wt-mem2/crates/eurodrv)
+   Compiling euroclip v0.1.0 (/opt/euroos/wt-mem2/crates/euroclip)
+   Compiling eurojournal v0.1.0 (/opt/euroos/wt-mem2/crates/eurojournal)
+   Compiling eurodevice v0.1.0 (/opt/euroos/wt-mem2/crates/eurodevice)
+   Compiling eurohealth v0.1.0 (/opt/euroos/wt-mem2/crates/eurohealth)
+   Compiling euroshot v0.1.0 (/opt/euroos/wt-mem2/crates/euroshot)
+   Compiling euroe1000 v0.1.0 (/opt/euroos/wt-mem2/crates/euroe1000)
+warning: unused import: `super::*`
+   --> crates/eurotls/src/chain.rs:222:9
+    |
+222 |     use super::*;
+    |         ^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling eurofatfs v0.1.0 (/opt/euroos/wt-mem2/crates/eurofatfs)
+warning: `eurotls` (lib test) generated 1 warning (run `cargo fix --lib -p eurotls --tests` to apply 1 suggestion)
+   Compiling euroext v0.1.0 (/opt/euroos/wt-mem2/crates/euroext)
+   Compiling euroexfat v0.1.0 (/opt/euroos/wt-mem2/crates/euroexfat)
+warning: unused import: `FileSystem`
+   --> crates/eurofde/src/lib.rs:133:26
+    |
+133 |     use eurofs::{EuroFs, FileSystem, MemoryBlockDevice};
+    |                          ^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `corners` is never used
+ --> crates/euromedia/src/imgtests.rs:8:8
+  |
+8 |     fn corners(img:&Image)->(Rgba,Rgba){ (img.get(0,0).unwrap(), img.get(3,2).unwrap()) }
+  |        ^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `eurofde` (lib test) generated 1 warning (run `cargo fix --lib -p eurofde --tests` to apply 1 suggestion)
+warning: `euromedia` (lib test) generated 1 warning
+   Compiling euroipc v0.1.0 (/opt/euroos/wt-mem2/crates/euroipc)
+warning: `eurowasm` (lib test) generated 2 warnings (2 duplicates)
+   Compiling eurofdspace v0.1.0 (/opt/euroos/wt-mem2/crates/eurofdspace)
+warning: `eurofat` (lib test) generated 1 warning (1 duplicate)
+warning: function `write_registers_via_G` should have a snake case name
+   --> crates/eurogdb/src/lib.rs:458:8
+    |
+458 |     fn write_registers_via_G() {
+    |        ^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `write_registers_via_g`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `eurogdb` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.70s
+     Running unittests src/lib.rs (target/host/debug/deps/euroaccess-38128718e2e4d7cb)
+
+running 16 tests
+test keynav::tests::enter_toggles_checkbox ... ok
+test keynav::tests::tab_moves_and_announces ... ok
+test keynav::tests::arrows_adjust_slider ... ok
+test keynav::tests::escape_cancels ... ok
+test keynav::tests::disabled_button_does_not_activate ... ok
+test magnify::tests::blit_doubles_each_pixel ... ok
+test magnify::tests::source_rect_centers_and_clamps ... ok
+test tests::announcements_localised ... ok
+test tests::announce_focused_follows_focus ... ok
+test tests::focus_navigation_cycles ... ok
+test tests::only_focusable_in_order ... ok
+test tests::textfield_with_value ... ok
+test theme::tests::light_theme_body_text_meets_aa ... ok
+test theme::tests::high_contrast_theme_meets_aaa ... ok
+test theme::tests::wcag_reference_ratios ... ok
+test tests::screen_reader_announcements_nl ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroacpi-78ac559c32e6cbb2)
+
+running 10 tests
+test tests::fadt_rejects_wrong_signature ... ok
+test tests::checksum_detects_corruption ... ok
+test tests::rsdt_pointers ... ok
+test tests::select_cpus_bsp_not_first_in_madt ... ok
+test tests::fadt_power_fields ... ok
+test tests::parse_header_and_checksum ... ok
+test tests::select_cpus_caps_at_max_cpu ... ok
+test tests::xsdt_64bit_pointers ... ok
+test tests::select_cpus_skips_aliasing_sparse_ids ... ok
+test tests::select_cpus_contiguous_within_limit ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroagent-ebf74c6b665babb4)
+
+running 54 tests
+test anomaly::tests::allowed_call_resets_denial_streak ... ok
+test agentloop::tests::loop_runs_tool_then_answers ... ok
+test anomaly::tests::baseline_then_unseen_tool_drift ... ok
+test anomaly::tests::consecutive_denials_trigger_probing_alert ... ok
+test agentloop::tests::capability_denied_is_recorded ... ok
+test anomaly::tests::rate_spike_within_window ... ok
+test caps::tests::elevated_detection ... ok
+test anomaly::tests::old_calls_leave_the_window ... ok
+test caps::tests::unknown_cap_rejected ... ok
+test caps::tests::intersect_clamps ... ok
+test agentloop::tests::loop_truncates_at_step_limit ... ok
+test caps::tests::name_roundtrip ... ok
+test intent::tests::exact_trigger_wins ... ok
+test intent::tests::no_match_is_none ... ok
+test intent::tests::picks_highest_score ... ok
+test intent::tests::fuzzy_word_overlap ... ok
+test json::tests::string_escapes ... ok
+test json::tests::rejects_garbage ... ok
+test learn::tests::denied_fs_write_is_proposed_as_required ... ok
+test json::tests::roundtrip_object ... ok
+test intent::tests::partial_beats_nothing ... ok
+test llm::tests::parse_text_response ... ok
+test llm::tests::http_response_parsing ... ok
+test llm::tests::request_shape ... ok
+test llm::tests::parse_tool_call ... ok
+test manifest::tests::comment_in_string_preserved ... ok
+test mcp::tests::authorized_call_succeeds ... ok
+test llm::tests::http_request_framing ... ok
+test manifest::tests::rejects_missing_required ... ok
+test mcp::tests::grant_jit_ignores_non_elevated_caps ... ok
+test learn::tests::allowed_and_unknown_records_are_ignored_and_nothing_is_removed ... ok
+test manifest::tests::rejects_unknown_cap ... ok
+test mcp::tests::elevated_cap_requires_jit_grant_and_auto_revokes ... ok
+test learn::tests::elevated_exec_only_becomes_optional_and_denied_tools_stay_denied ... ok
+test mcp::tests::parse_error_handled ... ok
+test mcp::tests::missing_cap_denied ... ok
+test manifest::tests::to_toml_round_trips_and_newer_schema_is_refused ... ok
+test mcp::tests::unknown_tool ... ok
+test policy::tests::optional_needs_grant ... ok
+test manifest::tests::parse_valid ... ok
+test mcp::tests::audit_never_contains_the_secret_value ... ok
+test policy::tests::elevated_triggers_confirmation ... ok
+test policy::tests::policy_denies ... ok
+test policy::tests::user_clamp_drops ... ok
+test mcp::tests::tool_failure_reported ... ok
+test mcp::tests::list_filters_by_caps ... ok
+test bundle::tests::tampered_wasm_rejected ... ok
+test bundle::tests::valid_bundle_verifies ... ok
+test bundle::tests::tampered_manifest_rejected ... ok
+test registry::tests::install_and_list ... ok
+test bundle::tests::wrong_key_rejected ... ok
+test registry::tests::bad_signature_rejected ... ok
+test registry::tests::remove_works ... ok
+test registry::tests::publisher_hijack_blocked ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroaml-6dd59d14e5a233f5)
+
+running 11 tests
+test tests::battery_unknown_capacity_no_percent ... ok
+test tests::ac_adapter_online ... ok
+test tests::battery_status_decode_discharging ... ok
+test tests::buffer_and_string ... ok
+test tests::large_pkg_length_roundtrips ... ok
+test tests::method_returns_constant ... ok
+test tests::method_arithmetic_return ... ok
+test tests::method_returns_package ... ok
+test tests::scope_groups_objects ... ok
+test tests::name_integer ... ok
+test tests::unknown_name_is_none ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroarchive-e81b77d3845fcae0)
+
+running 6 tests
+test tests::checksum_detects_corruption ... ok
+test tests::modes_preserved ... ok
+test tests::empty_file_and_block_alignment ... ok
+test tests::roundtrip_files_and_dirs ... ok
+test tests::manifest_verification_hook ... ok
+test tests::octal_field_values ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroattest-cc14e48ae6b2a523)
+
+running 6 tests
+test tests::replay_with_old_nonce_rejected ... ok
+test tests::untrusted_pcr_state_rejected ... ok
+test tests::missing_expected_pcr_rejected ... ok
+test tests::tampered_signature_rejected ... ok
+test tests::fresh_quote_verifies ... ok
+test tests::wrong_ak_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroaudio-b4352d7da88ebedd)
+
+running 15 tests
+test router::tests::first_device_becomes_default_and_streams_follow_it ... ok
+test router::tests::per_stream_volume_and_mute ... ok
+test router::tests::master_volume_and_mute_apply_after_mixing ... ok
+test router::tests::two_streams_on_one_device_mix ... ok
+test tests::f32_conversion ... ok
+test router::tests::render_mixes_only_streams_on_that_device ... ok
+test tests::mix_clamps_loud_sum ... ok
+test tests::mix_sums_streams ... ok
+test tests::resample_up_and_down ... ok
+test tests::mix_respects_volume ... ok
+test tests::scale_clamps_on_overflow ... ok
+test router::tests::unplugging_the_default_reroutes_streams_and_default ... ok
+test tests::scale_half_volume ... ok
+test tests::scale_unity_is_identity ... ok
+test tests::format_conversions_roundtrip_u8 ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroaudit-374368c5e68a6ff8)
+
+running 6 tests
+test tests::deleting_an_entry_breaks_the_chain ... ok
+test tests::editing_an_entry_breaks_the_chain ... ok
+test tests::intact_chain_verifies ... ok
+test tests::query_filters_by_kind_and_time ... ok
+test tests::json_export_contains_entries ... ok
+test tests::rotation_carries_the_chain ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurobcm5720-a88e1f71c57e233a)
+
+running 22 tests
+test tests::layout_needs_an_aligned_big_enough_window ... ok
+test tests::a_new_instance_after_a_crash_starts_from_a_reset_chip ... ok
+test tests::init_identifies_resets_and_does_the_firmware_handshake ... ok
+test tests::interrupts_are_acknowledged_through_the_mailbox ... ok
+test tests::nvram_mac_reads_the_big_endian_words ... ok
+test tests::without_ape_firmware_no_ape_register_is_written ... ok
+test wire::tests::probe_and_loopback_reports_roundtrip ... ok
+test tests::a_full_standard_ring_makes_the_device_drop_not_overwrite ... ok
+test tests::lying_or_errored_return_descriptors_are_dropped_not_followed ... ok
+test tests::link_follows_the_phy ... ok
+test tests::the_wrong_chip_is_refused_before_anything_is_written ... ok
+test tests::stop_tells_the_firmware_and_the_ape ... ok
+test tests::the_mac_falls_back_to_nvram_then_registers ... ok
+test tests::raw_descriptors_reach_the_bus_address_they_name ... ok
+test tests::a_dead_send_engine_times_out ... ok
+test tests::phy_loopback_brings_every_frame_back_intact ... ok
+test tests::init_programs_rings_and_engines ... ok
+test tests::a_torn_producer_read_takes_no_phantom_entry ... ok
+test tests::mac_loopback_works_and_a_broken_path_is_reported_not_hidden ... ok
+test tests::transmit_puts_exact_bytes_on_the_wire_across_ring_wraps ... ok
+test tests::receive_returns_frames_in_order_and_recycles_across_both_rings ... ok
+test tests::a_silent_bootcode_or_a_busy_ape_fail_cleanly ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroca-6ec1407e419aa781)
+
+running 10 tests
+test tests::root_self_signed_verifies ... ok
+test tests::cert_serialization_roundtrip ... ok
+test tests::cert_store_roundtrips_on_disk ... ok
+test tests::fingerprint_stable_and_unique ... ok
+test tests::issued_leaf_verifies ... ok
+test tests::tampered_cert_rejected ... ok
+test tests::wrong_issuer_key_fails ... ok
+test tests::revocation ... ok
+test tests::expired_and_not_yet_valid ... ok
+test tests::three_level_chain_verifies ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurocalc-cb75b3854971d446)
+
+running 8 tests
+test tests::cycle_detection ... ok
+test tests::errors ... ok
+test tests::col_parse ... ok
+test tests::functions_and_ranges ... ok
+test tests::refs_and_arithmetic ... ok
+test tests::if_and_round ... ok
+test tests::nested_formula_cells ... ok
+test tests::audit_regressions ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurocalendar-ef1e2bf1b7959b5d)
+
+running 10 tests
+test tests::add_months_clamps_end_of_month ... ok
+test tests::civil_date_roundtrip ... ok
+test tests::calendar_on_day_sorted ... ok
+test tests::monthly_recurrence ... ok
+test tests::non_recurring_occurrence ... ok
+test tests::daily_recurrence_until ... ok
+test tests::next_after_picks_earliest ... ok
+test tests::reminders_fire_in_window ... ok
+test tests::weekday_and_week_start ... ok
+test tests::weekly_recurrence_with_count ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroclip-c514b471887501ba)
+
+running 7 tests
+test tests::pin_protects_from_expire_and_trim ... ok
+test tests::secret_heuristic_edges ... ok
+test tests::gdpr_only_pinned_persist ... ok
+test tests::secrets_excluded ... ok
+test tests::dedup_promotes_to_front ... ok
+test tests::copy_and_current ... ok
+test tests::search_and_clear ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroclock-625fd23cdd48c578)
+
+running 7 tests
+test tests::alarm_fires_when_crossed ... ok
+test tests::alarm_crosses_midnight ... ok
+test tests::formatting_12_24 ... ok
+test tests::time_of_day_with_offsets ... ok
+test tests::stopwatch_with_laps ... ok
+test tests::world_clock_zones ... ok
+test tests::timer_countdown_pause_resume ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurocontacts-be122b8336adb4a3)
+
+running 6 tests
+test tests::parse_multiple_and_sort ... ok
+test tests::escaping_special_chars ... ok
+test tests::roundtrip ... ok
+test tests::fn_derived_from_n_when_missing ... ok
+test tests::parse_single ... ok
+test tests::search_and_groups ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurocoreutils-55372e21088dec50)
+
+running 45 tests
+test args::tests::parse_flags_options_positional ... ok
+test checksum::tests::sha256_known_vector ... ok
+test args::tests::attached_value ... ok
+test checksum::tests::b2sum_format ... ok
+test checksum::tests::sha512_known_vector ... ok
+test checksum::tests::sha1sum_format ... ok
+test compare::tests::comm_default ... ok
+test compare::tests::join_cartesian ... ok
+test checksum::tests::sha224_384_lengths ... ok
+test compare::tests::join_default ... ok
+test compare::tests::split_bytes_and_prefix ... ok
+test compare::tests::comm_suppress ... ok
+test checksum::tests::md5sum_format ... ok
+test compare::tests::join_fields_and_delim ... ok
+test compare::tests::split_lines ... ok
+test compare::tests::suffix_sequence ... ok
+test compute::tests::expr_arith ... ok
+test compute::tests::factor_primes ... ok
+test compute::tests::numfmt_iec ... ok
+test compute::tests::printf_recycles_args ... ok
+test compute::tests::printf_basic ... ok
+test compute::tests::test_strings_and_ints ... ok
+test find::tests::glob ... ok
+test find::tests::matching ... ok
+test find::tests::opt_parsing ... ok
+test encoding::tests::base32_roundtrip_and_vectors ... ok
+test hashes::tests::blake2b512_multiblock ... ok
+test encoding::tests::base64_roundtrip_and_vectors ... ok
+test hashes::tests::blake2b512_vectors ... ok
+test hashes::tests::sha1_vectors ... ok
+test tests::basename_dirname ... ok
+test hashes::tests::md5_vectors ... ok
+test text::tests::grep_match ... ok
+test tests::echo_basic ... ok
+test text::tests::sort_uniq ... ok
+test text::tests::tac_rev_nl ... ok
+test tests::seq_forms ... ok
+test text::tests::fold_w ... ok
+test text::tests::cut_tr ... ok
+test text::tests::wc_counts ... ok
+test text::tests::head_tail ... ok
+test text::tests::shuf_e_and_i ... ok
+test encoding::tests::cksum_posix_vector ... ok
+test text::tests::shuf_is_deterministic_permutation ... ok
+test text::tests::shuf_n_limit ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurocrash-e04eb168be74ebf5)
+
+running 3 tests
+test tests::newest_by_seq ... ok
+test tests::rejects_bad_magic_and_checksum ... ok
+test tests::roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodevice-5f50914abb61731f)
+
+running 6 tests
+test tests::hotplug_queue_fifo ... ok
+test tests::registry_binds_matching_drivers ... ok
+test tests::set_parent_reparents ... ok
+test tests::unbind_returns_to_unbound ... ok
+test tests::tree_add_and_parent ... ok
+test tests::unmatched_device_stays_unbound ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodisplay-9277cbc6d151117c)
+
+running 12 tests
+test server::tests::destroy_removes_window_and_meta ... ok
+test server::tests::unmapped_surface_is_not_a_window ... ok
+test server::tests::full_open_produces_one_window ... ok
+test server::tests::partial_trailing_frame_is_left_for_later ... ok
+test server::tests::frame_roundtrip_all_kinds ... ok
+test server::tests::untitled_surface_gets_default_title ... ok
+test server::tests::zorder_two_windows_topmost_last ... ok
+test tests::damage_tracking ... ok
+test tests::input_routing ... ok
+test tests::surface_lifecycle ... ok
+test tests::commit_raises_to_front_and_focuses ... ok
+test tests::wire_roundtrip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodns-99a89edfe71ffea4)
+
+running 5 tests
+test tests::query_build_aaaa ... ok
+test tests::ds_links_key_to_parent ... ok
+test tests::valid_rrsig_verifies ... ok
+test tests::tampered_record_fails ... ok
+test tests::wrong_key_and_expiry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodoc-1a824324b9de9c2d)
+
+running 6 tests
+test tests::deck_text ... ok
+test tests::sheet_text ... ok
+test tests::sheet_cell_overwrite ... ok
+test tests::style_inheritance ... ok
+test tests::style_cycle_safe ... ok
+test tests::writer_text_and_stats ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodocio-8c399823bd552794)
+
+running 14 tests
+test html::tests::escapes_text ... ok
+test html::tests::headings_and_runs ... ok
+test odf::tests::parses_headings_and_spans ... ok
+test ooxml::tests::escapes_special_chars ... ok
+test ooxml::tests::write_then_parse_roundtrip ... ok
+test ooxml::tests::parses_paragraphs_runs_styles ... ok
+test tests::docx_to_html_pipeline ... ok
+test tests::ooxml_and_odf_agree_on_text ... ok
+test xml::tests::entities ... ok
+test xml::tests::basic_events ... ok
+test xml::tests::self_closing_and_decl ... ok
+test zip::tests::corrupt_entry_fails_crc ... ok
+test zip::tests::write_then_read_roundtrip_with_deflate ... ok
+test docx::tests::save_open_roundtrip ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/interop.rs (target/host/debug/deps/interop-3d2ae0c0909733e1)
+
+running 2 tests
+test opens_a_real_docx_from_a_real_tool ... ok
+test our_saved_docx_is_read_by_real_tools ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurodrv-fc990464b79e88c2)
+
+running 26 tests
+test abi::tests::short_buffers_are_safe ... ok
+test abi::tests::driver_call_range ... ok
+test grant::tests::a_high_bar_is_seen_at_the_high_mmio_va ... ok
+test grant::tests::bar_probe_decoding ... ok
+test grant::tests::sid_roundtrip ... ok
+test proto::tests::block_data_must_be_whole_units_within_one_chunk ... ok
+test grant::tests::a_good_grant_builds_and_answers ... ok
+test abi::tests::info_roundtrip ... ok
+test grant::tests::a_bar_over_ram_is_refused ... ok
+test proto::tests::frames_out_of_range_are_refused_both_ways ... ok
+test grant::tests::bad_windows_are_refused ... ok
+test proto::tests::no_room_is_an_error_not_a_truncation ... ok
+test proto::tests::strict_lengths_and_tags ... ok
+test grant::tests::window_arithmetic_edges ... ok
+test proto::tests::block_messages_roundtrip ... ok
+test proto::tests::every_message_roundtrips ... ok
+test restart::tests::a_crash_loop_gives_up ... ok
+test restart::tests::backoff_is_capped_and_never_overflows ... ok
+test restart::tests::a_disk_driver_gets_fewer_chances_than_a_nic ... ok
+test restart::tests::first_death_restarts_immediately_then_backs_off ... ok
+test restart::tests::old_deaths_age_out_of_the_window ... ok
+test vectors::tests::a_taken_vector_is_refused_to_another_owner ... ok
+test vectors::tests::alloc_hands_out_distinct_vectors_then_runs_out ... ok
+test vectors::tests::pool_bounds ... ok
+test vectors::tests::only_the_owner_releases ... ok
+test vectors::tests::an_owner_keeps_its_vector ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroe1000-ebb25ac264e70e8d)
+
+running 12 tests
+test tests::a_full_ring_makes_the_device_drop_not_overwrite ... ok
+test tests::layout_needs_an_aligned_big_enough_window ... ok
+test tests::a_reinit_after_a_crash_starts_from_a_clean_device ... ok
+test tests::init_resets_reads_the_mac_and_programs_the_rings ... ok
+test tests::msix_init_routes_causes_and_unmasks_receive ... ok
+test tests::oversize_or_lying_lengths_are_dropped_and_counted ... ok
+test tests::raw_descriptors_reach_the_bus_address_they_name ... ok
+test tests::receive_returns_frames_in_order_and_recycles_across_wraps ... ok
+test tests::transmit_puts_exact_bytes_on_the_wire_and_wraps ... ok
+test tests::a_descriptor_written_back_during_the_read_is_not_torn ... ok
+test tests::init_fails_cleanly_without_mac_or_reset ... ok
+test tests::transmit_refuses_bad_sizes_and_times_out_on_a_dead_device ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroentropy-77b7d0f714afaf46)
+
+running 13 tests
+test tests::hmac_rfc4231_case2 ... ok
+test tests::jitter_estimate_is_conservative ... ok
+test seed_tests::rdrand_alone_is_credited_less_than_rdseed ... ok
+test seed_tests::cpu_words_and_jitter_are_mixed_not_swapped ... ok
+test seed_tests::jitter_is_gathered_even_when_the_tpm_alone_meets_the_threshold ... ok
+test tests::pool_blocks_until_threshold ... ok
+test seed_tests::the_estimator_gives_a_constant_series_nothing ... ok
+test tests::pool_deterministic_given_same_noise ... ok
+test seed_tests::a_long_wait_does_not_grow_the_staged_material ... ok
+test seed_tests::a_quiet_start_is_waited_out ... ok
+test seed_tests::no_noise_ends_at_the_bound_and_the_pool_stays_closed ... ok
+test seed_tests::a_later_attempt_seeds_a_pool_that_gave_up ... ok
+test seed_tests::the_cpu_sources_alone_never_open_the_pool ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/kat.rs (target/host/debug/deps/kat-d23b9f37b0077ed0)
+
+running 1 test
+test nist_acvp_hmac_drbg_sha256_kat ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroexfat-ce168fc52dcf7b6d)
+
+running 10 tests
+test tests::overwrite_existing_file ... ok
+test tests::create_dir_then_write_inside_and_list ... ok
+test tests::reads_files_from_real_exfat_image ... ok
+test tests::metadata_and_exists ... ok
+test tests::remove_file_then_gone ... ok
+test tests::existing_data_survives_writes ... ok
+test tests::write_small_file_roundtrip ... ok
+test tests::lists_directories_and_long_names ... ok
+test tests::overwrite_frees_old_chain_no_leak ... ok
+test tests::write_multicluster_file_roundtrip ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroext-6b837d5cb2805a42)
+
+running 11 tests
+test tests::exists_basic ... ok
+test tests::create_dir_and_nested_file ... ok
+test tests::overwrite_existing_classic_file ... ok
+test tests::overwriting_extent_file_is_refused ... ok
+test tests::many_files_then_reread_all ... ok
+test tests::dir_insert_failure_rolls_back_no_orphan ... ok
+test tests::write_new_small_file_roundtrips ... ok
+test tests::remove_file_makes_it_gone ... ok
+test tests::write_large_file_forces_single_indirect ... ok
+test tests::lists_directories_and_long_names ... ok
+test tests::reads_files_from_real_ext4_image ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofat-70289d213a62a2a0)
+
+running 10 tests
+test tests::short_and_long_names ... ok
+test tests::empty_file_has_no_cluster ... ok
+test sectored::tests::sectored_read_matches_written_config ... ok
+test tests::roundtrip_esp_layout ... ok
+test disk::tests::signatures_and_slot_a_land_on_disk ... ok
+test sectored::tests::esp_first_lba_offset_is_honoured ... ok
+test sectored::tests::inplace_update_roundtrips_via_sectors ... ok
+test disk::tests::assembles_bootable_disk ... ok
+test disk::tests::oversized_esp_content_is_refused ... ok
+test disk::tests::streaming_matches_inmemory ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofatfs-0bbd690c9f52fe65)
+
+running 12 tests
+test tests::rejects_non_fat_device ... ok
+test loadtests::many_files_spanning_root_dir_clusters ... ok
+test tests::remove_file_and_dir ... ok
+test loadtests::churn_small_volume_roundtrip ... ok
+test tests::reads_root_and_nested_files ... ok
+test tests::lists_directories_with_kinds ... ok
+test tests::long_file_names_round_trip ... ok
+test tests::format_fat32_then_mount_and_use ... ok
+test tests::create_dir_and_nested_write ... ok
+test tests::write_long_name_round_trip ... ok
+test tests::write_create_and_read_back_cross_validated ... ok
+test tests::overwrite_grow_then_shrink ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofde-2cd8e623ceae3149)
+
+running 3 tests
+test tests::block_roundtrips_and_is_position_dependent ... ok
+test tests::disk_stores_ciphertext_not_plaintext ... ok
+test tests::eurofs_mounts_on_encrypted_volume ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofdspace-dbc476252d634ebf)
+
+running 20 tests
+test proc::tests::a_fork_copy_is_independent ... ok
+test proc::tests::a_wiped_space_forgets_its_keys ... ok
+test proc::tests::cloexec_belongs_to_the_descriptor ... ok
+test proc::tests::dup2_replaces_and_reports_what_was_there ... ok
+test proc::tests::close_range_closes_a_range_of_numbers ... ok
+test proc::tests::exit_hands_back_everything ... ok
+test proc::tests::dupfd_starts_at_its_argument ... ok
+test proc::tests::the_last_reference_closes ... ok
+test proc::tests::numbers_are_lowest_first_and_reused ... ok
+test tests::a_guard_dereferences_to_its_space ... ok
+test proc::tests::the_limit_is_emfile ... ok
+test tests::a_launch_reset_of_root_leaves_the_other_spaces_alone ... ok
+test tests::any_looks_in_every_space ... ok
+test tests::a_space_without_a_table_falls_back_to_orphan_then_root ... ok
+test tests::install_remove_and_reuse_of_a_space_number ... ok
+test tests::flags_default_to_blocking_read_write_and_are_per_space ... ok
+test tests::registry_counts_references ... ok
+test tests::lists_are_per_space_and_cost_nothing_until_written ... ok
+test tests::registry_refuses_when_full ... ok
+test proc::tests::four_thousand_descriptors ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofiles-bd7053bcfd65641a)
+
+running 8 tests
+test tests::extensions ... ok
+test tests::badges_and_counts ... ok
+test tests::human_sizes ... ok
+test tests::join_basename_parent ... ok
+test tests::filter_query_and_hidden ... ok
+test tests::normalize_paths ... ok
+test tests::sort_by_size_desc ... ok
+test tests::sort_dirs_first_then_name ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroflate-86bdc84dc0ec8974)
+
+running 6 tests
+test tests::crc32_known_vector ... ok
+test tests::adler32_known_vector ... ok
+test tests::zlib_detects_corrupt_checksum ... ok
+test tests::zlib_wrapper_roundtrip_with_adler ... ok
+test tests::deflate_inflate_roundtrip ... ok
+test inflate::cap_tests::a_single_block_is_stopped_at_the_cap ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+
+     Running tests/kat.rs (target/host/debug/deps/kat-d7d6754f32505965)
+
+running 2 tests
+test inflate_decodes_real_zlib_streams ... ok
+test deflate_output_read_by_real_zlib ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofont-c26326bbaaf945d8)
+
+running 5 tests
+test tests::missing_tables_are_tolerated ... ok
+test tests::utf16_name_decoding ... ok
+test tests::build_and_parse_roundtrip ... ok
+test tests::rejects_non_font ... ok
+test tests::truncated_font_no_panic ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofs-40e8ea1a889cd0b9)
+
+running 117 tests
+test badblocks::tests::distinct_bad_blocks_get_distinct_spares ... ok
+test badblocks::tests::deserialize_rejects_corruption ... ok
+test badblocks::tests::mark_bad_is_idempotent ... ok
+test badblocks::tests::pool_exhaustion_returns_none ... ok
+test badblocks::tests::mark_bad_remaps_to_spare ... ok
+test badblocks::tests::translate_passthrough_when_healthy ... ok
+test badblocks::tests::serialize_roundtrip ... ok
+test block::tests::out_of_bounds_geweigerd ... ok
+test block::tests::flush_wordt_geteld ... ok
+test block::tests::verkeerde_buffergrootte_geweigerd ... ok
+test bounded::tests::budget_is_a_share_of_the_free_heap_capped_by_the_app ... ok
+test block::tests::roundtrip_blok ... ok
+test bounded::tests::message_uses_readable_units ... ok
+test bounded::tests::missing_file_and_directory_keep_their_fs_error ... ok
+test bounded::tests::file_over_the_limit_is_refused_before_reading ... ok
+test bounded::tests::small_file_is_read ... ok
+test cache::tests::block_device_impl_is_transparent ... ok
+test cache::tests::hit_and_miss_counts ... ok
+test cache::tests::eviction_keeps_correctness ... ok
+test cache::tests::eurofs_mounts_through_cache ... ok
+test cache::tests::write_through_persists_and_caches ... ok
+test disk::tests::inode_met_te_veel_extents_is_corruptie ... ok
+test checksum::tests::gevoelig_voor_wijziging ... ok
+test disk::tests::inode_checksum_detecteert_corruptie ... ok
+test disk::tests::format_en_root_leeg ... ok
+test disk::tests::l1_append_only_alleen_uitbreiden ... ok
+test disk::tests::legacy_uid0_inodes_read_as_system ... ok
+test disk::tests::l1_vlaggen_overleven_remount ... ok
+test disk::tests::groot_bestand_via_extents ... ok
+test checksum::tests::deterministisch ... ok
+test disk::tests::buffer_for_refuses_what_cannot_be_allocated ... ok
+test disk::tests::crash_voor_checkpoint_behoudt_oude_staat ... ok
+test checksum::tests::lege_input_is_geldig ... ok
+test disk::tests::data_checksum_overleeft_remount ... ok
+test disk::tests::l1_immutable_blokkeert_wijzigingen ... ok
+test disk::tests::mount_heelt_gedegradeerd_slot_automatisch ... ok
+test disk::tests::chmod_gating_and_persistence ... ok
+test disk::tests::mtime_loopt_mee_met_de_klok ... ok
+test disk::tests::mappen_en_nesting ... ok
+test disk::tests::overwrite_keeps_owner ... ok
+test disk::tests::mtime_en_mode_overleven_remount ... ok
+test disk::tests::mtime_en_mode_bij_aanmaak ... ok
+test disk::tests::overschrijven_cow ... ok
+test disk::tests::chown_transfers_usage_and_enforces_target_quota ... ok
+test disk::tests::persistentie_na_remount ... ok
+test disk::tests::data_path_scrub_detecteert_bitrot_in_datablok ... ok
+test cache::tests::concurrent_readers_are_consistent ... ok
+test disk::tests::quota_set_rejects_uid0_and_zero_removes ... ok
+test disk::tests::overloop_veilige_extent_blijft_geldig ... ok
+test disk::tests::repair_kan_niet_helen_bij_twee_corrupte_slots ... ok
+test disk::tests::quota_enforced_and_credited_on_delete ... ok
+test disk::tests::repair_heelt_gedegradeerd_backup_slot ... ok
+test disk::tests::path_cache_invalidates_on_remove_and_rename ... ok
+test disk::tests::rename_bestand_zelfde_map ... ok
+test disk::tests::remove_dir_lege_map ... ok
+test disk::tests::rename_map_met_inhoud ... ok
+test disk::tests::rename_verplaatst_naar_andere_map ... ok
+test disk::tests::repair_heelt_primair_slot_uit_backup ... ok
+test disk::tests::quota_limits_persist_and_usage_rebuilt_on_mount ... ok
+test disk::tests::snap_overleeft_remount ... ok
+test disk::tests::rename_vervangt_bestaand_bestand ... ok
+test disk::tests::symlink_create_readlink_and_follow ... ok
+test disk::tests::rename_weigert_map_overschrijven_en_lus ... ok
+test disk::tests::schrijf_lees_klein_bestand ... ok
+test disk::tests::rename_overleeft_remount ... ok
+test disk::tests::snap_create_modify_rollback ... ok
+test disk::tests::snap_list_en_delete_gc ... ok
+test disk::tests::remove_dir_weigert_niet_leeg_bestand_en_root ... ok
+test disk::tests::symlink_survives_remount ... ok
+test disk::tests::symlink_relative_target_and_intermediate_dir ... ok
+test disk::tests::trim_discards_freed_cow_blocks ... ok
+test disk::tests::uid_owner_persists_across_remount ... ok
+test path::tests::normalize_idempotent_en_absoluut ... ok
+test disk::tests::verwijderen ... ok
+test disk::tests::unlink_removes_symlink_not_target ... ok
+test disk::tests::symlink_loop_is_bounded ... ok
+test disk::tests::rwx_enforcement_matrix ... ok
+test path::tests::filename_van_diverse_paden ... ok
+test path::tests::join_voegt_correct_samen ... ok
+test path::tests::parent_van_diverse_paden ... ok
+test disk::tests::snap_pint_grote_bestand_blokken ... ok
+test path::tests::split_negeert_lege_componenten ... ok
+test ramdisk::tests::nospace_bij_overschrijding ... ok
+test ramdisk::tests::fouten_op_rare_paden ... ok
+test disk::tests::versioning_keeps_history_and_restores ... ok
+test ramdisk::tests::schrijf_en_lees ... ok
+test ramdisk::tests::overschrijven_update_ruimte ... ok
+test ramdisk::tests::populate_maakt_parents ... ok
+test ramdisk::tests::verwijderen_geeft_ruimte_terug ... ok
+test ramdisk::tests::root_bestaat_altijd ... ok
+test shared::tests::clones_share_one_table ... ok
+test ramdisk::tests::lijst_directory ... ok
+test ramdisk::tests::write_zonder_parent_faalt ... ok
+test shared::tests::cross_mount_rename_is_exdev_same_mount_works ... ok
+test disk::tests::write_through_symlink_writes_target_not_corrupt ... ok
+test shared::tests::umount_df_and_dynamic_mount ... ok
+test superblock::tests::precies_512_bytes ... ok
+test shared::tests::routes_like_the_plain_vfs ... ok
+test superblock::tests::valt_terug_op_backup_bij_corrupt_primair ... ok
+test vfs::tests::cross_mount_rename_is_exdev ... ok
+test superblock::tests::beide_kapot_geeft_corruption ... ok
+test superblock::tests::checksum_detecteert_corruptie ... ok
+test superblock::tests::roundtrip_bytes ... ok
+test vfs::tests::routes_to_longest_prefix_mount ... ok
+test vfs::tests::mount_root_itself_and_strip ... ok
+test superblock::tests::ab_torn_write_valt_terug_op_vorige_generatie ... ok
+test vfs::tests::umount_and_df ... ok
+test superblock::tests::format_en_mount_via_device ... ok
+test disk::tests::versioning_inherits_from_directory_and_rotates ... ok
+test faulty::tests::torn_superblock_write_falls_back_to_previous_generation ... ok
+test shared::tests::a_busy_mount_does_not_block_another_mount ... ok
+test faulty::tests::crash_at_every_write_point_keeps_a_consistent_checkpoint ... ok
+test shared::tests::parallel_io_on_separate_mounts_is_isolated_and_exact ... ok
+test faulty::tests::heavy_io_load_stays_consistent ... ok
+test disk::tests::removed_objects_leave_no_extents_behind ... ok
+test shared::tests::mount_churn_during_io_is_safe ... ok
+test shared::tests::parallel_io_on_one_mount_is_serialised ... ok
+
+test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofsid-44c004f4a269da14)
+
+running 4 tests
+test tests::identifies_real_ntfs ... ok
+test tests::identifies_real_xfs ... ok
+test tests::identifies_real_btrfs ... ok
+test tests::unknown_is_unknown ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofuzz-cefd680043d73c23)
+
+running 2 tests
+test tests::bundle_roundtrip_is_stable ... ok
+test tests::parsers_never_panic_on_random_input ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.42s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurofw-2852e9bf7beb0305)
+
+running 4 tests
+test tests::cidr ... ok
+test tests::proto_from_ip ... ok
+test tests::default_deny_with_allowlist ... ok
+test tests::first_match_wins_and_counters ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurogdb-7c7cb8204d604a94)
+
+running 8 tests
+test tests::frame_unframe_roundtrip_and_checksum ... ok
+test tests::queries_and_detach ... ok
+test tests::continue_and_step_carry_stop_reply ... ok
+test tests::halt_reason_is_sigtrap ... ok
+test tests::read_and_write_memory ... ok
+test tests::write_registers_via_G ... ok
+test tests::single_register_read_write ... ok
+test tests::read_registers_roundtrips_through_g_packet ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurogeo-3f877cb58fa29941)
+
+running 5 tests
+test tests::russia_and_kp ... ok
+test tests::parse_cidr_rejects_garbage ... ok
+test tests::china_block_detected ... ok
+test tests::non_geoblocked_is_none ... ok
+test tests::loaded_feed_extends_and_wins_by_prefix ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurogpu-e533fe0e3ea9d8b4)
+
+running 6 tests
+test tests::attach_backing_carries_addr ... ok
+test tests::error_response_not_ok ... ok
+test tests::scanout_and_flush_rects ... ok
+test tests::header_encodes_cmd_type ... ok
+test tests::create_2d_layout ... ok
+test tests::ok_and_display_info_parse ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurohealth-96f99f1fa875ac97)
+
+running 4 tests
+test tests::worn_disk_is_warning ... ok
+test tests::failing_disk ... ok
+test tests::overall_report ... ok
+test tests::parse_healthy ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroid-9c4318c8fa5cdbb7)
+
+running 29 tests
+test audit::tests::intact_chain_verifies ... ok
+test audit::tests::tampering_a_past_entry_breaks_the_chain ... ok
+test model::tests::duplicate_username_rejected ... ok
+test model::tests::effective_caps_union_of_user_and_groups ... ok
+test model::tests::soft_delete_keeps_record ... ok
+test model::tests::next_uid_ranges ... ok
+test audit::tests::tampering_body_and_hash_still_breaks_link ... ok
+test audit::tests::line_renders_event_fields ... ok
+test cred::tests::locked_record_never_verifies ... ok
+test audit::tests::filter_by_event ... ok
+test model::tests::wheel_grants_all_but_policy_can_deny ... ok
+test persist::tests::bad_header_rejected ... ok
+test policy::tests::rejects_weak_accepts_strong ... ok
+test argon2::tests::argon2id_rfc9106_vector ... ok
+test policy::tests::username_rules ... ok
+test persist::tests::decode_hash_handles_phc_and_empty ... ok
+test argon2::tests::blake2b_abc ... ok
+test policy::tests::max_length_dos_guard ... ok
+test persist::tests::corrupt_line_rejected_not_skipped ... ok
+test persist::tests::roundtrip_preserves_all_fields_and_verifies_password ... ok
+test cred::tests::encoding_is_self_describing ... ok
+test cred::tests::hash_verify_roundtrip ... ok
+test persist::tests::roundtrip_verifies_installer_style_record ... ok
+test auth::tests::correct_password_logs_in ... ok
+test auth::tests::deleted_user_treated_as_unknown ... ok
+test auth::tests::timing_unknown_user_matches_wrong_password ... ok
+test cred::tests::history_blocks_reuse ... ok
+test auth::tests::wrong_password_and_unknown_user_are_indistinguishable ... ok
+test auth::tests::five_failures_lock_the_account ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroidm-e0d90ffa9362925f)
+
+running 6 tests
+test tests::unknown_user_no_token ... ok
+test tests::group_to_caps ... ok
+test tests::token_roundtrip ... ok
+test tests::expired_token_rejected ... ok
+test tests::tampered_token_rejected ... ok
+test tests::wrong_issuer_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroinstall-bd36f015c22ebc11)
+
+running 8 tests
+test tests::no_fde_skips_enrol ... ok
+test tests::partition_layout_fits_disk ... ok
+test tests::plan_disk_order ... ok
+test tests::plan_live_skips_disk ... ok
+test tests::rejects_bad_username_and_locale ... ok
+test tests::rejects_small_disk ... ok
+test tests::rejects_empty_password_for_disk_install ... ok
+test tests::validates_good_config ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroipc-1e906e28b348f257)
+
+running 9 tests
+test tests::audit_keeps_the_last_events_in_order ... ok
+test tests::audit_ring_wraps_without_losing_recent_events ... ok
+test tests::restricted_to_nobody_until_set ... ok
+test tests::register_send_recv_roundtrip ... ok
+test tests::restricted_ports_bounded_queues_take_and_unregister ... ok
+test tests::audit_merges_all_cores_in_time_order ... ok
+test tests::audit_reader_concurrent_with_writers_sees_only_whole_records ... ok
+test tests::parallel_pairs_on_separate_channels ... ok
+test tests::many_senders_one_port_while_registering ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurojournal-c5fe9111bd0d5442)
+
+running 6 tests
+test tests::bounded_ring_drops_oldest_and_counts ... ok
+test tests::decode_rejects_bad_magic ... ok
+test tests::decode_respects_capacity_keeping_newest ... ok
+test tests::json_export ... ok
+test tests::query_by_severity_and_facility ... ok
+test tests::encode_decode_roundtrip ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurojs-c08186734c977f29)
+
+running 22 tests
+test page_tests::document_write_and_console_captured ... ok
+test tests::realistic_program ... ok
+test tests::equality_semantics ... ok
+test tests::closures ... ok
+test tests::console_log_capture ... ok
+test tests::arrays ... ok
+test tests::arithmetic_precedence ... ok
+test tests::math_builtins ... ok
+test tests::functions_and_recursion ... ok
+test tests::object_methods_and_this_free ... ok
+test tests::errors_are_reported ... ok
+test tests::control_flow ... ok
+test tests::arrow_functions ... ok
+test tests::logical_short_circuit ... ok
+test tests::strings_concat_and_methods ... ok
+test tests::objects ... ok
+test tests::variables_and_assignment ... ok
+test tests::robust_infinite_recursion_no_overflow ... ok
+test tests::robust_legit_deep_recursion_still_works ... ok
+test tests::robust_legit_long_loop_still_works ... ok
+test tests::robust_infinite_while_is_bounded ... ok
+test tests::robust_infinite_for_is_bounded ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.42s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurokeymap-cfeffb4fbf0d8ff5)
+
+running 15 tests
+test tests::altgr_french_azerty ... ok
+test tests::altgr_belgian_azerty ... ok
+test tests::altgr_german_qwertz ... ok
+test tests::belgian_azerty_punctuation ... ok
+test tests::azerty_digit_row_needs_shift ... ok
+test tests::azerty_letter_transposition ... ok
+test tests::altgr_never_gives_the_base_character ... ok
+test tests::belgian_right_hand_keys ... ok
+test tests::control_keys_layout_independent ... ok
+test tests::french_digit_row_and_right_hand_keys ... ok
+test tests::iso_key_left_of_the_bottom_row ... ok
+test tests::parse_and_tags ... ok
+test tests::qwerty_baseline ... ok
+test tests::qwertz_swaps_y_and_z ... ok
+test tests::german_punctuation ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurolocale-ce06e9b90191dd2f)
+
+running 31 tests
+test collation::tests::case_insensitive_primary ... ok
+test collation::tests::diacritic_folds_near_base ... ok
+test currency::tests::eurozone_symbols ... ok
+test currency::tests::placement_and_separators ... ok
+test collation::tests::spanish_enye_after_n ... ok
+test datefmt::tests::day_of_week_is_correct ... ok
+test datefmt::tests::long_form_now_uses_names_for_every_language ... ok
+test datefmt::tests::long_forms ... ok
+test datefmt::tests::all_24_languages_have_month_and_weekday_names ... ok
+test datefmt::tests::short_forms ... ok
+test lang::tests::all_24_distinct_codes ... ok
+test lang::tests::date_patterns ... ok
+test collation::tests::german_umlaut_as_base ... ok
+test collation::tests::swedish_aa_after_z ... ok
+test lang::tests::parse_tags ... ok
+test currency::tests::non_euro_currencies ... ok
+test collation::tests::czech_c_hacek_after_c ... ok
+test datefmt::tests::cldr_spot_checks_for_the_new_languages ... ok
+test lang::tests::separators_make_sense ... ok
+test number::tests::extremes ... ok
+test number::tests::fixed_point ... ok
+test number::tests::integers ... ok
+test plural::tests::czech_west_slavic ... ok
+test plural::tests::french_zero_is_one ... ok
+test plural::tests::croatian ... ok
+test plural::tests::english_one_other ... ok
+test plural::tests::polish ... ok
+test plural::tests::latvian_has_zero ... ok
+test plural::tests::slovenian_dual ... ok
+test tests::all_24 ... ok
+test tests::locale_facade ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurolock-272194f5ffc97de9)
+
+running 24 tests
+test sync::tests::irq_mode_disables_interrupts_while_held_and_restores ... ok
+test sync::tests::irq_mode_nesting_restores_only_at_the_outermost ... ok
+test sync::tests::order_violation_is_reported_before_waiting ... ok
+test sync::tests::plain_mode_is_not_order_checked ... ok
+test sync::tests::task_mode_leaves_interrupts_alone ... ok
+test tests::classic_ab_ba_deadlock_is_caught ... ok
+test tests::hierarchy_is_a_strict_total_order ... ok
+test tests::fine_grained_classes_sit_inside_their_subsystem ... ok
+test tests::ascending_acquisition_is_allowed ... ok
+test tests::class_index_matches_table_position ... ok
+test sync::tests::try_lock_never_reports_an_inversion_and_counts_failures ... ok
+test tests::descending_acquisition_is_flagged ... ok
+test tests::hold_times_sum_and_max ... ok
+test tests::reacquiring_same_class_is_flagged ... ok
+test tests::ranking_puts_the_costliest_first ... ok
+test tests::push_unchecked_keeps_release_balanced_after_an_inversion ... ok
+test tests::release_middle_then_continue ... ok
+test tests::stats_count_contention ... ok
+test tests::stats_since_and_add ... ok
+test tests::two_instances_of_one_class_may_not_nest ... ok
+test sync::tests::rwlock_readers_share_and_writer_excludes ... ok
+test tests::stats_are_exact_under_real_threads ... ok
+test sync::tests::mutex_is_exclusive_and_counts_contention_under_threads ... ok
+test sync::tests::readmostly_writes_reach_every_replica_and_reads_stay_consistent ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.95s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromail-1e0a93b8c8514707)
+
+running 7 tests
+test tests::address_list_parsing ... ok
+test tests::headers_unfold ... ok
+test tests::parse_multipart_with_attachment ... ok
+test tests::parse_simple_message ... ok
+test tests::base64_roundtrip_known ... ok
+test tests::quoted_printable_decode_basics ... ok
+test tests::rfc2047_header_decode ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromdns-9809fe06850045d8)
+
+running 4 tests
+test tests::local_detection ... ok
+test tests::query_has_qname_and_type ... ok
+test tests::answers_own_name_only ... ok
+test tests::service_discovery_ptr ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromedia-b315f41bdbafe0ed)
+
+running 33 tests
+test imgtests::bmp24 ... ok
+test imgtests::png_grey ... ok
+test imgtests::png_rgb ... ok
+test imgtests::png_rgba ... ok
+test robusttests::fill_click_outside_the_canvas_changes_nothing ... ok
+test robusttests::fill_survives_an_image_whose_size_lies ... ok
+test imgtests::png_roundtrip ... ok
+test jpegtests::jpeg_rejects_progressive_honestly ... ok
+test imgtests::paint_canvas_roundtrip ... ok
+test jpegtests::jpeg_grayscale_matches_reference ... ok
+test jpegtests::jpeg_420_subsampled_matches_reference ... ok
+test robusttests::png_and_jpeg_claiming_65535_squared_are_refused ... ok
+test robusttests::ppm_header_claiming_a_huge_image_is_refused ... ok
+test tests::alpha_transitions_roundtrip ... ok
+test tests::bad_magic_rejected ... ok
+test jpegtests::jpeg_420_smooth_gradient_close ... ok
+test tests::ppm_p3_ascii ... ok
+test robusttests::try_new_and_pixel_count_limits ... ok
+test tests::image_ops ... ok
+test robusttests::qoi_header_claiming_4_gigapixels_is_refused ... ok
+test jpegtests::jpeg_restart_markers ... ok
+test jpegtests::jpeg_444_matches_reference ... ok
+test robusttests::jpeg_cut_off_in_the_scan_is_reported_not_padded ... ok
+test tests::ppm_p6_binary ... ok
+test tests::ppm_p5_gray_and_errors ... ok
+test tests::roundtrip_lossless ... ok
+test tests::roundtrip_solid_uses_runs ... ok
+test tests::truncated_rejected ... ok
+test robusttests::fill_matches_the_reference_on_random_images ... ok
+test robusttests::fill_whole_canvas_and_same_colour ... ok
+test robusttests::bmp_header_claiming_a_huge_image_is_refused ... ok
+test robusttests::no_truncation_of_a_real_file_panics ... ok
+test robusttests::no_corruption_of_a_real_file_panics ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.69s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromegaraid-4100850e3e865222)
+
+running 40 tests
+test blkif::tests::every_message_roundtrips ... ok
+test frame::tests::dcmd_layout ... ok
+test frame::tests::ld_io_layout ... ok
+test frame::tests::init_frame_layout ... ok
+test frame::tests::pass_through_layout ... ok
+test fw::tests::a_flapping_device_is_refused ... ok
+test frame::tests::status_names ... ok
+test blkif::tests::request_validation ... ok
+test fw::tests::fault_and_timeout ... ok
+test fw::tests::handshake_and_boot_message ... ok
+test fw::tests::operational_is_reset_once ... ok
+test fw::tests::decode_status ... ok
+test frame::tests::empty_sg_is_refused ... ok
+test blkif::tests::strictness ... ok
+test grant::tests::dell_perc_h730_layout ... ok
+test fw::tests::ready_at_once ... ok
+test grant::tests::msix_elsewhere_grants_the_whole_bar ... ok
+test grant::tests::refusals ... ok
+test grant::tests::table_inside_a_page_excludes_that_page ... ok
+test info::tests::ctrl_info_fields ... ok
+test grant::tests::qemu_gen2_layout ... ok
+test info::tests::ld_list_parse_and_clamp ... ok
+test layout::tests::regions_do_not_overlap_and_fit ... ok
+test info::tests::hostile_strings_are_cleaned ... ok
+test info::tests::read_capacity ... ok
+test mfi::tests::frames_run_out_cleanly ... ok
+test layout::tests::window_checks ... ok
+test regs::tests::families ... ok
+test mfi::tests::errors_come_back_as_status ... ok
+test regs::tests::masks ... ok
+test mfi::tests::restart_with_a_new_generation_drops_late_completions ... ok
+test mfi::tests::dma_probes_stay_outside_the_window ... ok
+test mfi::tests::bring_up_info_and_lds ... ok
+test mfi::tests::ring_wraps_at_the_firmware_command_count ... ok
+test regs::tests::post_values ... ok
+test mfi::tests::fault_and_stuck_firmware ... ok
+test mfi::tests::stray_and_stale_contexts_are_ignored ... ok
+test mfi::tests::handshake_from_operational_and_boot_states ... ok
+test mfi::tests::a_producer_index_updated_during_the_read_is_not_torn ... ok
+test mfi::tests::ld_write_read_through_the_reply_ring ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromime-a2396bd53d6d4dec)
+
+running 7 tests
+test tests::magic_beats_extension ... ok
+test tests::unassociated_type_returns_none ... ok
+test tests::extension_is_the_fallback ... ok
+test tests::registry_resolves_default_app ... ok
+test tests::user_can_override_the_default ... ok
+test tests::wasm_and_pdf_magic ... ok
+test tests::zip_refined_to_office_type_by_extension ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromm-0d0755dbf49aa225)
+
+running 41 tests
+test arena::tests::large_arenas_keep_their_layout ... ok
+test arena::tests::an_arena_without_room_is_refused ... ok
+test bulk::tests::allocate_many_gives_distinct_frames ... ok
+test bulk::tests::allocate_many_of_zero_is_fine_on_an_empty_pool ... ok
+test bulk::tests::allocate_many_refuses_without_taking_anything ... ok
+test frame::tests::aligned_allocatie ... ok
+test arena::tests::every_arena_size_the_launchers_take ... ok
+test frame::tests::alloceren_geeft_oplopende_frames ... ok
+test frame::tests::a_frame_outside_the_usable_regions_cannot_be_freed_into_the_pool ... ok
+test frame::tests::aligned_faalt_correct ... ok
+test frame::tests::contiguous_allocatie ... ok
+test frame::tests::dubbele_free_gedetecteerd ... ok
+test frame::tests::free_en_heralloceren ... ok
+test frame::tests::init_telt_vrije_frames ... ok
+test frame::tests::out_of_memory ... ok
+test frame::tests::reserved_low_memory_and_unusable_regions_are_not_owned ... ok
+test frame::trace_tests::trace_records_every_allocation_between_start_and_take ... ok
+test oom::tests::the_launched_process_is_never_the_victim_while_a_child_holds_memory ... ok
+test pagecache::tests::get_insert_and_recency ... ok
+test pagecache::tests::unmapped_before_idle_and_hot_never ... ok
+test oom::tests::a_child_that_is_the_largest_goes_itself ... ok
+test ramfile::tests::budget_follows_the_pool ... ok
+test ramfile::tests::out_of_frames_is_an_error_not_a_panic ... ok
+test pagecache::tests::dirty_pages_wait_for_their_writeback ... ok
+test swap::tests::swap_exhaustion ... ok
+test vaspace::tests::lower_top ... ok
+test vaspace::tests::remove_splits ... ok
+test vaspace::tests::take_first_fit_with_alignment ... ok
+test vaspace::tests::contains_is_the_page_bitmap ... ok
+test vaspace::tests::insert_merges_and_sorts ... ok
+test swap::tests::clock_second_chance_for_touched ... ok
+test swap::tests::clock_evicts_unreferenced_first ... ok
+test ramfile::tests::holes_read_zero_and_cost_nothing ... ok
+test oom::tests::every_choice_is_a_child_that_exists ... ok
+test swap::tests::clock_empty_evict_is_none ... ok
+test ramfile::tests::shrink_frees_frames_and_zeroes_the_tail ... ok
+test swap::tests::swap_alloc_and_free ... ok
+test frame::tests::aligned_and_contiguous_scan_fragmented_bitmap_fast_and_right ... ok
+test vaspace::tests::model_against_a_page_bitmap ... ok
+test pagecache::tests::model_random_operations ... ok
+test ramfile::tests::model_against_a_byte_vector ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euromusic-ef16ff2be8b47f2e)
+
+running 8 tests
+test tests::duration_format ... ok
+test tests::library_search_album_artists ... ok
+test tests::player_prev_wraps_in_all ... ok
+test tests::player_repeat_all_and_one ... ok
+test tests::repeat_all_wraps_from_stopped_state ... ok
+test tests::shuffle_keeps_current_first ... ok
+test tests::player_sequential_and_repeat_off ... ok
+test tests::shuffle_is_permutation_and_deterministic ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euronet-634b6a74aa8dedb6)
+
+running 72 tests
+test arp::tests::reply_wisselt_velden ... ok
+test checksum::tests::oneven_lengte ... ok
+test arp::tests::request_roundtrip ... ok
+test dhcp::tests::discover_roundtrip_shape ... ok
+test checksum::tests::rfc1071_voorbeeld ... ok
+test dns::tests::parse_response_valideert_transaction_id_en_qr ... ok
+test dhcp::tests::parse_offer ... ok
+test dhcpv6::tests::advertise_then_request_roundtrip ... ok
+test dhcpv6::tests::solicit_carries_client_and_ia ... ok
+test dns::tests::parse_answer_with_compression ... ok
+test ethernet::tests::parse_en_roundtrip ... ok
+test icmp::tests::build_parse_roundtrip_van_foutbericht ... ok
+test dhcpv6::tests::malformed_is_none ... ok
+test ethernet::tests::te_kort ... ok
+test dns::tests::query_shape ... ok
+test dns::tests::query_name_roundtrip ... ok
+test icmp::tests::groot_datagram_wordt_afgekapt_op_28 ... ok
+test icmp::tests::echo_request_roundtrip ... ok
+test icmp::tests::port_unreachable_shape_en_checksum ... ok
+test ipv4::tests::build_parse_roundtrip_en_checksum ... ok
+test icmp::tests::reply_spiegelt_id_seq_payload ... ok
+test icmpv6::tests::parse_ra ... ok
+test ipv4::tests::corrupte_checksum_geweigerd ... ok
+test icmpv6::tests::echo_has_valid_checksum ... ok
+test icmp::tests::parse_weigert_onbekend_type_en_corrupt ... ok
+test ipv4::tests::prive_adressen ... ok
+test ipv4::tests::fragment_wordt_geweigerd ... ok
+test ratelimit::tests::bijvulling_over_tijd ... ok
+test ipv6::tests::eui64_link_local ... ok
+test ipv6::tests::header_roundtrip ... ok
+test tcp::tests::parse_checked_weigert_corrupt_segment ... ok
+test tcp::tests::nooit_resetten_op_een_reset ... ok
+test tcp::tests::reset_voor_ack_segment_spiegelt_seq ... ok
+test tcp::tests::parse_with_payload_and_offset ... ok
+test ratelimit::tests::tijd_achteruit_breekt_niet ... ok
+test ipv6::tests::solicited_and_mcast_mac ... ok
+test ratelimit::tests::burst_tot_capaciteit_daarna_geblokt ... ok
+test tcp::tests::reset_voor_syn_op_gesloten_poort ... ok
+test tcpcc::tests::reno_slow_start_dan_avoidance ... ok
+test tcpopen::tests::a_constant_random_source_still_avoids_ports ... ok
+test tcpopen::tests::a_new_isn_on_the_same_tuple_restarts_the_entry ... ok
+test tcpcc::tests::rto_convergeert_naar_stabiele_rtt ... ok
+test tcpopen::tests::other_segments_are_ignored_in_syn_sent ... ok
+test tcpcc::tests::reno_fast_recovery_halveert ... ok
+test tcpcc::tests::rto_eerste_meting ... ok
+test tcpcc::tests::rto_backoff_en_cap ... ok
+test tcpopen::tests::pick_port_skips_avoided_ports_and_finds_the_last_free_one ... ok
+test tcpopen::tests::resets_count_only_with_an_acceptable_ack ... ok
+test udp::tests::build_parse_roundtrip_met_checksum ... ok
+test tcpopen::tests::the_handshake_is_bounded_and_changes_identity_once ... ok
+test tcp::tests::syn_roundtrip ... ok
+test tcpopen::tests::stale_ack_from_a_half_open_peer_asks_for_a_reset_at_its_ack ... ok
+test tcpopen::tests::syn_ack_with_the_right_ack_establishes ... ok
+test unix::shared::tests::connection_ids_are_never_reused ... ok
+test tcpopen::tests::syn_ack_retransmits_back_off_and_the_entry_expires ... ok
+test tcpopen::tests::resets_in_syn_rcvd_need_the_exact_sequence ... ok
+test udp::tests::verkeerde_pseudo_header_faalt_checksum ... ok
+test unix::shared::tests::refused_and_addr_in_use ... ok
+test unix::tests::backlog_is_enforced ... ok
+test tcpopen::tests::recent_ports_remember_the_last_n ... ok
+test unix::tests::close_signals_eof_then_broken_pipe ... ok
+test unix::shared::tests::roundtrip_partial_reads_backlog_eof ... ok
+test unix::tests::full_roundtrip_both_directions ... ok
+test unix::tests::bind_twice_is_addr_in_use ... ok
+test unix::tests::partial_reads_preserve_order ... ok
+test tcpopen::tests::syn_queue_creates_retransmits_and_completes ... ok
+test tcpopen::tests::syn_queue_is_bounded_by_capacity_and_backlog ... ok
+test unix::tests::refused_without_listener ... ok
+test unix::tests::closing_both_sides_frees_the_slot ... ok
+test unix::tests::unbind_then_refused ... ok
+test unix::shared::tests::control_plane_churn_during_streaming ... ok
+test unix::shared::tests::parallel_streams_are_exact_and_ordered ... ok
+
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euronfs-5d925dbede389273)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euronotes-fe2fc14bc5b6adba)
+
+running 8 tests
+test tests::code_block_fenced ... ok
+test tests::lists_with_levels ... ok
+test tests::paragraph_lines_joined ... ok
+test tests::tag_extraction ... ok
+test tests::headings_and_title ... ok
+test tests::inline_bold_italic_code ... ok
+test tests::horizontal_rule_and_quote ... ok
+test tests::heading_levels ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurontfs-184884b43c7f4119)
+
+running 4 tests
+test tests::lists_the_user_file ... ok
+test tests::reads_a_known_file_verbatim ... ok
+test tests::runlist_decoding_signed_deltas ... ok
+test tests::mounts_real_mkntfs_image ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euronts-adee928152308956)
+
+running 5 tests
+test tests::c2s_and_s2c_keys_differ_and_are_deterministic ... ok
+test tests::authenticated_exchange_roundtrip ... ok
+test tests::off_path_wrong_unique_id_is_rejected ... ok
+test tests::tampered_response_is_rejected ... ok
+test tests::wrong_key_is_rejected ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euronvme-8a58ad0377c0e7c8)
+
+running 13 tests
+test identify::tests::a_normal_namespace_parses ... ok
+test tests::device_errors_are_reported_not_hidden ... ok
+test tests::a_foreign_data_pointer_goes_to_the_device_as_given ... ok
+test tests::init_identifies_controller_and_namespace ... ok
+test tests::layout_needs_an_aligned_window_of_enough_pages ... ok
+test tests::reinit_after_a_crash_resets_a_live_controller ... ok
+test identify::tests::broken_identify_data_is_refused ... ok
+test tests::requests_outside_the_namespace_or_buffer_are_refused_before_the_device ... ok
+test tests::many_commands_wrap_the_queues_and_flip_the_phase ... ok
+test tests::only_one_command_in_flight_and_completions_are_matched ... ok
+test tests::write_then_read_roundtrip_one_and_two_pages ... ok
+test tests::a_controller_that_never_gets_ready_or_is_fatal_fails_init ... ok
+test identify::tests::no_byte_pattern_panics ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroobserve-756d3806c6df8da1)
+
+running 4 tests
+test tests::histogram_render_has_buckets_sum_count ... ok
+test tests::histogram_cumulative_buckets ... ok
+test tests::counter_and_gauge ... ok
+test tests::openmetrics_format ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europack-7f16aa692562c41f)
+
+running 8 tests
+test image_tests::real_image_roots_match ... ignored
+test tests::empty_file_has_zero_root_and_odd_levels_pair_with_self ... ok
+test tests::v1_is_refused ... ok
+test tests::pack_from_the_python_tool_verifies_with_dev_pub ... ok
+test tests::tampered_page_fails_its_leaf_only ... ok
+test tests::tampered_leaf_table_breaks_the_root ... ok
+test tests::roundtrip_parses_and_verifies ... ok
+test tests::tampered_entry_breaks_the_signature ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europkg-059c3f2a25c6c7a2)
+
+running 12 tests
+test store::app_meta_tests::app_manifest_fields_parse_with_defaults_and_validation ... ok
+test store::app_meta_tests::abi_field_parses_and_validates ... ok
+test tests::constraints ... ok
+test tests::cycle_detected ... ok
+test tests::unsatisfiable_version ... ok
+test tests::resolves_in_topological_order ... ok
+test zipread::tests::corrupt_data_fails_crc ... ok
+test tests::version_conflict ... ok
+test zipread::tests::parses_stored_zip_and_verifies_crc ... ok
+test tests::version_parse_and_order ... ok
+test tests::missing_package ... ok
+test zipread::tests::refuses_non_stored_method ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/engine.rs (target/host/debug/deps/engine-f1d6f11f44083540)
+
+running 5 tests
+test install_links_cas_and_registers ... ok
+test forged_index_fetches_nothing ... ok
+test tampered_hash_and_forged_signature_refused ... ok
+test signed_index_installs_dependency_closure_in_order ... ok
+test upgrade_replaces_and_gcs_old_blob ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europol-760f6e8d54901362)
+
+running 9 tests
+test bundle::tests::serialize_roundtrip ... ok
+test tests::cap_checks ... ok
+test tests::deny_wins_over_allow ... ok
+test tests::path_checks ... ok
+test tests::parse_and_effective_caps ... ok
+test tests::explain_is_human_readable ... ok
+test bundle::tests::sign_and_verify_load ... ok
+test bundle::tests::tampered_bundle_refused ... ok
+test bundle::tests::wrong_key_refused ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europortal-f1d0a5c5aa7d3ce4)
+
+running 10 tests
+test tests::benign_resources_auto_allow ... ok
+test tests::audit_records_every_decision ... ok
+test tests::grants_are_scoped_to_the_exact_detail ... ok
+test tests::once_grant_auto_revokes_after_use ... ok
+test tests::app_manifest_rule_can_pre_authorize ... ok
+test tests::persistent_grants_roundtrip_on_disk ... ok
+test tests::sensitive_resources_prompt_then_grant ... ok
+test tests::revoke_all_clears_app_grants ... ok
+test tests::session_end_drops_session_grants_but_keeps_persistent ... ok
+test tests::denial_persisted_stops_future_prompts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europq-c1596aa7fb34ce3a)
+
+running 8 tests
+test keccak::tests::sha3_256_abc ... ok
+test keccak::tests::sha3_256_empty ... ok
+test keccak::tests::sha3_512_empty ... ok
+test keccak::tests::shake256_empty_prefix ... ok
+test mlkem::tests::ntt_roundtrip_is_identity ... ok
+test tests::hybrid_combine_depends_on_both ... ok
+test mlkem::tests::keygen_encaps_decaps_roundtrip ... ok
+test mlkem::tests::tampered_ciphertext_gives_rejection_not_shared_secret ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/kat.rs (target/host/debug/deps/kat-acbd4b378f291c67)
+
+running 1 test
+test nist_acvp_ml_kem_768_kat ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europrefs-a10ba9661c9898ef)
+
+running 18 tests
+test tests::broken_lines_are_skipped_not_fatal ... ok
+test tests::escapes_round_trip ... ok
+test tests::last_duplicate_wins_and_keeps_first_position ... ok
+test tests::round_trip_keeps_order_comments_and_values ... ok
+test tests::lists ... ok
+test tests::typed_getters_fall_back_to_defaults ... ok
+test tests::header_and_bom_and_crlf ... ok
+test tz::tests::eu_summer_time_boundaries_2026 ... ok
+test tz::tests::eu_summer_time_other_years ... ok
+test tz::tests::labels_and_clock_format ... ok
+test tests::setters_validate ... ok
+test validate::tests::hostnames ... ok
+test tz::tests::zone_offsets ... ok
+test tz::tests::civil_round_trip ... ok
+test validate::tests::domains ... ok
+test validate::tests::app_and_user_names ... ok
+test tests::garbage_never_panics ... ok
+test tests::limits_hold ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/host/debug/deps/europrint-ba90f07b7798775c)
+
+running 9 tests
+test tests::http_error_status ... ok
+test tests::http_parse_chunked ... ok
+test tests::http_post_envelope ... ok
+test tests::parse_rejects_truncated ... ok
+test tests::charset_and_language_are_first ... ok
+test tests::integer_attribute_is_4_bytes_be ... ok
+test tests::response_roundtrip ... ok
+test tests::print_job_request_structure ... ok
+test tests::http_parse_content_length ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurordp-4de61a6ca347bb7e)
+
+running 27 tests
+test license::tests::license_request_parse_and_new_license_request ... ok
+test license::tests::md5_rfc1321_vectors ... ok
+test license::tests::challenge_response_shape ... ok
+test license::tests::rc4_known_vector ... ok
+test mcs::tests::connect_initial_is_well_formed_ber ... ok
+test license::tests::sha1_fips_vectors ... ok
+test license::tests::keys_are_deterministic_and_distinct ... ok
+test mcs::tests::domain_pdus ... ok
+test rdp::tests::bitmap_update_parses_rects ... ok
+test rdp::tests::confirm_active_and_finalization_shape ... ok
+test rdp::tests::demand_active_parses_bitmap_caps ... ok
+test rdp::tests::input_pdu_encodes_key_and_mouse ... ok
+test rdp::tests::client_info_carries_credentials_and_header ... ok
+test mcs::tests::connect_response_blocks_parse ... ok
+test rle::tests::bg_run_copies_from_line_above ... ok
+test rle::tests::color_run_repeats_one_pixel ... ok
+test rdp::tests::license_pdu_detection ... ok
+test tests::bitmap_conversion_is_bottom_up_and_565 ... ok
+test rle::tests::special_black_and_white ... ok
+test x224::tests::connection_confirm_parses_response_and_failure ... ok
+test rle::tests::malformed_never_panics ... ok
+test x224::tests::data_tpdu_round_trip ... ok
+test tests::session_walks_the_connection_sequence ... ok
+test rle::tests::color_image_is_raw_pixels ... ok
+test x224::tests::connection_request_shape ... ok
+test license::tests::rsa_raw_roundtrip_small_key ... ok
+test license::tests::x509_chain_key_and_rsa_against_openssl_private_key ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroreken-991dca4e1063278d)
+
+running 11 tests
+test math::tests::exp_ln_roundtrip ... ok
+test math::tests::log_and_factorial ... ok
+test math::tests::pow_values ... ok
+test math::tests::trig_values ... ok
+test tests::base_formatting ... ok
+test math::tests::sqrt_values ... ok
+test tests::errors ... ok
+test tests::scientific_functions_and_constants ... ok
+test tests::standard_arithmetic_precedence ... ok
+test tests::unit_conversion ... ok
+test tests::programmer_bases_and_bitwise ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurorepro-c253856fb2104551)
+
+running 6 tests
+test tests::detects_volatile_inputs ... ok
+test tests::spec_id_is_order_independent ... ok
+test tests::attestation_signed_and_reproducible ... ok
+test tests::tampered_attestation_fails ... ok
+test tests::same_builder_twice_is_not_consensus ... ok
+test tests::consensus_needs_independent_builders ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurosafe-7468bcfa7df99b6a)
+
+running 6 tests
+test tests::risk_classification ... ok
+test tests::capability_labels_and_weights ... ok
+test tests::sandbox_lowers_score ... ok
+test tests::dashboard_aggregation ... ok
+test tests::dangerous_combo_detected ... ok
+test tests::recommendations_flag_problems ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurosandbox-972218fbae8ff43e)
+
+running 35 tests
+test bpf::tests::allows_denies_and_kills_by_syscall_number ... ok
+test bpf::tests::alu_and_scratch_memory_work ... ok
+test bpf::tests::argument_loads_see_both_halves ... ok
+test bpf::tests::most_restrictive_filter_wins ... ok
+test bpf::tests::refuses_bad_programs_at_load ... ok
+test image::tests::manifest_roundtrips ... ok
+test limits::tests::cpu_and_wall_ceilings_trip ... ok
+test limits::tests::memory_ceiling_enforced ... ok
+test bpf::tests::wire_format_round_trips ... ok
+test overlay::tests::absent_when_in_neither_layer ... ok
+test limits::tests::pid_ceiling_enforced ... ok
+test overlay::tests::diff_lists_copy_ups_only ... ok
+test rlimits::tests::lowering_is_allowed_raising_the_hard_limit_is_not ... ok
+test syscalls::tests::driver_profile_is_a_narrow_allow_list ... ok
+test syscalls::tests::euro_profile_is_an_allow_list ... ok
+test syscalls::tests::profile_round_trips_through_a_byte ... ok
+test rlimits::tests::defaults_are_sane ... ok
+test syscalls::tests::renderer_file_scope ... ok
+test syscalls::tests::renderer_logs_wx_mappings_but_allows_them_for_now ... ok
+test syscalls::tests::strict_is_the_linux_strict_set ... ok
+test tests::contains_rejects_prefix_siblings ... ok
+test tests::net_scope_enforced ... ok
+test overlay::tests::recreating_a_deleted_file_clears_the_whiteout ... ok
+test tests::caps_can_only_shrink ... ok
+test limits::tests::zero_means_unlimited ... ok
+test syscalls::tests::full_allows_everything ... ok
+test overlay::tests::read_resolves_upper_first_then_lower ... ok
+test tests::path_cannot_escape_root ... ok
+test overlay::tests::delete_leaves_a_whiteout_hiding_lower ... ok
+test syscalls::tests::utility_keeps_network_and_files_but_not_processes ... ok
+test syscalls::tests::renderer_denies_process_network_and_fs_changes ... ok
+test syscalls::tests::renderer_keeps_what_rendering_needs ... ok
+test image::tests::tampered_manifest_refused ... ok
+test image::tests::swapped_rootfs_refused ... ok
+test image::tests::valid_signature_and_rootfs_accepted ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroscan-a16038a09eaa113b)
+
+running 5 tests
+test tests::http_and_location_parse ... ok
+test tests::job_path_relative ... ok
+test tests::capabilities_parse ... ok
+test tests::next_document_body_returned ... ok
+test tests::scan_settings_xml_has_fields ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroshot-36098db47918f547)
+
+running 6 tests
+test tests::canonical_payload_stable_and_signed_shape ... ok
+test tests::capture_targets ... ok
+test tests::fnv_known_vector ... ok
+test tests::annotations_build ... ok
+test tests::region_clamp ... ok
+test tests::manifest_hash_changes_with_pixels ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurosign-a4bd9c9db0bcbad1)
+
+running 7 tests
+test tests::canonical_changes_break_signature ... ok
+test tests::envelope_roundtrip ... ok
+test tests::parse_missing_field_fails ... ok
+test tests::verify_bad_signature ... ok
+test tests::verify_valid ... ok
+test tests::canonical_is_stable_and_lowercased_hash ... ok
+test tests::verify_detects_tamper ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurosmb-60d7359788f81053)
+
+running 9 tests
+test crypto::tests::hmac_md5_rfc2104_vectors ... ok
+test crypto::tests::md4_rfc1320_vectors ... ok
+test crypto::tests::md5_rfc1321_vectors ... ok
+test signing::tests::tampered_message_fails ... ok
+test ntlm::tests::negotiate_has_signature_and_type ... ok
+test ntlm::tests::authenticate_roundtrips_fields ... ok
+test ntlm::tests::ntowfv2_known_vector ... ok
+test signing::tests::wrong_key_fails ... ok
+test signing::tests::sign_then_verify ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurotls-a59a76821acba11e)
+
+running 44 tests
+test aead::tests::nonce_xor ... ok
+test chain::realworld_tests::real_roots_parse ... ok
+test chain::tests::empty_chain_rejected ... ok
+test aead::tests::wrong_seq_or_aad_fails ... ok
+test chain::tests::empty_trust_store_is_unknown_ca ... ok
+test chain::tests::expired_and_not_yet_valid_rejected ... ok
+test chain::tests::garbage_cert_in_chain_is_parse_error ... ok
+test aead::tests::tampered_ciphertext_or_tag_fails ... ok
+test aead::tests::seal_open_roundtrip ... ok
+test chain::tests::wrong_root_is_unknown_ca ... ok
+test chain::tests::wrong_hostname_rejected ... ok
+test handshake::tests::split_inner_strips_padding ... ok
+test record::tests::record_roundtrip_and_partial ... ok
+test record::tests::record_te_groot_wordt_geweigerd ... ok
+test keyschedule::tests::expand_label_structure ... ok
+test keyschedule::tests::rfc8446_derived_secret_constant ... ok
+test sig::tests::mismatched_alg_and_key_rejected ... ok
+test keyschedule::tests::empty_transcript_hash_matches_sha256_empty ... ok
+test sig::tests::ecdsa_leaf_verifies_against_root_key ... ok
+test sig::tests::ecdsa_rejects_tampered_message ... ok
+test sig::tests::ecdsa_root_is_self_signed ... ok
+test x509::tests::hostname_wildcard_matching ... ok
+test x509::tests::matches_hostname_uses_san ... ok
+test x509::tests::never_panics_on_truncated_input ... ok
+test x509::tests::parse_ec_root_is_ca ... ok
+test x509::tests::parse_rsa_cert_fields ... ok
+test x509::tests::parse_ec_leaf_fields ... ok
+test sig::tests::ecdsa_rejects_wrong_key ... ok
+test x509::tests::rejects_trailing_bytes ... ok
+test x509::tests::time_parsing_rejects_garbage ... ok
+test x509::tests::time_parsing_is_exact ... ok
+test handshake::tests::alert_record_surfaces ... ok
+test chain::tests::valid_ec_chain_anchored_to_root ... ok
+test handshake::tests::validatie_is_fail_closed_zonder_trust_anchor ... ok
+test handshake::tests::client_hello_is_wellformed ... ok
+test chain::realworld_tests::transit_verifies_against_sslcom_root ... ok
+test sig::tests::ecdsa_p384_sha384_chain_verifies ... ok
+test sig::tests::rsa_rejects_tampered_message ... ok
+test sig::tests::rsa_self_signed_verifies ... ok
+test sig::tests::rsa_rejects_tampered_signature ... ok
+test sig::tests::rsa_pss_verifies_openssl_signature ... ok
+test chain::tests::self_signed_rsa_anchored_to_itself ... ok
+test sig::tests::rsa_sha384_self_signed_verifies ... ok
+test sig::tests::rsa_pss_rejects_tampered ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurotpm-0d4b12b62341ea70)
+
+running 12 tests
+test tests::create_primary_encoding ... ok
+test tests::create_sealed_and_load_roundtrip_shape ... ok
+test tests::get_random_and_parse ... ok
+test tests::pcr_read_roundtrip ... ok
+test tests::pcr_extend_encoding ... ok
+test tests::policy_pcr_and_getdigest_encoding ... ok
+test tests::header_error_code ... ok
+test tests::sealed_template_carries_policy ... ok
+test tests::start_session_policy_vs_trial ... ok
+test tests::startup_encoding ... ok
+test tests::unseal_uses_policy_session_auth ... ok
+test tests::parse_handle_and_create_and_unseal ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroupdate-79c64819b358dacd)
+
+running 5 tests
+test tests::alternating_updates_use_inactive_slot ... ok
+test tests::failed_update_rolls_back_after_tries ... ok
+test tests::serialize_roundtrip_and_reject_corruption ... ok
+test tests::happy_update_marks_good ... ok
+test tests::manual_rollback_when_other_good ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurousb-3d3fb8c0e9db1bf2)
+
+running 15 tests
+test tests::cbw_round_trip_and_csw ... ok
+test tests::keyboard_press_and_release ... ok
+test tests::parse_tablet_absolute_report ... ok
+test tests::parse_device_descriptor ... ok
+test tests::keyboard_multiple_keys ... ok
+test tests::mass_storage_interface_detect ... ok
+test tests::reject_bad_device_descriptor ... ok
+test tests::report_descriptor_rejects_non_pointer ... ok
+test tests::mouse_report ... ok
+test tests::scsi_read_capacity_decode ... ok
+test tests::report_descriptor_boot_mouse ... ok
+test tests::report_descriptor_with_report_id ... ok
+test tests::report_descriptor_abs_tablet ... ok
+test tests::wheel_from_boot_mouse_tablet_and_descriptor ... ok
+test tests::parse_configuration_with_hid_keyboard ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurovault-7616dafed904ac1d)
+
+running 5 tests
+test tests::capability_gated_read ... ok
+test tests::list_never_leaks_values ... ok
+test tests::seal_unseal_roundtrip ... ok
+test tests::pcr_seal_only_unseals_on_matching_boot_state ... ok
+test tests::wrong_key_or_tamper_fails ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroverity-ec3b7dc93c19e98f)
+
+running 4 tests
+test tests::a_tampered_block_fails ... ok
+test tests::root_changes_if_image_changes ... ok
+test tests::every_block_verifies_against_the_root ... ok
+test tests::manifest_signature_roundtrip_and_rejection ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurovirtio-1f6a36807c776fb2)
+
+running 15 tests
+test input::tests::keyboard_codes ... ok
+test input::tests::classification ... ok
+test input::tests::scaled_range ... ok
+test input::tests::tablet_move_and_click ... ok
+test input::tests::parse_event_bytes ... ok
+test input::tests::relative_mouse ... ok
+test tests::device_types ... ok
+test tests::looping_cap_list_terminates ... ok
+test tests::legacy_device_has_no_modern_caps ... ok
+test tests::negotiation ... ok
+test tests::parses_qemu_layout ... ok
+test tests::queue_size ... ok
+test tests::kyvernon_layout_single_bar0 ... ok
+test tests::reserved_bar_is_ignored ... ok
+test tests::ring_layout ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurovpn-dad31f49b7fbc63e)
+
+running 6 tests
+test tests::replay_is_rejected ... ok
+test tests::tamper_is_detected ... ok
+test tests::handshake_derives_matching_keys ... ok
+test tests::hybrid_key_actually_depends_on_ml_kem ... ok
+test tests::wrong_peer_cannot_join ... ok
+test tests::hybrid_handshake_derives_matching_keys ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurowallet-78191db061822ecf)
+
+running 10 tests
+test json::tests::disclosure_array_uses_comma_space ... ok
+test b64::tests::roundtrip_and_no_pad ... ok
+test json::tests::parse_and_serialize_roundtrip ... ok
+test tests::ietf_reference_disclosure_and_digest ... ok
+test tests::full_disclosure_verifies_all_claims ... ok
+test tests::wrong_issuer_key_rejected ... ok
+test tests::tampered_disclosed_value_rejected ... ok
+test tests::selective_disclosure_hides_the_rest ... ok
+test tests::injected_disclosure_rejected ... ok
+test tests::holder_key_binding_roundtrip ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurowasm-8f25655830836cad)
+
+running 11 tests
+test tests::bad_magic_rejected ... ok
+test tests::data_section_inits_memory ... ok
+test tests::no_such_export ... ok
+test tests::parse_and_run_answer ... ok
+test tests::run_add ... ok
+test tests::run_f64_arithmetic ... ok
+test tests::run_factorial_recursive ... ok
+test tests::fuel_ends_an_infinite_loop ... ok
+test tests::run_sum_loop ... ok
+test tests::wasi_import_gated_by_capability ... ok
+test tests::wp6_opcodes_rust_modules_need ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/probe.rs (target/host/debug/deps/probe-3d9bfe573c7fc448)
+
+running 1 test
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurowatchdog-5492327dd8452404)
+
+running 3 tests
+test tests::a_hang_trips_it ... ok
+test tests::petting_keeps_it_alive ... ok
+test tests::recovers_after_pet ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/euroweb-d29f96146dac45dc)
+
+running 55 tests
+test css::tests::important_beats_specificity ... ok
+test css::tests::comments_stripped ... ok
+test css::tests::cascade_source_order_breaks_ties ... ok
+test css::tests::descendant_and_child_combinators ... ok
+test css::tests::parse_basic_rules ... ok
+test css::tests::selector_matching_type_class_id ... ok
+test css::tests::inline_style_beats_stylesheet ... ok
+test css::tests::specificity_ordering ... ok
+test css::tests::ua_before_author_order ... ok
+test flex::tests::empty_is_empty ... ok
+test flex::tests::gap_between_items ... ok
+test flex::tests::grow_distributes_free_space ... ok
+test flex::tests::grow_weighted ... ok
+test flex::tests::justify_center_and_between ... ok
+test css::tests::inheritance_of_color ... ok
+test css::tests::cascade_specificity_wins ... ok
+test flex::tests::shrink_on_overflow ... ok
+test flex::tests::no_grow_leaves_basis ... ok
+test layout::tests::block_fills_containing_width ... ok
+test flex::tests::shrink_respects_min ... ok
+test layout::tests::parent_height_sums_children ... ok
+test layout::tests::single_line_text_one_line ... ok
+test layout::tests::blocks_stack_vertically ... ok
+test layout::tests::explicit_height_respected ... ok
+test layout::tests::display_none_removes_box ... ok
+test layout::tests::padding_and_margin_offset_content ... ok
+test paint::tests::document_order_background_before_text ... ok
+test paint::tests::renders_image_box ... ok
+test paint::tests::paints_background_and_text ... ok
+test paint::tests::color_parsing ... ok
+test layout::tests::text_wraps_into_multiple_lines ... ok
+test paint::tests::renders_form_field_and_button ... ok
+test tests::parse_attributes_reachable ... ok
+test tests::parse_implicit_p_close ... ok
+test tests::parse_list_items_autoclose ... ok
+test tests::parse_mismatched_end_tag_ignored ... ok
+test tests::parse_nested_structure ... ok
+test tests::parse_void_elements_have_no_children ... ok
+test tests::parse_realistic_fragment ... ok
+test tests::robust_malformed_css ... ok
+test tests::robust_malformed_markup ... ok
+test tests::tokenize_ambiguous_ampersand_left_literal ... ok
+test tests::tokenize_attributes_all_quoting_styles ... ok
+test tests::tokenize_comment_and_doctype ... ok
+test tests::tokenize_duplicate_attr_first_wins ... ok
+test tests::tokenize_entities_in_text ... ok
+test tests::tokenize_entity_without_semicolon_legacy ... ok
+test tests::tokenize_rawtext_script_keeps_markup ... ok
+test tests::tokenize_rcdata_title_decodes_entities ... ok
+test tests::tokenize_self_closing_and_case_fold ... ok
+test tests::tokenize_simple_tag_and_text ... ok
+test tests::robust_long_unicode_text ... ok
+test tests::robust_text_content_deep_no_overflow ... ok
+test tests::robust_many_siblings ... ok
+test tests::robust_deeply_nested_does_not_overflow ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.11s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurowifi-240289b5c1ad9097)
+
+running 7 tests
+test tests::beacon_scan_open ... ok
+test tests::short_beacon_rejected_no_panic ... ok
+test tests::prf_known_length ... ok
+test tests::ptk_is_deterministic_and_symmetric ... ok
+test tests::header_parsing ... ok
+test tests::non_beacon_rejected ... ok
+test tests::beacon_scan_wpa2_and_wpa3 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/host/debug/deps/eurowl-e89fe77f4cfc4e49)
+
+running 7 tests
+test tests::get_registry_advertises_globals ... ok
+test tests::full_handshake_creates_titled_window ... ok
+test tests::get_toplevel_sends_configure ... ok
+test tests::no_window_before_commit ... ok
+test tests::string_arg_padding ... ok
+test tests::wire_roundtrip_header ... ok
+test tests::surface_without_toplevel_is_not_a_window ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroaccess
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroacpi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroagent
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroaml
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroarchive
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroattest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroaudio
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroaudit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurobcm5720
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroca
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurocalc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurocalendar
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroclip
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroclock
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurocontacts
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurocoreutils
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurocrash
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodevice
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodisplay
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodns
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodoc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodocio
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurodrv
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroe1000
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroentropy
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofde
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofiles
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroflate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofont
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofsid
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofuzz
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurofw
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurogdb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurogeo
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurogpu
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurohealth
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroid
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroidm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroinstall
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurojournal
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurojs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurokeymap
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurolocale
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromail
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromdns
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromedia
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromegaraid
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euromusic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euronet
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euronotes
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurontfs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euronts
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euronvme
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroobserve
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europack
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europkg
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europol
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europortal
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europq
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europrefs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests europrint
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurordp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroreken
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurorepro
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurosafe
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurosandbox
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroscan
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroshot
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurosign
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurotls
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurotpm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroupdate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurousb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurovault
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroverity
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurovirtio
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurovpn
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurowallet
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurowasm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurowatchdog
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests euroweb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests eurowifi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests eurowl
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

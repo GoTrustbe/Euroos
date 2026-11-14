@@ -249,6 +249,15 @@ extern "x86-interrupt" fn net_msix_handler(_frame: InterruptStackFrame) {
             LEFT.fetch_sub(1, Ordering::Relaxed);
             let (isr1, lvt, cur) = crate::apic::timer_probe();
             let (tpr, ppr, irr1) = crate::apic::priority_probe();
+            // BUG-182: which vectors are in service (this handler is 0x4b: bit
+            // 11 of word 2), and how long ago the timer was last taken. A
+            // long time: the timer did not come (interrupts off, or the
+            // processor was not running); the next [tick-late] line names
+            // where that ended. A short time: the clock, not the timer.
+            let isr = crate::apic::isr_words();
+            serial_println!("[timer-probe] BUG-182: ISR words 0..7 = {:08x?}; {} Mcycles since the last timer tick was taken; {} ticks added for late ticks so far",
+                isr, tsc.saturating_sub(crate::sched::last_tick_tsc()) / 1_000_000,
+                crate::sched::LOST_TICKS.load(Ordering::Relaxed));
             serial_println!("[timer-probe] FROZEN: {} Mcycles since the previous NIC irq but only {} ticks (now {now}): ISR[20..3f]={isr1:#010x} IRR[20..3f]={irr1:#010x} TPR={tpr:#x} PPR={ppr:#x} LVT_TIMER={lvt:#010x} CUR={cur} halted-at rip={:#x} IF={}",
                 tsc.saturating_sub(last_tsc) / 1_000_000, now.saturating_sub(last),
                 _frame.instruction_pointer.as_u64(), _frame.cpu_flags.bits() & 0x200 != 0);
@@ -400,9 +409,18 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     let rflags = frame.cpu_flags;
     // The probe's lines go straight to the port, after what the desktop loop
     // still had in its queue; deferring is on again when the probe ends.
-    let was = crate::serial::in_emergency();
+    // BUG-157: every processor gets the NMI. The first probe to finish switched
+    // the direct output off again, and the rest of a probe still printing went
+    // into the queue of a machine that no longer drains it. The direct output
+    // stays on until the last probe has ended.
+    static PROBES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    static WAS_EMERGENCY: AtomicBool = AtomicBool::new(false);
+    if PROBES.fetch_add(1, Ordering::AcqRel) == 0 {
+        WAS_EMERGENCY.store(crate::serial::in_emergency(), Ordering::Release);
+    }
     crate::serial::emergency();
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
+    serial_println!("[nmi] cpu {}", crate::apic::lapic_id());
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
     serial_println!("[nmi] CR2 (address of the last page fault) = {:#018x}", x86_64::registers::control::Cr2::read_raw());
@@ -453,11 +471,19 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
         // Lock-free (BUG-136): the probe is sent to a machine that is wedged,
         // often on the scheduler lock; sched::current() waited for that lock
         // and the probe stopped before its stack scan and census.
+        // No allocation (the name was cloned into a String here: a probe
+        // that lands while the heap lock is held never came back).
         let cur = crate::sched::current_lockfree();
         let (sn, sa, sr) = crate::ring3::last_syscall(cur);
-        let name = crate::ring3::thread_name_try(cur);
-        serial_println!("[nmi] current task {cur} {:?} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
-            name, crate::ring3::globals_owner_now());
+        crate::serial_print!("[nmi] current task {cur} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
+            crate::ring3::globals_owner_now());
+        crate::ring3::thread_name_print(cur);
+        serial_println!();
+    }
+    // Every task, read without the scheduler lock (BUG-157). The scheduler
+    // belongs to the boot processor; one copy of the table is enough.
+    if crate::apic::lapic_id() == 0 {
+        crate::sched::census_nolock();
     }
     // Scan the interrupted stack for plausible kernel code return addresses (RBP
     // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
@@ -478,9 +504,8 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     // describes the task the NMI happened to interrupt - usually the idle loop -
     // while the question is nearly always "what is task N doing". census_trylock
     // is built for interrupt context (try-locks, no allocation).
-    crate::sched::census_trylock();
     serial_println!("========== END NMI PROBE ==========");
-    if !was {
+    if PROBES.fetch_sub(1, Ordering::AcqRel) == 1 && !WAS_EMERGENCY.load(Ordering::Acquire) {
         crate::serial::resume();
     }
 }
@@ -656,6 +681,24 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // that touch a not-yet-committed demand page during a syscall).
     crate::ring3::FAULT_CODE.store(code.bits(), Ordering::Relaxed);
     crate::ring3::FAULT_RIP.store(frame.instruction_pointer.as_u64(), Ordering::Relaxed);
+    // BUG-156: a page of the arena of a fork child that nobody touched yet. It
+    // gets a zeroed frame from the process pool, for ring 3 and for a system
+    // call that copies into its caller alike. A fault from ring 3 leaves the
+    // last 1 MiB of the pool to the kernel.
+    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr >> 39 == 0 {
+        let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
+        match crate::paging::lazy_arena_fault(cr3, addr, reserve) {
+            Some(true) => {
+                crate::ring3::ARENA_LAZY_FAULTS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Some(false) => serial_println!(
+                "[oom] no frame in the process pool for an arena page at {addr:#x} ({} frames free): the access fails",
+                crate::procpool::free_frames()),
+            None => {}
+        }
+    }
     if crate::ring3::handle_demand_fault(
         addr,
         code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),

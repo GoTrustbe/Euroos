@@ -159,6 +159,103 @@ pub fn census_trylock() {
     }
 }
 
+/// BUG-157: the census of the NMI probe, WITHOUT the scheduler lock. The probe
+/// is sent to a machine that stands still, and the place it stood in s4 was
+/// schedule_core itself, which holds SCHED: `census_trylock` printed nothing
+/// ("the ready list was empty" was the absence of a list). This reads the
+/// table through the lock (a racy read of a table that no longer changes),
+/// allocates nothing and takes no lock. Every task that is not Dead: state,
+/// address space, syscalls and ticks so far, its last syscall, and for a task
+/// that is not running the rip, cs and rflags it will resume with (an IF=0
+/// there, on a Ready task, is a task that yields with interrupts off).
+static SCHED_PEEK: AtomicU64 = AtomicU64::new(0);
+
+pub fn census_nolock() {
+    let peek = SCHED_PEEK.load(Ordering::Relaxed);
+    if peek == 0 {
+        return;
+    }
+    // SAFETY: see above; plain integers, bounds checked below.
+    let s: &Scheduler = unsafe { &*(peek as *const Scheduler) };
+    let count = s.count.min(MAX_TASKS);
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    crate::serial_println!(
+        "[nmi-tasks] {} slots, current={} (mirror {}), SCHED {}, ticks={now}, min_vr={}, t0 wants={} idle={} last-turn-tick={}, sched-skips={}",
+        s.count, s.current, CURRENT_MIRROR.load(Ordering::Relaxed),
+        if SCHED.is_locked() { "HELD" } else { "free" }, s.min_vr,
+        T0_WANTS.load(Ordering::Relaxed), T0_IDLE.load(Ordering::Relaxed),
+        T0_TURN_TICK.load(Ordering::Relaxed), SCHED_SKIPS.load(Ordering::Relaxed));
+    // A line each for the tasks that could run: the current one, the Ready
+    // ones, the sleepers whose time has come (24 lines at most: the probe is
+    // also sent to a machine that runs, and a second of printing in an NMI
+    // was a second without the timer).
+    let (mut ready, mut sleeping, mut blocked, mut zombie, mut dead, mut lines) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    for i in 0..count {
+        let t = &s.tasks[i];
+        let st = t.state;
+        let runnable = match st {
+            State::Ready => { ready += 1; true }
+            State::Sleeping(w) => { sleeping += 1; w <= now }
+            State::Blocked(_) => { blocked += 1; false }
+            State::Zombie(_) => { zombie += 1; false }
+            State::Dead => { dead += 1; false }
+        };
+        if !(runnable || (i == s.current && st != State::Dead)) || lines >= 24 {
+            continue;
+        }
+        lines += 1;
+        let (sn, sa, sr) = crate::ring3::last_syscall(i);
+        // The frame a task that is not running resumes from: 15 registers,
+        // then rip, cs, rflags (schedule_tick). Only for a pointer into the
+        // kernel stacks (static, or kernel heap: both below the user regions).
+        let rsp = t.rsp;
+        let frame = if i != s.current && rsp > 0x10_0000 && rsp < (1u64 << 39) && rsp & 7 == 0 {
+            unsafe { Some((*((rsp + 120) as *const u64), *((rsp + 128) as *const u64), *((rsp + 136) as *const u64))) }
+        } else {
+            None
+        };
+        crate::serial_print!("[nmi-tasks] t{i} ");
+        match st {
+            State::Ready => crate::serial_print!("Ready"),
+            State::Sleeping(w) => crate::serial_print!("Sleeping(due since {w})"),
+            State::Blocked(c) => crate::serial_print!("Blocked({c:#x})"),
+            State::Zombie(c) => crate::serial_print!("Zombie({c})"),
+            State::Dead => {}
+        }
+        crate::serial_print!(" pid={} cr3={:#x} vr={} sys={} cpu={} last={sn}(a1={sa:#x})->{sr:#x}",
+            t.pid, t.cr3, t.vruntime, sysn(i), cpun(i));
+        match frame {
+            Some((rip, cs, fl)) => crate::serial_print!(" resumes rip={rip:#x} cs={cs:#x} IF={}", (fl >> 9) & 1),
+            None => crate::serial_print!(" {}", if i == s.current { "RUNNING" } else { "(no frame)" }),
+        }
+        crate::ring3::thread_name_print(i);
+        crate::serial_println!();
+    }
+    // The others in short: tN:B (blocked), tN:S (sleeping), tN:Z (zombie).
+    let mut col = 0;
+    for i in 0..count {
+        let c = match s.tasks[i].state {
+            State::Blocked(_) => "B",
+            State::Sleeping(w) if w > now => "S",
+            State::Zombie(_) => "Z",
+            _ => continue,
+        };
+        if col == 0 {
+            crate::serial_print!("[nmi-tasks]");
+        }
+        crate::serial_print!(" t{i}:{c}");
+        col += 1;
+        if col == 20 {
+            crate::serial_println!();
+            col = 0;
+        }
+    }
+    if col != 0 {
+        crate::serial_println!();
+    }
+    crate::serial_println!("[nmi-tasks] {ready} Ready, {sleeping} Sleeping, {blocked} Blocked, {zombie} Zombie, {dead} Dead");
+}
+
 /// Every task as (index, cr3, state), copied out under the lock so a census can
 /// print it without holding the scheduler.
 pub fn snapshot_tasks() -> alloc::vec::Vec<(usize, u64, State)> {
@@ -862,6 +959,10 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+/// TSC at the timer interrupt that was taken last (BUG-182).
+pub fn last_tick_tsc() -> u64 {
+    LAST_TICK_TSC.load(Ordering::Relaxed)
+}
 static LATE_TICKS_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 #[no_mangle]
@@ -885,7 +986,12 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
             add += lost;
             LOST_TICKS.fetch_add(lost, Ordering::Relaxed);
             let n = LATE_TICKS_LOGGED.fetch_add(1, Ordering::Relaxed);
-            if n < 24 || (n + 1) % 128 == 0 {
+            // BUG-182: a window of 200 ms or more is always said (the first
+            // 64): the one-second window of that bug came after the 24 lines
+            // below were used up, and nothing named where it ended.
+            static LONG_LOGGED: AtomicU64 = AtomicU64::new(0);
+            let long = lost >= 20 && LONG_LOGGED.fetch_add(1, Ordering::Relaxed) < 64;
+            if n < 24 || (n + 1) % 128 == 0 || long {
                 let (rip, cs) = unsafe { (*((rsp + 120) as *const u64), *((rsp + 128) as *const u64)) };
                 let cur = current();
                 let (sn, sa1, _) = crate::ring3::last_syscall(cur);
@@ -1237,6 +1343,8 @@ fn task_stack_bottom(index: usize) -> u64 {
 
 /// Start the background tasks and activate round-robin scheduling.
 pub fn init() {
+    // Where the table lives, for the census that takes no lock (BUG-157).
+    SCHED_PEEK.store(&*SCHED.lock() as *const Scheduler as u64, Ordering::Relaxed);
     let mut s = SCHED.lock();
     // The kernel demo tasks (S2 priority a/b/c, the S2 sleeper, the G1 guarded-stack
     // overflow) are dev self-tests: they prove the mini-CFS priority ordering and

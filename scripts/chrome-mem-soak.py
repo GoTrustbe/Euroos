@@ -225,6 +225,14 @@ def main():
     ap.add_argument("--no-video", action="store_true")
     ap.add_argument("--free-video-seconds", type=int, default=120,
                     help="per round, also play a public video file in the browser's own player for this long (0: not)")
+    ap.add_argument("--local-video-dir", default="",
+                    help="per round, also play the clips of this directory (scripts/mk-test-video.sh; vp9.webm = VP9 + Opus) "
+                         "from this host at http://10.0.2.2:PORT/, picture and sound checked (chrome-smoke localvideo)")
+    ap.add_argument("--local-seconds", type=int, default=60, help="how long each local clip plays")
+    ap.add_argument("--local-port", type=int, default=18780, help="port of the host-side clip server (127.0.0.1 only)")
+    ap.add_argument("--nmi-storm", type=int, default=0,
+                    help="BUG-157: after the first round, send this many diagnostic NMIs (the probe of diag_stuck) to the "
+                         "running guest, one a second, and ask the console for an answer after each ten")
     a = ap.parse_args()
     # The fields chrome-smoke's own argument parser would have set.
     a.only, a.rounds, a.soak_hours, a.starts = "", 1, a.hours, 0
@@ -233,8 +241,32 @@ def main():
     a.workdir = os.path.abspath(a.workdir)
     os.makedirs(a.workdir, exist_ok=True)
     sites = [s for s in cs.SITES if not a.sites or s["name"] in a.sites.split(",")]
+    if a.local_video_dir:
+        if not os.path.isfile(os.path.join(a.local_video_dir, "vp9.webm")):
+            sys.exit("--local-video-dir needs vp9.webm (scripts/mk-test-video.sh DIR)")
+        cs.serve_local(a.local_port, a.local_video_dir)
     t0 = time.time()
     extra = {}
+
+    def nmi_storm(g, n):
+        # The probe is a diagnostic the harness sends to a machine that RUNS
+        # (diag_stuck, after a navigation that did not happen). The machine
+        # must still answer afterwards.
+        sent = 0
+        for i in range(n):
+            try:
+                g.qmp.cmd("inject-nmi")
+                sent += 1
+            except Exception:
+                break
+            time.sleep(1.0)
+            if (i + 1) % 10 == 0 and g.ramfiles() is None:
+                g.step("the guest answers its console after diagnostic NMI probes", False,
+                       f"no answer to `ramfiles` within 10 s after {sent} probes")
+                return False
+        ok = g.ramfiles() is not None
+        g.step("the guest answers its console after diagnostic NMI probes", ok, f"{sent} probes, one a second")
+        return ok
 
     def body(g):
         if not g.start_chrome("file:///tmp/input-test.html"):
@@ -262,6 +294,15 @@ def main():
                     g.step("site youtube-play", False, f"round {rnd}: the watch page did not load; RAM files {ram}")
                 if a.free_video_seconds > 0:
                     video_play(g, FREE_VIDEO, a.free_video_seconds, rnd)
+            if a.local_video_dir:
+                g.localvideo(a.local_port, a.local_seconds)
+                g.ramfiles()            # a census with the clip still on the page
+            if a.nmi_storm and rnd == 1 and not nmi_storm(g, a.nmi_storm):
+                break
+            # BUG-156: per child process, who holds the other end of its sockets
+            # (a utility process that never sees the end of its channel).
+            g.serial.send_line("fdpeers")
+            g.nap(2.0)
             mem.append((int(time.time() - t0), g.memory()))
             print(f"[chrome-mem-soak] round {rnd} done after {int(time.time() - t0)} s: {mem[-1][1]}", flush=True)
             extra["soak_rounds"], extra["soak_memory"] = rnd, mem

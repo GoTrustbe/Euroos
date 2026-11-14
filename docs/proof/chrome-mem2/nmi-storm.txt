@@ -1,0 +1,58 @@
+# chrome-mem-soak.py --nmi-storm 150 (4 GiB, 3 sites, then 150 diagnostic NMIs one a second)
+## nsb i0-pub = fd72e2c, the old probe
+nsb1: probes on the log 132, FROZEN lines 0, bytes per probe ~8835 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+nsb2: probes on the log 139, FROZEN lines 0, bytes per probe ~8510 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+nsb3: probes on the log 138, FROZEN lines 0, bytes per probe ~8836 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+## nsa n1-pub = f2baa29, a line per task
+nsa1: probes on the log 95, FROZEN lines 1, bytes per probe ~25800 | [gui-smoke] FAIL the guest answers its console after diagnostic NMI probes: no answer to `ramfiles` within 10 s after 100 probes | X input state unknown
+nsa2: probes on the log 69, FROZEN lines 1, bytes per probe ~24546 | [gui-smoke] FAIL the guest answers its console after diagnostic NMI probes: no answer to `ramfiles` within 10 s after 110 probes | X input state unknown
+nsa3: probes on the log 104, FROZEN lines 1, bytes per probe ~25429 | [gui-smoke] FAIL the guest answers its console after diagnostic NMI probes: no answer to `ramfiles` within 10 s after 120 probes | X input state unknown
+## nsc n2-pub = 28d5d33, the short census
+nsc1: probes on the log 143, FROZEN lines 0, bytes per probe ~2795 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+nsc2: probes on the log 141, FROZEN lines 0, bytes per probe ~2530 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+nsc3: probes on the log 149, FROZEN lines 0, bytes per probe ~2557 | [gui-smoke] ok   the guest answers its console after diagnostic NMI probes: 150 probes, one a second
+## one probe of nsc1
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] cpu 0
+[nmi] interrupted RIP=0x0000000071cd41aa CS=0x8 RSP=0x000000007fe78040 RFLAGS=0x246
+[nmi] anchor kernel_base ~ nmi_handler @ 0x0000000071b70841
+[nmi] CR2 (address of the last page fault) = 0x0000010c000a0000
+[nmi] code rip-16..: [84, c0, 74, 04, cd, 4a, eb, 0f, c6, 05, 59, cc, 95, 06, 01, f4]
+[nmi] code rip..   : [c6, 05, 51, cc, 95, 06, 00, 48, 83, bc, 24, 20, 1b, 00, 00, ff]
+[nmi] current task 0 last-syscall=231(a1=0x0)->0x0 globals-owner=119
+[nmi-tasks] 134 slots, current=0 (mirror 0), SCHED free, ticks=41393, min_vr=14312896, t0 wants=false idle=true last-turn-tick=41393, sched-skips=2
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=14312896 sys=177 cpu=0 last=231(a1=0x0)->0x0 RUNNING
+[nmi-tasks] t1:S t2:B t3:B t5:S t6:S t7:S t8:S t9:B t10:B t11:B t12:B t13:B t14:S t15:S t16:B t17:B t18:B t19:B t20:B t21:B
+[nmi-tasks] t22:B t23:B t24:B t25:B t26:B t27:S t28:B t29:B t30:S t31:B t32:S t33:S t34:S t35:S t36:B t37:B t38:B t39:S t40:B t41:S
+[nmi-tasks] t42:B t43:S t44:B t45:S t46:S t47:S t48:B t49:B t50:B t51:S t52:B t53:B t54:S t55:B t56:B t57:B t58:B t59:B t60:B t61:B
+[nmi-tasks] t62:S t63:S t64:B t65:S t66:S t67:S t68:S t69:B t70:B t71:B t72:S t73:B t74:B t75:S t76:S t77:S t78:S t79:S t80:B t81:B
+[nmi-tasks] t82:B t83:S t84:B t85:B t86:S t87:B t88:S t89:S t90:S t91:S t92:B t93:B t94:B t95:S t96:B t97:S t98:B t99:B t100:B t101:S
+[nmi-tasks] t102:B t103:B t104:S t105:S t106:S t107:S t108:B t109:B t110:B t111:S t112:S t113:S t114:S t115:B t116:B t117:B t118:S t119:S t120:S t121:S
+[nmi-tasks] t122:S t123:B t124:B t125:B t126:S t127:B t128:S t129:B t130:B t132:B
+[nmi-tasks] 1 Ready, 57 Sleeping, 73 Blocked, 0 Zombie, 3 Dead
+[nmi] stack scan (return addresses):
+[nmi]   0x000000007e745118
+[nmi]   0x000000007fe78ae0
+[nmi]   0x0000000058b9eb00
+[nmi]   0x000000007fe78ae0
+[nmi]   0x0000000074e11381
+[nmi]   0x000000007fe781f0
+[nmi]   0x0000000074e35308
+[nmi]   0x0000000058e20910
+[nmi]   0x0000000051b3c100
+[nmi]   0x000000007fe781f0
+[nmi]   0x0000000074e35308
+[nmi]   0x000000007fe78a58
+[nmi]   0x0000000058be1250
+[nmi]   0x0000000058e26c50
+[nmi]   0x0000000058e121c0
+[nmi]   0x0000000058b93dc0
+[nmi]   0x000000007fe785d8
+[nmi]   0x0000000071c81c3b
+[nmi]   0x0000000051b00880
+[nmi]   0x0000000058e127f0
+[nmi]   0x0000000051b3ce00
+[nmi]   0x0000000058bf3990
+[nmi]   0x0000000058af54c0
+[nmi]   0x0000000058b9ea50
+========== END NMI PROBE ==========

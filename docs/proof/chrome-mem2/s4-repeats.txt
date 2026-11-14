@@ -1,0 +1,24 @@
+# BUG-157: 20 sessions of the s4 kind (4 GiB, site matrix without video, 15 min of rounds each), image n2-pub (28d5d33: integ + the new probe)
+s4l1-1: steps ok=24 fail=1 |  FAIL (1 step(s)): 2 rounds in 1224 s | hang lines=0 nmi probes=0 refused forks=1
+s4l1-2: steps ok=25 fail=0 |  PASS: 2 rounds in 1222 s | hang lines=0 nmi probes=0 refused forks=0
+s4l1-3: steps ok=25 fail=0 |  PASS: 2 rounds in 1242 s | hang lines=0 nmi probes=0 refused forks=0
+s4l1-4: steps ok=25 fail=0 |  PASS: 2 rounds in 1234 s | hang lines=0 nmi probes=0 refused forks=0
+s4l2-1: steps ok=25 fail=0 |  PASS: 2 rounds in 1224 s | hang lines=0 nmi probes=0 refused forks=0
+s4l2-2: steps ok=25 fail=0 |  PASS: 2 rounds in 1214 s | hang lines=0 nmi probes=0 refused forks=0
+s4l2-3: steps ok=25 fail=0 |  PASS: 2 rounds in 1229 s | hang lines=0 nmi probes=0 refused forks=0
+s4l2-4: steps ok=25 fail=0 |  PASS: 2 rounds in 1232 s | hang lines=0 nmi probes=0 refused forks=0
+s4l3-1: steps ok=25 fail=0 |  PASS: 2 rounds in 1211 s | hang lines=0 nmi probes=0 refused forks=0
+s4l3-2: steps ok=25 fail=0 |  PASS: 2 rounds in 1201 s | hang lines=0 nmi probes=0 refused forks=0
+s4l3-3: steps ok=25 fail=0 |  PASS: 2 rounds in 1228 s | hang lines=0 nmi probes=0 refused forks=0
+s4l3-4: steps ok=24 fail=1 |  FAIL (1 step(s)): 2 rounds in 1235 s | hang lines=0 nmi probes=0 refused forks=1
+s4l4-1: steps ok=25 fail=0 |  PASS: 2 rounds in 1211 s | hang lines=0 nmi probes=0 refused forks=0
+s4l4-2: steps ok=25 fail=0 |  PASS: 2 rounds in 1218 s | hang lines=0 nmi probes=0 refused forks=0
+s4l4-3: steps ok=24 fail=1 |  FAIL (1 step(s)): 2 rounds in 1237 s | hang lines=0 nmi probes=0 refused forks=1
+s4l4-4: steps ok=24 fail=1 |  FAIL (1 step(s)): 2 rounds in 1234 s | hang lines=0 nmi probes=0 refused forks=1
+s4l5-1: steps ok=25 fail=0 |  PASS: 2 rounds in 1211 s | hang lines=0 nmi probes=0 refused forks=0
+s4l5-2: steps ok=25 fail=0 |  PASS: 2 rounds in 1212 s | hang lines=0 nmi probes=0 refused forks=0
+s4l5-3: steps ok=25 fail=0 |  PASS: 2 rounds in 1224 s | hang lines=0 nmi probes=0 refused forks=0
+s4l5-4: steps ok=25 fail=0 |  PASS: 2 rounds in 1231 s | hang lines=0 nmi probes=0 refused forks=0
+-- the steps that failed:
+      1 [gui-smoke] FAIL site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf 
+      3 [gui-smoke] FAIL site youtube: https://www.youtube.com/: https://www.youtube.com/ 

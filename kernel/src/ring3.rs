@@ -428,7 +428,7 @@ mod fdspace;
 // One descriptor table per process on top of them (BUG-098).
 #[path = "fdtab.rs"]
 mod fdtab;
-pub use fdtab::{census as fd_census, census_lines as fd_census_lines};
+pub use fdtab::{census as fd_census, census_lines as fd_census_lines, peer_lines as fd_peer_lines};
 
 /// A spin-locked value that exists once per fd space: `lock()` takes the one
 /// lock and yields the part of the calling task's space.
@@ -1353,6 +1353,16 @@ pub fn thread_name_try(t: usize) -> String {
     match THREAD_NAMES.try_lock() {
         Some(n) => n.iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone()).unwrap_or_else(|| String::from("?")),
         None => String::from("(names locked)"),
+    }
+}
+
+/// Print ` name="..."` of task `t` when it has one and the table is free: no
+/// allocation, no waiting (the NMI probe, BUG-157).
+pub fn thread_name_print(t: usize) {
+    if let Some(n) = THREAD_NAMES.try_lock() {
+        if let Some((_, name)) = n.iter().find(|(x, _)| *x == t) {
+            crate::serial_print!(" name={:?}", name.as_str());
+        }
     }
 }
 
@@ -10941,7 +10951,21 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // In pieces with a window for the timer (BUG-128): this task is the only
     // one in its address space, nobody sees the arena half wiped.
     let t_start = unsafe { core::arch::x86_64::_rdtsc() };
-    unsafe { arena_fill(arena, None, frames * 4096); }
+    {
+        use x86_64::registers::control::Cr3;
+        let cr3 = Cr3::read().0.start_address().as_u64();
+        if crate::paging::arena_is_lazy(cr3, arena) {
+            // BUG-156: the arena of a fork child is single frames. They go
+            // back to the pool; the new image gets a frame for what it touches.
+            let n = crate::paging::lazy_arena_discard(cr3, arena, nblocks);
+            static SAID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+            if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
+                crate::serial_println!("[execve] task {}: {} KiB of arena pages back to the process pool", crate::sched::current(), n * 4);
+            }
+        } else {
+            unsafe { arena_fill(arena, None, frames * 4096); }
+        }
+    }
     let t_wipe = unsafe { core::arch::x86_64::_rdtsc() };
     {
         use x86_64::registers::control::Cr3;
@@ -11095,6 +11119,12 @@ fn fork_in_flight_reclaim(task: usize) {
         (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
 }
 
+/// BUG-156: frames of the process pool a fork leaves alone (8 MiB), for the
+/// arena pages the processes that run will still touch.
+const FORK_POOL_RESERVE: usize = 2048;
+/// Arena pages of fork children that got their frame at the first touch.
+pub static ARENA_LAZY_FAULTS: AtomicU64 = AtomicU64::new(0);
+
 fn do_glibc_fork() -> u64 {
     static FORKLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     let fork_log = FORKLOG.fetch_add(1, Ordering::Relaxed) < 4;
@@ -11109,40 +11139,37 @@ fn do_glibc_fork() -> u64 {
         return (-38i64) as u64; // no glibc process active
     }
     let nblocks = span >> 21;
-    let arena_frames = (nblocks * 512) as usize;
-    // Child arena: 2 MiB-ALIGNED contiguous frames from the fork pool (the arena is
-    // mapped with 2 MiB HUGE pages — an unaligned base faults MALFORMED_TABLE).
-    let child_arena = match crate::procpool::alloc_aligned(arena_frames, 512) {
-        Some(a) => a,
-        None => {
-            crate::serial_println!("[fork] arena alloc FAILED ({} MiB, pool has {} MiB)",
-                span >> 20, crate::procpool::free_frames() / 256);
-            return (-12i64) as u64; // -ENOMEM
-        }
-    };
+    // BUG-156: the child has no arena in one piece any more (128 MiB of the
+    // process pool per browser process, copied whole at every fork, and the
+    // 13th process did not fit a 4 GiB machine). Its arena is page tables
+    // over the same addresses, and a frame of its own for every page of the
+    // parent that has something in it; the rest reads as zeros and gets a
+    // frame when it is touched (paging::lazy_arena_fault).
+    let (child_arena, arena_frames) = (0u64, 0usize);
     let me = crate::sched::current();
-    fork_in_flight_set(me, child_arena, arena_frames, 0);
-    // Copy the parent arena (ld.so/libc/heap/stack) into the child's frames, in
-    // pieces with a window for the timer (BUG-128). The forking thread stands in
-    // this syscall; its own stack and what it alone writes are copied whole.
     let t_start = unsafe { core::arch::x86_64::_rdtsc() };
-    unsafe { arena_fill(child_arena, Some(arena), arena_frames * 4096); }
-    let t_arena = unsafe { core::arch::x86_64::_rdtsc() };
     // Child page tables (PML4/PDPT/PD) from the fork pool.
     let (pml4, pdpt, pd) = match (crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
         (a, b, c) => {
-            // BUG-150: the whole arena goes back (one frame of it did), and
-            // whichever of the three tables was got.
+            // BUG-150: whichever of the three tables was got goes back.
             for f in [a, b, c].into_iter().flatten() {
                 crate::procpool::free(f);
             }
-            crate::procpool::free_range(child_arena, arena_frames);
-            fork_in_flight_done(me);
             crate::serial_println!("[fork] page-table alloc FAILED");
             return (-12i64) as u64;
         }
     };
+    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, arena, nblocks) {
+        let n = crate::paging::free_fork_tables(pml4);
+        crate::procpool::free(pml4);
+        crate::serial_println!("[fork] arena alloc FAILED (no frame for the page tables of a {} MiB arena, {n} given back, pool has {} MiB)",
+            span >> 20, crate::procpool::free_frames() / 256);
+        return (-12i64) as u64;
+    }
+    // From here the tables are linked under the pml4: a fork that is refused
+    // or whose task is ended (BUG-180) gives everything back through it.
+    fork_in_flight_set(me, child_arena, arena_frames, pml4);
     // BUG-150: from here on the child has an address space. A fork that is
     // refused further down gives all of it back, as the exit of a child does:
     // the copies of the demand pages and their tables (demand pool), the arena
@@ -11159,9 +11186,16 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] refused ({why}): {} MiB of demand pages and {} MiB of arena and tables given back",
             (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
     };
-    crate::paging::fill_remap_tables_multiblock(pml4, pdpt, pd, arena, child_arena, nblocks);
-    // The tables are linked under the pml4 now (free_fork_tables finds them).
-    fork_in_flight_set(me, child_arena, arena_frames, pml4);
+    // Copy the pages of the parent arena that hold something (ld.so, libc,
+    // heap, stacks), 2 MiB at a time with a window for the timer (BUG-128).
+    // The forking thread stands in this syscall.
+    let Some((arena_copied, arena_zero)) = crate::paging::clone_arena_lazy(parent_pml4, pml4, arena, nblocks, FORK_POOL_RESERVE, &mut irq_window) else {
+        crate::serial_println!("[fork] arena alloc FAILED ({} MiB arena, pool has {} MiB)",
+            span >> 20, crate::procpool::free_frames() / 256);
+        undo_fork("no memory for the copy of the arena");
+        return (-12i64) as u64; // -ENOMEM
+    };
+    let t_arena = unsafe { core::arch::x86_64::_rdtsc() };
     // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
     if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
         crate::serial_println!("[fork] clone_demand_region OOM");
@@ -11224,8 +11258,8 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] pid {pid}: no memory for the child's descriptor table (it starts with the standard streams only)");
     }
     crate::serial_println!(
-        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena={child_arena:#x} {} MiB, the parent uses {} MiB of it up to its mmap window top and {} KiB of brk; arena copy {} ms, demand pages {} ms, rest {} ms)",
-        span >> 20, HEAP_BREAK.load(Ordering::Relaxed).saturating_sub(arena) >> 20,
+        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena of {} MiB: {} KiB copied, {} KiB of zero pages left out; the parent uses {} MiB of it up to its mmap window top and {} KiB of brk; arena copy {} ms, demand pages {} ms, rest {} ms)",
+        span >> 20, arena_copied * 4, arena_zero * 4, HEAP_BREAK.load(Ordering::Relaxed).saturating_sub(arena) >> 20,
         BRK_CUR.load(Ordering::Relaxed).saturating_sub(arena + 0x0200_0000) / 1024,
         tsc_ms(t_start, t_arena), tsc_ms(t_arena, t_demand),
         tsc_ms(t_demand, unsafe { core::arch::x86_64::_rdtsc() })
@@ -13626,7 +13660,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
     let prev_deadline = GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
         let kill = mode == "forkkill";
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
@@ -15543,7 +15577,8 @@ pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
              (GLIBC_ARENA_MIB.load(Ordering::Relaxed) as usize) * 256)
         } else {
             match GLIBC_FORK_CHILDREN.lock().iter().find(|c| c.0 == pid && c.1 == owner) {
-                Some(&(_, t, p, _, fr)) => (p, t, fr),
+                // BUG-156: the frames its arena pages hold, not a fixed size.
+                Some(&(_, t, p, _, _)) => (p, t, crate::paging::lazy_arena_frames(p)),
                 None => continue,
             }
         };
