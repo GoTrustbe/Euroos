@@ -53,6 +53,25 @@ fn log(what: &str) {
 }
 
 const FRAME_BYTES: u64 = 4; // 16-bit stereo
+
+/// [pcmch] (BUG-181): the first stereo frame that reached the ring after each
+/// HW_PARAMS, with the channel count of that stream.
+static FIRST_FRAMES: Mutex<alloc::vec::Vec<(u32, i16, i16)>> = Mutex::new(alloc::vec::Vec::new());
+static FIRST_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn first_frames_reset() {
+    FIRST_FRAMES.lock().clear();
+}
+pub fn first_frames() -> alloc::vec::Vec<(u32, i16, i16)> {
+    FIRST_FRAMES.lock().clone()
+}
+fn first_frame_note(channels: u32, stereo: &[u8]) {
+    if stereo.len() >= 4 && FIRST_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
+        let mut v = FIRST_FRAMES.lock();
+        if v.len() < 16 {
+            v.push((channels, i16::from_le_bytes([stereo[0], stereo[1]]), i16::from_le_bytes([stereo[2], stereo[3]])));
+        }
+    }
+}
 static PEAK_ACC: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The ring's physical address and size, for the data mmap.
@@ -260,6 +279,7 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         p.period_size = period as u64;
         p.buffer_size = buffer as u64;
         p.state = STATE_SETUP;
+        FIRST_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         log(&alloc::format!("hw_params: period {period} frames, buffer {buffer} frames"));
     }
     0
@@ -368,6 +388,7 @@ fn writei(arg: u64) -> u64 {
         PEAK_ACC.fetch_max(peak as u64, core::sync::atomic::Ordering::Relaxed);
     }
     let start = ((p.appl_ptr % p.ring_frames) * FRAME_BYTES) as usize;
+    first_frame_note(2, &data);
     crate::hda::pcm_write(start, &data);
     p.appl_ptr += n;
     if p.state == STATE_PREPARED && p.appl_ptr >= p.start_threshold {

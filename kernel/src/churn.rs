@@ -150,6 +150,50 @@ pub fn sync_socket_test(alloc: &mut FrameAllocator) {
         if skipped { "OK (not run: no room for a second process)" } else if exit == 77 { "OK ✓" } else { "FAILED" });
 }
 
+/// BUG-181: the ALSA playback device with 6, 1 and 2 channels (gpcm.c): what
+/// Chromium does on hw:0,0 for 5.1, mono and stereo media. Each stream must be
+/// accepted (refine, HW_PARAMS, a whole WRITEI) and what reaches the stereo
+/// ring must be its downmix: 6 channels FL FR RL RR FC LFE = 12000 -12000 6000
+/// -6000 4000 30000 -> L 7899, R -5556 (fronts 1, rears and centre 0.7071, LFE
+/// dropped, each side divided by the sum of its weights); mono 5000 -> 5000 on
+/// both; stereo 1234 -4321 unchanged. Exit 77 = every step; 78 = no device (a
+/// machine without HD-Audio: not run).
+pub fn pcm_channels_test(alloc: &mut FrameAllocator) {
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    crate::ring3::reap_dead(alloc);
+    crate::alsa::first_frames_reset();
+    let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gpcm_bytes(), crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gpcm"], &[b"PATH=/bin"], caps);
+    for l in out.lines().filter(|l| l.starts_with("FAIL")) {
+        crate::serial_println!("[pcmch]   {}", l.trim_end());
+    }
+    let got = crate::alsa::first_frames();
+    let want: [(u32, i16, i16); 3] = [(6, 7899, -5556), (1, 5000, 5000), (2, 1234, -4321)];
+    let mut ring_ok = true;
+    let mut seen = alloc::string::String::new();
+    for &(ch, l, r) in &want {
+        match got.iter().find(|g| g.0 == ch) {
+            Some(&(_, gl, gr)) => {
+                let ok = (gl as i32 - l as i32).abs() <= 2 && (gr as i32 - r as i32).abs() <= 2;
+                ring_ok &= ok;
+                seen.push_str(&alloc::format!(" {ch} ch -> ({gl}, {gr}) want ({l}, {r}){}", if ok { "" } else { " FAIL" }));
+            }
+            None => {
+                ring_ok = false;
+                seen.push_str(&alloc::format!(" {ch} ch -> nothing reached the ring FAIL"));
+            }
+        }
+    }
+    let line = out.lines().rev().find(|l| l.starts_with("GPCM:")).map(|l| alloc::string::String::from(l.trim_end()))
+        .unwrap_or_else(|| alloc::string::String::from("(no result line)"));
+    let skipped = exit == 78 || exit == u64::MAX;
+    crate::serial_println!(
+        "[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: {line} (exit {}); ring:{} → {}",
+        if exit == u64::MAX { alloc::string::String::from("not started") } else { alloc::format!("{exit}") },
+        if skipped { alloc::string::String::from(" -") } else { seen },
+        if skipped { "OK (not run: no HD-Audio device)" } else if exit == 77 && ring_ok { "OK ✓" } else { "FAILED" });
+}
+
 /// BUG-147: 320 threads of one glibc process alive at the same time
 /// (gmanythreads.c), more than the 256 task slots and 224 thread kernel stacks
 /// of the tree before; a browser session had 214 live tasks. Exit 77 = all
