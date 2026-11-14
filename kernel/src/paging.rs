@@ -383,22 +383,9 @@ pub fn map_user_arena(
                 pdptp.add(i3).write_volatile(pd | PRESENT | WRITABLE | USER);
                 pd
             };
-            // 4 KiB pages from the start (SPLIT_PT): a fork shares the pages
-            // copy-on-write, and single pages are write-protected for that.
-            // The table comes from the same allocator as the directories and
-            // goes with the address space; without one, a 2 MiB page as
-            // before (the first fork splits it, from the process pool).
-            let phys = phys_arena + b * MIB2;
-            match get_pd() {
-                Some(pt) => {
-                    let ptp = pt as *mut u64;
-                    for i in 0..512u64 {
-                        ptp.add(i as usize).write_volatile((phys + i * 4096) | PRESENT | WRITABLE | USER);
-                    }
-                    (pd as *mut u64).add(i2).write_volatile(pt | PRESENT | WRITABLE | USER | SPLIT_PT);
-                }
-                None => (pd as *mut u64).add(i2).write_volatile(phys | PRESENT | WRITABLE | HUGE | USER),
-            }
+            (pd as *mut u64)
+                .add(i2)
+                .write_volatile((phys_arena + b * MIB2) | PRESENT | WRITABLE | HUGE | USER);
         }
     }
     true
@@ -1256,6 +1243,41 @@ unsafe fn arena_pte_ptr(pml4: u64, virt: u64) -> Option<(*mut u64, u64)> {
     Some((((e2 & ADDR_MASK) as *mut u64).add(((virt >> 12) & 0x1FF) as usize), e2))
 }
 
+/// The arena of a launched process that runs demand-paged (the browser, the
+/// [memt] runs) gets 4 KiB pages before it starts: a page table per 2 MiB
+/// (SPLIT_PT), from the frame allocator that built its directories, freed
+/// with them (`free_address_space`). Only with room to spare: without it the
+/// block stays a 2 MiB page and a fork copies it as before. Returns the
+/// blocks split.
+pub fn arena_split(falloc: &mut FrameAllocator, pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
+    if falloc.free_frames() < nblocks as usize + 4096 {
+        return 0;
+    }
+    let mut n = 0;
+    // SAFETY: identity-mapped tables of an address space no task runs on yet.
+    unsafe {
+        for b in 0..nblocks {
+            let base = virt_arena + b * MIB2;
+            let e4 = (pml4 as *const u64).read_volatile();
+            if e4 & PRESENT == 0 { break; }
+            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((base >> 21) & 0x1FF) as usize);
+            let e2 = e2p.read_volatile();
+            if e2 & PRESENT == 0 || e2 & HUGE == 0 || e2 & USER == 0 { continue; }
+            let Ok(pt) = falloc.allocate() else { break };
+            let phys = e2 & 0x000F_FFFF_FFE0_0000;
+            let leaf = e2 & (PRESENT | WRITABLE | USER | NX);
+            for i in 0..512u64 {
+                (pt as *mut u64).add(i as usize).write_volatile((phys + i * 4096) | leaf);
+            }
+            e2p.write_volatile(pt | PRESENT | WRITABLE | USER | SPLIT_PT | (e2 & NX));
+            n += 1;
+        }
+    }
+    n
+}
+
 /// fork(): share the arena of the running process (`parent`, the current
 /// CR3) with the lazy arena of `child`. A page of the parent that holds
 /// something becomes copy-on-write on both sides; a page of the launched
@@ -1284,20 +1306,27 @@ pub fn share_arena_cow(parent: u64, child: u64, virt_arena: u64, nblocks: u64, r
             let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
             if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
             let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((base >> 21) & 0x1FF) as usize);
-            let mut e2 = e2p.read_volatile();
+            let e2 = e2p.read_volatile();
             if e2 & PRESENT == 0 || e2 & USER == 0 { continue; }
             if e2 & HUGE != 0 {
-                // The launched process: this block becomes a page table.
-                if crate::procpool::free_frames() <= reserve { return None; }
-                let pt = crate::procpool::alloc()?;
-                let phys = e2 & 0x000F_FFFF_FFE0_0000;
-                let leaf = e2 & (PRESENT | WRITABLE | USER | NX);
+                // An arena of 2 MiB pages (a process that was not started
+                // demand-paged, see `arena_split`): copied as in section 7,
+                // the pages that are not all zeros.
                 for i in 0..512u64 {
-                    (pt as *mut u64).add(i as usize).write_volatile((phys + i * 4096) | leaf);
+                    let va = base + i * 4096;
+                    if page_is_zero(va) {
+                        zero += 1;
+                        continue;
+                    }
+                    let Some(ctep) = lazy_pte_ptr(child, va) else { return None };
+                    if crate::procpool::free_frames() <= reserve { return None; }
+                    let f = crate::procpool::alloc()?;
+                    core::ptr::copy_nonoverlapping(va as *const u8, f as *mut u8, 4096);
+                    ctep.write_volatile(f | PRESENT | WRITABLE | USER | OWNED);
+                    copied += 1;
                 }
-                e2 = pt | PRESENT | WRITABLE | USER | SPLIT_PT | (e2 & NX);
-                e2p.write_volatile(e2);
-                invlpg(base);
+                between();
+                continue;
             }
             let pinned = e2 & SPLIT_PT != 0;
             let ppt = (e2 & ADDR_MASK) as *mut u64;

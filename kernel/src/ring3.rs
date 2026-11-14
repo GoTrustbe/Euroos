@@ -12253,6 +12253,12 @@ pub fn spawn_glibc_persistent(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        // Demand-paged: 4 KiB pages for the arena, so a fork can share it
+        // copy-on-write (paging::arena_split).
+        Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
+            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            p
+        }
         Ok(p) => p,
         Err(crate::paging::OutOfFrames) => {
             // No frames for the page tables: refuse the start (nothing was kept by the builder).
@@ -12916,6 +12922,12 @@ fn glibc_disk_launch(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        // Demand-paged: 4 KiB pages for the arena, so a fork can share it
+        // copy-on-write (paging::arena_split).
+        Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
+            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            p
+        }
         Ok(p) => p,
         Err(crate::paging::OutOfFrames) => {
             // No frames for the page tables: refuse the start (nothing was kept by the builder).
@@ -14226,6 +14238,12 @@ pub fn run_glibc(
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
     let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+        // Demand-paged: 4 KiB pages for the arena, so a fork can share it
+        // copy-on-write (paging::arena_split).
+        Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
+            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            p
+        }
         Ok(p) => p,
         Err(crate::paging::OutOfFrames) => {
             // No frames for the page tables: refuse the start (nothing was kept by the builder).
