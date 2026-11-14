@@ -6,6 +6,11 @@
 //! over the one cyclic DMA buffer the HDA driver already runs (48 kHz, 16-bit,
 //! stereo), so any ALSA client plays without a libasound of its own.
 //!
+//! Channels (BUG-181): a client may open the device with 1 to 8 channels, as on
+//! an HD-Audio codec with a channel map; the ring stays stereo and `writei`
+//! downmixes each frame into it (see [`downmix`]). Chromium opens hw:0,0 with
+//! the channel count of the media and does not downmix a named device itself.
+//!
 //! Model: the DMA loops over a ring of `ring_frames` stereo frames; the link
 //! position (LPIB) gives the hardware read cursor, tracked into a monotonic
 //! `hw_ptr` in frames. The client writes ahead of it (`appl_ptr`); what the
@@ -39,11 +44,13 @@ struct Pcm {
     start_threshold: u64,
     zeroed_upto: u64,
     opens: u32,
+    /// Channels per frame of the client's stream (1..=MAX_CHANNELS).
+    channels: u32,
 }
 
 static PCM: Mutex<Pcm> = Mutex::new(Pcm {
     state: STATE_OPEN, ring_frames: 0, period_size: 1024, buffer_size: 0,
-    appl_ptr: 0, hw_ptr: 0, last_lpib: 0, run_tick: 0, avail_min: 1, start_threshold: 1, zeroed_upto: 0, opens: 0,
+    appl_ptr: 0, hw_ptr: 0, last_lpib: 0, run_tick: 0, avail_min: 1, start_threshold: 1, zeroed_upto: 0, opens: 0, channels: 2,
 });
 static LINES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 fn log(what: &str) {
@@ -52,7 +59,52 @@ fn log(what: &str) {
     }
 }
 
-const FRAME_BYTES: u64 = 4; // 16-bit stereo
+const FRAME_BYTES: u64 = 4; // 16-bit stereo (the ring)
+const MAX_CHANNELS: u32 = 8;
+
+/// Weights (Q14) of each input channel on the left and right of the ring, in
+/// the ALSA default channel order of each count (the order of the hw device and
+/// of libasound's surround PCMs): 1 mono; 2 FL FR; 3 FL FR LFE; 4 FL FR RL RR;
+/// 5 + FC; 6 + LFE; 7 + RC; 8 FL FR RL RR FC LFE SL SR. Fronts 1, centre, rears
+/// and sides 0.7071 (-3 dB), the rear centre 0.5 on both sides, LFE dropped (as
+/// the default downmix of ffmpeg and the ALSA route plugin do); each side is
+/// divided by the sum of its weights, so a full-scale signal cannot clip.
+const C: i32 = 11585; // 0.7071 in Q14
+const U: i32 = 16384; // 1.0
+const H: i32 = 8192; // 0.5
+const WEIGHTS: [&[(i32, i32)]; 9] = [
+    &[],
+    &[(U, U)],
+    &[(U, 0), (0, U)],
+    &[(U, 0), (0, U), (0, 0)],
+    &[(U, 0), (0, U), (C, 0), (0, C)],
+    &[(U, 0), (0, U), (C, 0), (0, C), (C, C)],
+    &[(U, 0), (0, U), (C, 0), (0, C), (C, C), (0, 0)],
+    &[(U, 0), (0, U), (C, 0), (0, C), (C, C), (0, 0), (H, H)],
+    &[(U, 0), (0, U), (C, 0), (0, C), (C, C), (0, 0), (C, 0), (0, C)],
+];
+
+/// Interleaved S16_LE frames of `channels` channels -> stereo S16_LE frames.
+fn downmix(src: &[u8], channels: u32) -> alloc::vec::Vec<u8> {
+    let ch = channels as usize;
+    if ch == 2 {
+        return src.to_vec();
+    }
+    let w = WEIGHTS[ch];
+    let (sl, sr) = w.iter().fold((0i64, 0i64), |a, &(l, r)| (a.0 + l as i64, a.1 + r as i64));
+    let mut out = alloc::vec::Vec::with_capacity(src.len() / ch * 2);
+    for f in src.chunks_exact(2 * ch) {
+        let (mut l, mut r) = (0i64, 0i64);
+        for (k, &(wl, wr)) in w.iter().enumerate() {
+            let x = i16::from_le_bytes([f[2 * k], f[2 * k + 1]]) as i64;
+            l += x * wl as i64;
+            r += x * wr as i64;
+        }
+        out.extend_from_slice(&((l / sl.max(1)) as i16).to_le_bytes());
+        out.extend_from_slice(&((r / sr.max(1)) as i16).to_le_bytes());
+    }
+    out
+}
 
 /// [pcmch] (BUG-181): the first stereo frame that reached the ring after each
 /// HW_PARAMS, with the channel count of that stream.
@@ -228,7 +280,12 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
     // Intervals, index = param - 8: SAMPLE_BITS 0, FRAME_BITS 1, CHANNELS 2, RATE 3,
     // PERIOD_TIME 4, PERIOD_SIZE 5, PERIOD_BYTES 6, PERIODS 7, BUFFER_TIME 8,
     // BUFFER_SIZE 9, BUFFER_BYTES 10, TICK_TIME 11.
-    let fixed = [(0usize, 16u32), (1, 32), (2, 2), (3, 48000)];
+    // Channels 1..=8 (BUG-181): what the client's CHANNELS and FRAME_BITS allow;
+    // the byte sizes follow from the count, below.
+    let (cin, fbin) = (get_interval(&buf, 2), get_interval(&buf, 1));
+    let mut ch_lo = cin.0.max(1).max(fbin.0.div_ceil(16));
+    let mut ch_hi = cin.1.min(MAX_CHANNELS).min(fbin.1 / 16);
+    let fixed = [(0usize, 16u32), (3, 48000)];
     for &(i, v) in &fixed {
         let (mn, mx) = get_interval(&buf, i);
         if mn > v || mx < v {
@@ -241,12 +298,28 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
     let Some(buffer) = choose(get_interval(&buf, 9), ring, period * 2, ring) else { log("hw_params: buffer interval cannot meet the ring"); return EINVAL };
     let buffer = buffer - buffer % period;
     let periods = buffer / period;
+    // The byte sizes the client allows narrow the channel count too.
+    let (pb, bb) = (get_interval(&buf, 6), get_interval(&buf, 10));
+    ch_lo = ch_lo.max(pb.0.div_ceil(period * 2)).max(bb.0.div_ceil(buffer * 2));
+    ch_hi = ch_hi.min(pb.1 / (period * 2)).min(bb.1 / (buffer * 2));
+    if ch_lo > ch_hi {
+        log(&alloc::format!("hw_params: no channel count in [{},{}] (frame bits [{},{}]) fits 1..={MAX_CHANNELS}", cin.0, cin.1, fbin.0, fbin.1));
+        return EINVAL;
+    }
+    if commit && ch_lo != ch_hi {
+        // HW_PARAMS with a range left: stereo if allowed, else the lowest.
+        let c = if (ch_lo..=ch_hi).contains(&2) { 2 } else { ch_lo };
+        ch_lo = c;
+        ch_hi = c;
+    }
+    put_interval(&mut buf, 2, ch_lo, ch_hi);
+    put_interval(&mut buf, 1, 16 * ch_lo, 16 * ch_hi);
     put_interval(&mut buf, 5, period, period);
-    put_interval(&mut buf, 6, period * 4, period * 4);
+    put_interval(&mut buf, 6, period * 2 * ch_lo, period * 2 * ch_hi);
     put_interval(&mut buf, 4, period * 1000000 / 48000, period * 1000000 / 48000);
     put_interval(&mut buf, 7, periods, periods);
     put_interval(&mut buf, 9, buffer, buffer);
-    put_interval(&mut buf, 10, buffer * 4, buffer * 4);
+    put_interval(&mut buf, 10, buffer * 2 * ch_lo, buffer * 2 * ch_hi);
     put_interval(&mut buf, 8, buffer * 1000000 / 48000, buffer * 1000000 / 48000);
     put_interval(&mut buf, 11, 0, 0);
     // cmask: exactly the params this refine narrowed (mask params 0..2, interval
@@ -278,9 +351,10 @@ fn hw_params(arg: u64, commit: bool) -> u64 {
         let mut p = PCM.lock();
         p.period_size = period as u64;
         p.buffer_size = buffer as u64;
+        p.channels = ch_lo;
         p.state = STATE_SETUP;
         FIRST_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
-        log(&alloc::format!("hw_params: period {period} frames, buffer {buffer} frames"));
+        log(&alloc::format!("hw_params: period {period} frames, buffer {buffer} frames, {ch_lo} channels{}", if ch_lo == 2 { "" } else { " (downmixed to stereo)" }));
     }
     0
 }
@@ -375,7 +449,8 @@ fn writei(arg: u64) -> u64 {
         log(&alloc::format!("writei EAGAIN (avail 0, appl {} hw {})", p.appl_ptr, p.hw_ptr));
         return EAGAIN;
     }
-    let Some(data) = crate::ring3::copy_from_user(src, (n * FRAME_BYTES) as usize) else { return EFAULT };
+    let ch = p.channels.clamp(1, MAX_CHANNELS);
+    let Some(data) = crate::ring3::copy_from_user(src, (n * 2 * ch as u64) as usize) else { return EFAULT };
     // Peak absolute sample of what the client just handed us: distinguishes a
     // client writing real audio from one writing silence (the WAV went silent
     // even though writei ran; is the tone silent at the source?).
@@ -388,7 +463,8 @@ fn writei(arg: u64) -> u64 {
         PEAK_ACC.fetch_max(peak as u64, core::sync::atomic::Ordering::Relaxed);
     }
     let start = ((p.appl_ptr % p.ring_frames) * FRAME_BYTES) as usize;
-    first_frame_note(2, &data);
+    let data = downmix(&data, ch);
+    first_frame_note(ch, &data);
     crate::hda::pcm_write(start, &data);
     p.appl_ptr += n;
     if p.state == STATE_PREPARED && p.appl_ptr >= p.start_threshold {
@@ -463,12 +539,13 @@ pub fn pcm_ioctl(cmd: u64, arg: u64) -> u64 {
             0
         }
         0x4018_4150 => writei(arg),
-        0x8018_4132 => { // CHANNEL_INFO: channel at arg[0]; interleaved 16-bit stereo
+        0x8018_4132 => { // CHANNEL_INFO: channel at arg[0]; interleaved 16-bit, the client's count
             let ch = crate::ring3::read_user::<u32>(arg).unwrap_or(0);
+            let n = PCM.lock().channels.clamp(1, MAX_CHANNELS);
             let mut b = [0u8; 24];
             b[0..4].copy_from_slice(&ch.to_le_bytes());
             b[16..20].copy_from_slice(&(ch * 16).to_le_bytes());
-            b[20..24].copy_from_slice(&32u32.to_le_bytes());
+            b[20..24].copy_from_slice(&(n * 16).to_le_bytes());
             if crate::ring3::copy_to_user(arg, &b) { 0 } else { EFAULT }
         }
         0x4148 => 0, // XRUN: acknowledge; the RW path recovers by writing again
