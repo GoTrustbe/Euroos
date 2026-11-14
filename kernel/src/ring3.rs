@@ -5344,11 +5344,15 @@ fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
 
 fn aslr_slides() -> Slides {
     let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
+    // BUG-088: every slide in pages (4 KiB), over the same ranges as before:
+    // brk 4 -> 8 bits, mmap window 5 -> 9, demand pool 10 -> 19. The ranges
+    // are what the identity-mapped arena and the one PML4 slot of the demand
+    // pool leave; the Linux level (28 bits) needs a virtual arena.
     Slides {
-        brk: (r & 0xF) << 16,              // 0..1 MiB in 64 KiB steps
-        mmap: ((r >> 4) & 0x1F) << 16,     // 0..2 MiB in 64 KiB steps
-        stack: ((r >> 9) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
-        demand: ((r >> 17) & 0x3FF) << 21, // 0..2 GiB in 2 MiB steps
+        brk: (r & 0xFF) << 12,              // 0..1 MiB in 4 KiB steps
+        mmap: ((r >> 8) & 0x1FF) << 12,     // 0..2 MiB in 4 KiB steps
+        stack: ((r >> 17) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
+        demand: ((r >> 25) & 0x7FFFF) << 12, // 0..2 GiB in 4 KiB steps
     }
 }
 
