@@ -1,0 +1,174 @@
+# markers-compare.py, KVM self-test boots of the final image (f, af6f415) against both teams, same machine and options
+
+== 1 GiB: memory team bddf3a5 -> integ af6f415
+== kvm/memb-1g.log  vs  kvm/f-1g.log
+-- WORSE: 1
+   fork: base FAILx8 | new FAILx10
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   churn-forkthreads: OKx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== 2 GiB: memory team bddf3a5 -> integ af6f415
+== kvm/memb-2g.log  vs  kvm/f-2g.log
+-- WORSE: 1
+   fork: base FAILx7 | new FAILx9
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   churn-forkthreads: OKx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== 4 GiB: memory team bddf3a5 -> integ af6f415
+== kvm/memb-4g.log  vs  kvm/f-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   churn-forkthreads: OKx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== 8 GiB: memory team bddf3a5 -> integ af6f415
+== kvm/memb-8g.log  vs  kvm/f-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   churn-forkthreads: OKx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== 1 GiB: w23 team 95a3bf2 -> integ af6f415
+== kvm/w23b-1g.log  vs  kvm/f-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   memt: OKx7
+
+== 2 GiB: w23 team 95a3bf2 -> integ af6f415
+== kvm/w23b-2g.log  vs  kvm/f-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   memt: OKx7
+
+== 8 GiB: w23 team 95a3bf2 -> integ af6f415
+== kvm/w23b-8g.log  vs  kvm/f-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   memt: OKx7
+
+== 4 GiB: w23 team m1-4G (their proof boot, 95a3bf2) -> integ af6f415
+== base-kvm/w23-m1-4g.log  vs  kvm/f-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 100
+   3a4: OKx1
+   3a5: OKx1
+   3a6: OKx1
+   3e3: OKx1
+   3e9: OKx1
+   3f2: OKx1
+   3f4: OKx1
+   3f5: OKx1
+   3f6: OKx1
+   3f7: OKx1
+   3g1: OKx2
+   3g2: OKx1
+   3g2-wire: OKx1
+   3g3: OKx1
+   3g5: OKx1
+   3g6: OKx1
+   3g7: OKx1
+   7app: OKx1
+   7appgui: OKx1
+   aa-fs: OKx1
+   aa-mcp: OKx1
+   aa-nv: OKx1
+   aa-wasm: OKx1
+   ab: OKx1
+   ae-mustchange: OKx1
+   ae-persist: OKx1
+   af-anom: OKx1
+   af-jit: OKx1
+   ag: OKx1
+   ag-lock: OKx1
+   altab: OKx1
+   altgr: OKx1
+   an: OKx1
+   ap-tss: OKx1
+   app-policy: OKx1
+   ar: OKx1
+   az: OKx1
+   b6: OKx1
+   bb3: OKx1
+   bb4: OKx1
+   bb5: OKx1
+   bb6: OKx1
+   bb7: OKx1
+   bug032: OKx1
+   cal: OKx1
+   ck: OKx1
+   cl: OKx1
+   clip: OKx1
+   ct: OKx1
+   ctx: OKx1
+   cu: OKx1
+   disks: OKx1
+   es: OKx1
+   fdlg: OKx1
+   find: OKx1
+   fl: OKx1
+   ft: OKx1
+   h2: OKx1
+   help: OKx1
+   js: OKx2
+   k4: OKx1
+   launch: OKx1
+   m72: OKx1
+   ma: OKx1
+   memt: OKx7
+   mu: OKx1
+   mv: OKx1
+   n1: OKx1
+   netb: OKx1
+   notif: OKx1
+   p3-agent: OKx1
+   pipe: OKx1
+   policy-learn: OKx1
+   post: OKx1
+   prefs-bad: OKx1
+   prefs-rt: OKx1
+   prefs-user: OKx1
+   q1x: OKx1
+   rk: OKx1
+   robust: OKx1
+   robust-hda: OKx1
+   robust-paging: OKx1
+   robust-usb: OKx1
+   set: OKx2
+   set-guard: OKx1
+   set-host: OKx1
+   set-keymap: OKx1
+   set-time: OKx1
+   sf: OKx1
+   sg: OKx1
+   shot: OKx1
+   snap: OKx1
+   spell: OKx1
+   st: OKx1
+   symbol: OKx1
+   tip: OKx1
+   uikit: OKx1
+   wasm2: OKx1
+   wm: OKx1
+   ws: OKx1

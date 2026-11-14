@@ -1,0 +1,135 @@
+# markers-compare.py: team-markers/mem against integ af6f415 (R630, TCG, restrict=on)
+
+== user-smp4-iommu
+== team-markers/mem/tcg-user-smp4-iommu.markers  vs  tcg/f/user-smp4-iommu.log
+-- WORSE: 2
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== user-smp4-noiommu
+== team-markers/mem/tcg-user-smp4-noiommu.markers  vs  tcg/f/user-smp4-noiommu.log
+-- WORSE: 2
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== kernel-smp4
+== team-markers/mem/tcg-kernel-smp4.markers  vs  tcg/f/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== storage-smp4-iommu-1g
+== team-markers/mem/tcg-storage-smp4-iommu-1g.markers  vs  tcg/f/storage-smp4-iommu-1g.log
+-- WORSE: 4
+   fork: base FAILx8 | new FAILx10
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-linux: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx2
+   many-threads: OKx1
+   syncsock: OKx1
+
+== combined-smp4-iommu-1g
+== team-markers/mem/tcg-combined-smp4-iommu-1g.markers  vs  tcg/f/combined-smp4-iommu-1g.log
+-- WORSE: 4
+   fork: base FAILx8 | new FAILx10
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-linux: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx2
+   many-threads: OKx1
+   syncsock: OKx1
+
+== user-smp1-iommu
+== team-markers/mem/tcg-user-smp1-iommu.markers  vs  tcg/f/user-smp1-iommu.log
+-- WORSE: 2
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== user-smp1-noiommu
+== team-markers/mem/tcg-user-smp1-noiommu.markers  vs  tcg/f/user-smp1-noiommu.log
+-- WORSE: 2
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== kernel-smp1
+== team-markers/mem/tcg-kernel-smp1.markers  vs  tcg/f/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx1
+   many-threads: OKx1
+   syncsock: OKx1
+
+== storage-smp1-iommu-1g
+== team-markers/mem/tcg-storage-smp1-iommu-1g.markers  vs  tcg/f/storage-smp1-iommu-1g.log
+-- WORSE: 4
+   fork: base FAILx8 | new FAILx10
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-linux: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx2
+   many-threads: OKx1
+   syncsock: OKx1
+
+== combined-smp1-iommu-1g
+== team-markers/mem/tcg-combined-smp1-iommu-1g.markers  vs  tcg/f/combined-smp1-iommu-1g.log
+-- WORSE: 4
+   fork: base FAILx8 | new FAILx10
+   udrv-crash: base OKx1 | new FAILx1
+   udrv-linux: base OKx1 | new FAILx1
+   udrv-net: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   churn-forkthreads: OKx1
+   conn: FAILx2
+   many-threads: OKx1
+   syncsock: OKx1

@@ -2213,6 +2213,40 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 ### BUG-163 — YouTube answers "Sign in to confirm you're not a bot" to every public video (not a EuroOS bug, recorded) ⬜ OPEN
 - **Actual:**   with the consent dialog answered and verified gone (`proof/chrome-harness/`), four public videos all show the bot page in the player; no login or workaround was tried. Criterion 3 (2 minutes of YouTube with sound) cannot be measured from this network; `--only localvideo` measures the same stack without YouTube (BUG-160).
 
+### BUG-180 — a glibc run killed inside a fork lost the child arena it had taken ✅ FIXED
+- **Status:**   FIXED (`af6f415`, test `85c84fd`) · **Severity:** MEDIUM (96-128 MiB of process pool per occurrence; in a browser
+  session any kill of a fork child that is itself forking)
+- **Found:**    2026-11-14, integration matrix (`proof/chrome-integ/`): TCG boot `storage-smp1-iommu-1g` on the R630,
+  `[glibc] TIMEOUT waiting for the process to exit` in `[memt] forkmany` (its 263rd fork), then `process pool 16384 (was 40960)`
+  and `[memt] memory self-test → FAILED`. Two reruns of the same configuration passed (forkmany: 270 forks, 370 ms per arena
+  copy against 418 ms in the failing boot): forkmany needs about 120 s under TCG on the R630, the default deadline of a run.
+- **Cause:**    `do_glibc_fork` yields between the 2 MiB pieces of the arena copy (BUG-128). `kill_glibc_group` (the deadline),
+  `fork_child_teardown` (kill of a child) and the end of a run mark the forking task Dead; it never resumes, so neither the
+  success path nor `undo_fork` (BUG-150) runs and the arena, the tables and the copied demand pages belong to nobody.
+- **Test:**     `[memt] forkkill`: the first fork of a gmemt forkmany run is held where a refused fork is refused
+  (`FORK_PARK_NEXT`) until the 30 s deadline kills the run. KVM, before: process pool 427008 -> 402428 frames (4 GiB),
+  40960 -> 16381 (1 GiB), FAILED; after: `[fork] task N ended inside a fork: ... 96 MiB of arena and tables given back`, 0 lost.
+- **Fix:**      `FORK_IN_FLIGHT` (task, arena, frames, pml4 once linked) from the arena allocation until the child is registered
+  or the fork is undone; `retire_task` and `kill_glibc_group` give back the fork of a task they end.
+- **Also:**     every `[memt]` run has a 360 s deadline now (the checks are the same).
+
+### BUG-181 — audio with more than two channels is silent in Chromium (5.1 Opus of Wikimedia Commons) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (criterion 3 for any 5.1 source; stereo plays, BUG-160)
+- **Actual:**   `Big_Buck_Bunny_4K.webm.480p.vp9.webm` (Wikimedia Commons; VP9 + 6-channel Opus) in the browser's own
+  player: the picture advances (22 of 22 screendumps differ), the time runs, the tab shows its speaker, and the QEMU wav is
+  silent for 180 s. Serial: `ALSA lib pcm.c:8822:(snd_pcm_set_params) Channels count (6) not available for PLAYBACK`,
+  `alsa_util.cc:212] PcmSetParams: hw:0,0, Invalid argument`; `[alsa] open #1`, four refines, `close`, never `hw_params`.
+  The local VP9+Opus stereo clip plays with sound in the same build (12 of 12 windows, RMS 1158).
+- **Cause:**    the kernel launches Chromium with `--alsa-output-device=hw:0,0` (not plughw: run 78-83), and the PCM of
+  `kernel/src/alsa.rs` offers 2 channels only. With an explicit device Chromium does not downmix; the stream opens with the
+  media's 6 channels, set_params fails and the browser falls back to a silent fake output.
+- **Next:**     accept 1-8 channels in `hw_params` and downmix to the stereo ring in the kernel (the ring stays 48 kHz S16
+  stereo), or find a launch option that makes Chromium downmix to the device's 2 channels. Test first: a 5.1 clip in
+  `chrome-smoke --only localvideo` (`mk-test-video.sh` makes stereo only).
+- **Note:**     the 360p transcode that the memory team played (BUG-156 sessions, "stays at 0:00") answers 404 since; its time
+  stalling at 0:00 fits BUG-160 (fixed: the 480p file of the same video runs here), not proven on that file; if it had
+  6-channel audio too, its sound would be silent for this reason.
+
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
 - **Actual:**   `do_glibc_fork` returned from four places (no thread kernel stack, no task slot, no frame for the copy of

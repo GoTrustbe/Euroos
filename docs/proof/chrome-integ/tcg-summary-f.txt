@@ -1,0 +1,22 @@
+# TCG matrix, R630, restrict=on, image f (af6f415)
+user-smp1-iommu done 07:34:24 after 241s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 07:34:24 after 241s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 07:38:14 after 230s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 07:38:14 after 230s desktop=1 wd=0 nmi=0
+kernel-smp1 done 07:41:45 after 211s desktop=1 wd=0 nmi=0
+kernel-smp4 done 07:41:50 after 216s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 07:51:11 after 566s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 07:51:26 after 576s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 08:00:53 after 582s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 08:01:13 after 587s desktop=1 wd=0 nmi=0
+matrix f done 08:01:13
+user-smp4-iommu: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1770 ms
+user-smp4-noiommu: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1770 ms
+kernel-smp4: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1722 ms
+storage-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test, 6 modes → OK ✓ | longest desk gap 1511 ms
+combined-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test, 6 modes → OK ✓ | longest desk gap 1671 ms
+user-smp1-iommu: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1714 ms
+user-smp1-noiommu: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1675 ms
+kernel-smp1: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test: not run on this machine → OK ✓ | longest desk gap 1585 ms
+storage-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test, 6 modes → OK ✓ | longest desk gap 1435 ms
+combined-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 fault-lines=0 | [memt] memory self-test, 6 modes → OK ✓ | longest desk gap 1456 ms

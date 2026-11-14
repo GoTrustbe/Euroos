@@ -1,0 +1,1836 @@
+[loader] EuroOS two-stage A/B loader (G4)
+[loader] slot_config → boot slot A
+[loader] slot image unusable — trying the other slot partition
+[loader] kernel image from the ESP file (Ed25519 verified)
+[loader] kernel image loaded — LoadImage + StartImage...
+[euro] EuroKernel bring-up — heap (68 MiB) + COM1 active
+[euro] anchor dump_registers_and_backtrace @ 0x000000000fd4431d
+[addr] 0x000000000fd8f50e  handle_demand_fault
+[addr] 0x000000000fd82367  disk_read_bytes
+[addr] 0x000000000fd859e5  demand_readahead
+[addr] 0x000000000fd71ecd  alloc_low_fd
+[addr] 0x000000000fd6eb43  open_low_fd
+[addr] 0x000000000fd73592  pipe_create2
+[addr] 0x000000000fd7ea99  disk_cache_get
+[addr] 0x000000000fd7eb3f  disk_cache_put
+[addr] 0x000000000fd8db37  shared_phys_sorted
+[addr] 0x000000000fd9fd59  ensure_globals_for_current
+[addr] 0x000000000fd7e3e3  child_mem_swap
+[addr] 0x000000000fd87641  fork_child_owner
+[addr] 0x000000000fd85111  scm_pending_for
+[addr] 0x000000000fda22b0  scm_take
+[addr] 0x000000000fd2f477  net::unix_fd_at_eof
+[addr] 0x000000000fd721e5  close_fd_now
+[saddr] 0x0000000013dab930  BG
+[saddr] 0x0000000013dad2d8  CDP_DOM
+[saddr] 0x0000000013daba48  CDP_RX
+[saddr] 0x0000000013d71ba8  CDP_SESSION
+[saddr] 0x0000000013dad2f8  CDP_URL
+[saddr] 0x0000000013daa1b8  CHILD_EXE_PATH
+[saddr] 0x0000000013d71bc8  CHILD_EXITS
+[saddr] 0x0000000013dbd628  CHILD_MEM
+[saddr] 0x0000000013d89e40  CHILD_THREADS
+[saddr] 0x0000000013d71c18  CURRENT_APP
+[saddr] 0x0000000013d89e60  DAEMON_OUTPUT
+[saddr] 0x0000000013daa1d8  DAEMON_PARTIAL
+[saddr] 0x0000000013dab308  DEMAND_FILE_MAPS
+[saddr] 0x0000000013dab980  DIRTY
+[saddr] 0x0000000013d718e0  DISK_FILES
+[saddr] 0x0000000013daa238  DISK_PAGE_CACHE
+[saddr] 0x0000000013dab960  ENV
+[saddr] 0x0000000013daba70  EPOLLS
+[saddr] 0x0000000013dab9a0  FILES
+[saddr] 0x0000000013dab268  FUTEX_LAST_WAKE
+[saddr] 0x0000000013d71c88  FUTEX_QUEUE
+[saddr] 0x0000000013dab848  GLIBC_CHILD_EXITS
+[saddr] 0x0000000013d71cb8  GLIBC_CTIDS
+[saddr] 0x0000000013dab8e0  GLIBC_FORK_CHILDREN
+[saddr] 0x0000000013d89e80  GLIBC_THREADS
+[saddr] 0x0000000013dad278  MKDIRS
+[saddr] 0x0000000013d89ea8  OPEN_DIRS
+[saddr] 0x0000000013d71d88  OPEN_FDS
+[saddr] 0x0000000013dad298  OUTPUT
+[saddr] 0x0000000013dab9d0  PIPES
+[saddr] 0x0000000013dad5a8  PIPE_FDS
+[saddr] 0x0000000013dab868  PIPE_NONBLOCK
+[saddr] 0x0000000013dab330  PIPE_WAITERS
+[saddr] 0x0000000013dbd5e8  PROGRAMS
+[saddr] 0x0000000013dab380  PROT_NONE_RANGES
+[saddr] 0x0000000013dad2b8  REAPED
+[saddr] 0x0000000013d71d40  SCM_PENDING
+[saddr] 0x0000000013daa218  SHARED_ALIASES
+[saddr] 0x0000000013da9ef0  SHARED_FRAMES
+[saddr] 0x0000000013d71d60  SHARED_MAPS
+[saddr] 0x0000000013d71b80  SOCK_PAIRS
+[saddr] 0x0000000013daba20  STDIN
+[saddr] 0x0000000016cab448  STDOUT_REDIRECT
+[saddr] 0x0000000013dbd608  SYMLINKS
+[saddr] 0x0000000013dab900  THREAD_KSTACK_OWNER
+[saddr] 0x0000000013d89de0  THREAD_NAMES
+[saddr] 0x0000000013dab8c0  VDSO_IMAGE_FRAMES
+[saddr] 0x0000000015dfc990  interrupts::TICKS
+[addr] 0x000000000fda6bec  vfs_close
+[addr] 0x000000000fd2ea13  net::unix_fd_close
+[addr] 0x000000000fd2d1f6  net::eventfd_close
+[addr] 0x000000000fd69016  futex_wait
+[addr] 0x000000000fd69400  futex_wake
+[addr] 0x000000000fda2d10  vfs_read
+[addr] 0x000000000fda7008  vfs_pread
+[addr] 0x000000000fda7422  vfs_write
+[addr] 0x000000000fd8cf4d  pipe_read_blocking
+[addr] 0x000000000fd68581  epoll_wait
+[addr] 0x000000000fd75966  proc_mem_xfer
+[addr] 0x000000000fd16810  virtio_blk::read_io_dev
+[addr] 0x000000000fd2bec6  net::unix_fd_recv
+[addr] 0x000000000fda9de8  sched::yield_now
+[addr] 0x000000000fda830c  sched::block_current
+[addr] 0x000000000fd859e5  demand_readahead
+[addr] 0x000000000fedc96b  syscall_dispatch
+[addr] 0x000000000fd72cb3  copy_to_user
+[addr] 0x000000000fd7e6af  copy_from_user
+[addr] 0x000000000fedc57d  sched::schedule_tick
+[addr] 0x000000000feddf42  sched::yield_tick
+[addr] 0x000000000fda0e17  cdp_pump
+[addr] 0x000000000fddea19  xserver::pump_keyboard
+[addr] 0x000000000fddd359  xserver::pump_mouse
+[addr] 0x000000000fd52913  xhci::poll
+[addr] 0x000000000fd3285e  net::service
+[euro] frame allocator: 203 MiB usable RAM
+[bootopt] no euroos-boot.conf (defaults): net.driver=user, storage.nvme=kernel
+[euro] GOP 1920x1080 stride=1920 Bgr
+[acpi] RSDP @ 0x1f77e014
+[inst] single-disk boot (1 disk(s)) — no install target, media preload skipped
+[euro] ExitBootServices...
+[euro] >>> UEFI left — kernel mode <<<
+[euro] GDT+TSS loaded
+[euro] IDT loaded
+[euro] framebuffer @ 0x80000000 — loading our own page tables...
+[euro] CR3 loaded (PML4 @ 0x100000) — our own paging active
+[a2] guarded kernel stack: top 0x8000005000, guard 0x8000000000 — stack writable=true, guard not-present=true
+[mm] process frame pool: 64 MiB @ 0x1780000 (fork/exec)
+[blk] no virtio-blk device found
+[iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+[epk] no pack files registered (nothing to sweep)
+[iommu] domain nvme: 0 PCI function(s), 0 DMA page(s) registered
+[iommu] domain ahci: 1 PCI function(s), 17 DMA page(s) registered
+[ahci] disk 0 (port 0): 'QEMU HARDDISK', 524288 sectors = 256 MiB, partitioned (boot signature)
+[ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+[euro] no installable/EuroFS SATA disk — booting a RAM root (disks left intact)
+[euro] EuroFS formatted + populated in RAM (live) (through 1 MiB block cache)
+[boot-time] phase firmware-exit: 181.704 ms (at 181 ms)
+[boot-time] phase cpu-mm: 6.550 ms (at 188 ms)
+[boot-time] phase storage-rootfs: 99.287 ms (at 287 ms)
+[euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261114
+[g4] raw-block slot_config not readable (no virtio-blk?)
+[upd3] Ed25519 verify-before-activate (dev.pub ed852b80…): genuine=true · image-tamper-refused=true · sig-tamper-refused=true · short-sig-refused=true → OK ✓
+[upd3] update pipeline: real package staged=true · tampered package refused=true → OK ✓
+[edit] /tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)
+[paint] /tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)
+[robust-fs] file larger than the memory budget: editor refused+kept document=true ("/tmp/robust-big.bin: file too large to open (64 KiB; at most 4096 B fits in memory here)"), helper=true, paint=true, image viewer=true, shell cat=true → OK ✓
+[edit] save /tmp/edit-selftest.txt → OK
+[edit] EuroText edit+save+reread: write-OK=true, reread="Hello\nEuroOS 4" (expected "Hello\nEuroOS 4") → OK ✓
+[trash] Trash + undo: delete-to-trash=true, original-gone=true, restore-brings-it-back=true → OK (deletes are recoverable) ✓
+[io1] FAT32 mount + read (kernel, no_std): readme=true seed-6000B=true ls-root=true → OK ✓
+[io2] FAT32 write (kernel): create=true mkdir=true nested=true grow+readback=true nested-read=true remove=true/gone=true → OK ✓
+[io3] FAT32 format (kernel): blank volume formatted → mount + write + read back → OK ✓
+[j1-cache] block-cache (no_std): block 5 written+read 2x (hits) + 1 miss → data-intact=true, hits=2 misses=1 → OK (read-lock hits, write-through) ✓
+[container] 'demo' root=/containers/demo eff_caps=0b0111 (CAP_NET removed=true) | escape '../../../etc/passwd' → /containers/demo/etc/passwd (within=true)
+[3f1] EuroContainer runtime: signed-image-verify=true (constrained-caps=true), tampered-manifest-REFUSED=true, mem-limit-enforced(3K-ok,+2K-refused)=true, overlay-CoW(copy-up=true,whiteout=true) → OK (signed images + ResourceLimits + EuroFS overlay, on EuroGuard caps) ✓
+[e2] display-protocol: scene=1 surface(s), focus=Some(1), key-route=Some(Key { id: 1, code: 30, pressed: true }) — wire 12B/req
+[h1] AF_UNIX round-trip: server got 'ping', client got 'pong', EOF-after-close=true ✓
+[boot-time] phase storage-checks: 120.922 ms (at 408 ms)
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 446 of 256 bits · sources mixed: tpm=none, rdseed=not in this CPU, rdrand=not in this CPU (CPU credit 0 bits, at most half the threshold), jitter=4 batches of 512 samples (446 bits) · 7.335 ms → OK
+[euroid] no /etc/euroid/users.db on the root — live medium, built-in demo store (euro/alice/bob)
+[euro] boot #1 (live/RAM)
+[net] /etc/hosts: 3 name->IP mapping(s) loaded
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region en, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[7guard] EuroGuard network control: geo-attribution(CN=true, local-unmapped=true), geo-block(CN-refused=true, local-allowed=true), per-app-block=true, allow-list(in=true, out-refused=true) → OK (per-app + geo network control: block a country, cut an app off, or clamp an agent to an allow-list) ✓
+[boot-time] phase identity-config: 307.917 ms (at 716 ms)
+[net] no virtio-net device found
+[iommu] domain nic: 0 PCI function(s), 0 DMA page(s) registered
+[net] NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])
+[boot-time] phase net: 1.984 ms (at 718 ms)
+[uptr] user-pointer validation: inside=true below=true above=true span=true cstr=true -> OK
+[euro] loading /bin/hello from EuroFS...
+[euro] /bin/hello Ed25519: VERIFIED (pubkey ed852b80…)
+[euro] tamper-test: 1 byte changed -> REJECTED (correct)
+[sec] SMEP ON · SMAP ON (CR4; ring 0 can no longer execute/touch user pages, except in a short syscall window)
+[cap] syscall 60 DENIED — missing capability
+[euro] /bin/hello done: exit=0, 259 bytes via sys_write
+[h3] dynlinker: 1 lib(s) loaded, 1 symbol relocation(s) resolved, 0 unresolved
+[linux-abi] H3: 42
+[h3] dyntest (dynamically linked) done: exit=42, output="H3: 42"
+[h3] dynlinker: 0 lib(s) loaded, 0 symbol relocation(s) resolved, 0 unresolved
+[tls] static TLS block @ 0x388000, TP=0x388008, 1 module(s), total 8 B
+[tls] kernel-ld.so TLS setup: standalone __thread PIE (41->42) -> exit 42 ✓ (static TLS block + FS_BASE set up by the kernel)
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x240000
+[h3] dynlinker: 1 lib(s) loaded, 1 symbol relocation(s) resolved, 0 unresolved
+[tls] static TLS block @ 0x388000, TP=0x388008, 1 module(s), total 8 B
+[tls] 1 TPOFF64 relocation(s) patched (initial-exec)
+[tls2] cross-module IE-TLS (.so __thread via TPOFF64): bump() 41->42 -> exit 42 ✓ (multi-module TLS block + TPOFF64 patch by the kernel-ld.so)
+[linux-abi] 3C3: 42
+[3c3] PT_INTERP + userspace ld.so: exe names /lib/ld-euro.so=true, interpreter resolved the cross-module symbol in userspace → output="3C3: 42" exit=42 OK (dynamic linking done by a userspace interpreter via PT_INTERP, not the kernel) ✓
+[h3] dynlinker: 1 lib(s) loaded, 1 symbol relocation(s) resolved, 0 unresolved
+[linux-abi] H3: 42
+[h3-fs] /bin/dyntest deps=["libeuro.so"] → 1 .so loaded from /lib, exit=42, output="H3: 42"
+[h4] WASM run() = 55 (expected 55), fd_write→capability wrote 48 bytes: "EuroWASM: no-JIT interpreter runs in the kernel"
+[h4] WASI capability gate: fd_write DENIED without CAP_CONSOLE for fd_write ✓
+[wasi] real WASI preview1 (wasi_snapshot_preview1.fd_write, true iovec ABI): ran=true, iovec-message-written=true, *nwritten-set-correctly=true, cap-gate-denies-without-CAP_CONSOLE=true → OK (runs real wasm32-wasi fd_write, not a custom shim; proc_exit/random_get/clock/env/args also implemented) ✓
+[h4-ctr] container 'net-ok' (caps 0b1101): sock_connect ALLOWED → [1]
+[h4-ctr] container 'no-net' (caps 0b0001): sock_connect DENIED — CAP_NET ✓
+[h4-ctr] container 'scoped' (caps 0b1101): sock_connect DENIED — network scope forbids 10.0.2.2:80 ✓
+[h5] real Wayland protocol: handshake processed, 108 bytes of events back (registry globals + xdg-configure), 1 window(s)
+[h5] Wayland server: surface 5 committed → window "EuroOS — real Wayland protocol" ✓
+[exec] /bin/cat (abi=native, ed25519=ok) exit=0 (53 bytes)
+[linux-abi] Hello via the LINUX syscall ABI (write=1, getpid=39, exit=60)!
+[linux-abi]   Linux getpid()      = [linux-abi] 1[linux-abi] 
+[linux-abi]   Linux uname.sysname = [linux-abi] Linux[linux-abi]   release = [linux-abi] 6.6.0-euroos[linux-abi] 
+[linux-abi]   Linux getuid()      = [linux-abi] 1000[linux-abi] 
+[linux-abi]   Linux gettimeofday  = [linux-abi] 1794641428[linux-abi]  (Unix-epoch seconds)
+[linux-abi]   --- /proc (live kernel info) ---
+[linux-abi]   [linux-abi] /proc/version[linux-abi] : [linux-abi] Linux version 6.6.0-euroos (euro@eurokernel) (EuroToolchain rustc) #1 SMP EuroOS[linux-abi] 
+[linux-abi]   [linux-abi] /proc/cpuinfo[linux-abi] : [linux-abi] processor	: 0[linux-abi] 
+[linux-abi]   [linux-abi] /proc/meminfo[linux-abi] : [linux-abi] MemTotal:       262144 kB[linux-abi] 
+[linux-abi]   [linux-abi] /proc/uptime[linux-abi] : [linux-abi] 0.00 0.00[linux-abi] 
+[linux-abi]   [linux-abi] /proc/loadavg[linux-abi] : [linux-abi] 0.00 0.00 0.00 1/1 1[linux-abi] 
+[linux-abi]   readlink(/proc/self/exe) = [linux-abi] /bin/linuxprog[linux-abi] 
+[linux-abi]   --- /etc (system config) ---
+[linux-abi]   [linux-abi] /etc/os-release[linux-abi] : [linux-abi] NAME="EuroOS"[linux-abi] 
+[linux-abi]   [linux-abi] /etc/passwd[linux-abi] : [linux-abi] root:x:0:0:root:/root:/bin/eurosh[linux-abi] 
+[linux-abi]   --- getdents64(/etc) ---
+[linux-abi]     [d] [linux-abi] .[linux-abi] 
+[linux-abi]     [d] [linux-abi] ..[linux-abi] 
+[linux-abi]     [f] [linux-abi] hostname[linux-abi] 
+[linux-abi]     [f] [linux-abi] hosts[linux-abi] 
+[linux-abi]     [f] [linux-abi] eurokernel.conf[linux-abi] 
+[linux-abi]     [f] [linux-abi] passwd[linux-abi] 
+[linux-abi]     [f] [linux-abi] group[linux-abi] 
+[linux-abi]     [f] [linux-abi] os-release[linux-abi] 
+[linux-abi]     [d] [linux-abi] euroguard[linux-abi] 
+[linux-abi]     [f] [linux-abi] system.ver[linux-abi] 
+[linux-abi]     [f] [linux-abi] mmap-test[linux-abi] 
+[exec] /bin/linuxprog (abi=linux, ed25519=ok) exit=0 (862 bytes)
+[linux-abi] arch_prctl SET_FS = 0x200400
+[linux-abi] arch_prctl(SET_FS): TLS set up OK
+[linux-abi]   %fs:0 reads the thread pointer back: OK
+[linux-abi]   set_tid_address -> tid [linux-abi] 1[linux-abi] 
+[linux-abi]   mmap(4096) OK, write+read from new page: [linux-abi] Hi
+[linux-abi]   writev: part-1[linux-abi] + part-2 (musl stdio path)[linux-abi] mmap(fd=3, off=0, 4096 B) file-backed -> 0x281000 (35 B copied)
+[linux-abi]   file-backed mmap: mapped file bytes MATCH -> FILE-BACKED-MMAP-OK
+[exec] /bin/muslprog (abi=linux, ed25519=ok) exit=0 (258 bytes)
+[exec] /bin/argvprog (abi=native, ed25519=ok) exit=0 (136 bytes)
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[exec] /bin/pieprog (abi=native, ed25519=ok) exit=0 (101 bytes)
+[elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x20aa38
+[linux-abi] Hello from a REAL musl-libc binary on EuroKernel![linux-abi] 
+[linux-abi]   argc=1, argv[0]=/bin/muslreal[linux-abi] 
+[mm-fail] #1 t0 "?" process 0: brk(0x2000) = 0 | arena mmap window 1024 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 19 MiB used 48 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi]   buffer (38 bytes): malloc + strcpy + printf via musl libc[linux-abi] 
+[linux-abi]   sum(1..10) = 55[linux-abi]  (musl runs ordinary C runtime)
+[exec] /bin/muslreal (abi=linux, ed25519=ok) exit=0 (191 bytes)
+[elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x20a658
+[linux-abi] musl reads /etc/eurokernel.conf[linux-abi]  via fopen/fgets:
+[mm-fail] #2 t0 "?" process 0: brk(0x2000) = 0 | arena mmap window 1024 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 19 MiB used 48 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi]   | [linux-abi] version=0.1
+[linux-abi]   | [linux-abi] encryption=off
+[linux-abi]   (2[linux-abi]  lines read, fclose OK)
+[exec] /bin/muslfile (abi=linux, ed25519=ok) exit=0 (112 bytes)
+[elf] 16 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x208698
+[linux-abi] getenv via musl libc:[linux-abi] 
+[linux-abi]   EUROOS_VERSION  = 0.1-alpha[linux-abi] 
+[linux-abi]   LANG            = nl_BE.UTF-8[linux-abi] 
+[linux-abi]   TERM            = euroterm[linux-abi] 
+[linux-abi]   USER            = euro[linux-abi] 
+[linux-abi]   SHELL           = /bin/sh[linux-abi] 
+[linux-abi]   (9[linux-abi]  variables in environ)
+[exec] /bin/menv (abi=linux, ed25519=ok) exit=0 (193 bytes)
+[boot-time] phase userland-demos: 169.453 ms (at 887 ms)
+[idt] BREAKPOINT @ 0xfe5e02d
+[euro] breakpoint exception handled: true
+[g1] 5 scheduler task stacks on guarded stacks (pool: 6 total)
+[fpu] context-switch FPU save: FXSAVE (x87+SSE) (AVX off)
+[euro] bg-musl (pid 100) -> task 6, own address space PML4 0x132000, arena 0x200000
+[euro] daemon scheduled as task 9 (pid 7), own address space PML4 0x148000
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x5a00000
+[euro] bg-musl (pid 8) -> task 10, own address space PML4 0x150000, arena 0x5a00000
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x5c00000
+[euro] bg-musl (pid 9) -> task 11, own address space PML4 0x158000, arena 0x5c00000
+[euro] 2x musl process (pid 8,9) scheduled — own TLS per process
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x5e00000
+[euro] bg-musl (pid 10) -> task 12, own address space PML4 0x160000, arena 0x5e00000
+[euro] isotest (pid 10) scheduled — tests memory isolation
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x6000000
+[euro] bg-musl (pid 11) -> task 13, own address space PML4 0x168000, arena 0x6000000
+[euro] worker (pid 11) scheduled — compute job + clean exit
+[euro] bg-musl (pid 20) -> task 14, own address space PML4 0x170000, arena 0x6200000
+[euro] forktest (pid 20) scheduled — S3 fork()+waitpid()
+[euro] bg-musl (pid 21) -> task 15, own address space PML4 0x178000, arena 0x6400000
+[euro] forkpipe (pid 21) scheduled — S3 pipe()+fork() IPC
+[elf] 5 R_X86_64_RELATIVE relocations applied @ base 0x6600000
+[euro] bg-musl (pid 12) -> task 16, own address space PML4 0x180000, arena 0x6600000
+[elf] 7 R_X86_64_RELATIVE relocations applied @ base 0x6800000
+[euro] bg-musl (pid 13) -> task 17, own address space PML4 0x188000, arena 0x6800000
+[elf] 7 R_X86_64_RELATIVE relocations applied @ base 0x6a00000
+[euro] bg-musl (pid 14) -> task 18, own address space PML4 0x190000, arena 0x6a00000
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x6c00000
+[euro] bg-musl (pid 15) -> task 19, own address space PML4 0x198000, arena 0x6c00000
+[elf] 4 R_X86_64_RELATIVE relocations applied @ base 0x6e00000
+[euro] bg-musl (pid 16) -> task 20, own address space PML4 0x1a0000, arena 0x6e00000
+[euro] scheduler: shell + 3 kernel + 2 ring-3 + daemon + 2 musl @ 0x40000c,0x60000c
+[boot-time] phase sched-init: 39.676 ms (at 927 ms)
+[acpi] MADT: 1 CPU core(s) (LAPIC @ 0xfee00000, IO-APIC @ 0xfec00000 gsi-base 0)
+[acpi]   core: APIC-id 0 (on)
+[iommu] ACPI DMAR: 1 VT-d remapping unit(s), host-addr-width=48 bits, interrupt-remap=false
+[iommu]   unit0 @ 0xfed90000 seg0 ver 1.0 cap=0x80d2008c222f0606 ecap=0xf42 mgaw=48bits ir=false translating=false include_all=false
+[iommu] hardware IOMMU present, translation not yet active: EuroOS programs per-driver DMA domains once every DMA driver has initialised (see `translation ENABLED` below; GitHub #11).
+[ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+[pci] 6 devices found:
+[pci]   00:00.0  8086:29c0  Bridge  (Intel Q35 host bridge)
+[pci]   00:01.0  1234:1111  Display (GPU)  (QEMU VGA)
+[pci]   00:02.0  8086:10d3  Network
+[pci]   00:1f.0  8086:2918  Bridge  (Intel ICH9 LPC)
+[pci]   00:1f.2  8086:2922  Mass Storage (SATA/AHCI)  (Intel ICH9 AHCI)
+[pci]   00:1f.3  8086:2930  SMBus
+[r] EuroDevice: 6 devices in the device tree, 2 bound via 7 registered drivers
+[r] EuroDevice — device tree (6 devices):
+[r]   00:00.0  8086:29c0  Intel Q35 host bridge  → pci-bridge   [bound]
+[r]   00:01.0  1234:1111  QEMU VGA               → —            [unbound]
+[r]   00:02.0  8086:10d3  Network                → —            [unbound]
+[r]   00:1f.0  8086:2918  Intel ICH9 LPC         → pci-bridge   [bound]
+[r]   00:1f.2  8086:2922  Intel ICH9 AHCI        → —            [unbound]
+[r]   00:1f.3  8086:2930  SMBus                  → —            [unbound]
+[i3-aml] DSDT interpreted: 8421 bytes → 38 AML objects. \_S5=Some([0, 0, 0, 0]), known methods present: ["_STA", "_S5_"]
+[acpi-pwr] no ACPI battery / AC adapter / lid in this firmware (expected on a desktop or VM)
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[3d8] EuroEntropy CSPRNG (HMAC-DRBG SP800-90A, NIST-KAT-verified): empty-pool-refused=true, jitter-alone≈1785bits→ready=true, seeded(jitter+TPM,from-tpm=false)-ready=true, jitter-in-the-seed=true, output-nonzero-distinct=true → OK (getrandom gated on real entropy — no low-entropy output at the worst moment) ✓
+[3d7] EuroNTS authenticated time (RFC 8915, TLS-exporter key schedule, ChaCha20-Poly1305 AEAD): authentic-time-accepted=true, tampered-timestamp-REJECTED=true, off-path-reply-REJECTED=true → OK (the clock trusts only a cryptographically-bound server; live NTS-KE-over-TLS + AES-SIV pending) ✓
+[3d2] EuroVerity (dm-verity-style, Ed25519-signed Merkle root over 16 blocks): manifest-signature-verified=true, block-verified-against-signed-root=true, tampered-block-DETECTED=true, forged-manifest-REFUSED=true → OK (system image integrity provable block-by-block; tamper ⇒ fall back to the good slot) ✓
+[3d2-wire] verity on the LIVE EuroFS read path: fmt+write=true/true, signed-manifest=true, EuroFS-mounted-on-VerityBlk+file-read(every-block-verified)=true, untouched-block-verifies=true, tampered-backing-block-REFUSED-on-read=true → OK (read path verifies every block; tamper ⇒ read fails ⇒ A/B fallback) ✓
+[boot-time] phase acpi-pci-tpm: 381.706 ms (at 1309 ms)
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 625526 ticks/period against PIT)
+[lk] EuroLock hooks installed: IRQSAVE for Irq-mode locks, per-context order tracking (520 contexts), 20 lock classes
+[g1] 7 AP stack(s) on guarded stacks (pool: 13 guarded stacks total, unit=16 KiB + guard)
+[smp] 0/0 AP core(s) online (BSP = APIC-id 0, 1 cores total)
+[smp] parallel sum 0..2000000 over 1 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] J1: demo workers parked on 0/0 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[acpi] power button armed → SCI GSI9 vec 0x49 (press = clean S5)
+[ioapic] @ 0xfec00000: kbd IRQ1->GSI1 vec 0x21, mouse IRQ12->GSI12 vec 0x2c -> BSP #0 (8259 masked)
+[euro] PS/2 mouse initialized (IRQ12)
+[boot-time] phase smp-timer: 220.978 ms (at 1530 ms)
+[xhci] no xHCI controller found (PCI 0C:03:30)
+[iommu] domain xhci: 0 PCI function(s), 0 DMA page(s) registered
+[iommu] domain virtio-input: 0 PCI function(s), 0 DMA page(s) registered
+[hda] no HD-Audio controller found (PCI 04:03)
+[iommu] domain hda: 0 PCI function(s), 0 DMA page(s) registered
+[iommu] translation ENABLED: 3-level second-level paging, 7 domain(s) [virtio-blk, nvme, ahci, nic, xhci, virtio-input, hda], 1 claimed PCI function(s) confined to their own DMA buffers, 5 unclaimed function(s) get NO DMA, 12 table frame(s)
+[iommu-dma] translation on, but no NVMe controller to run the foreign-DMA probe against (attach -device nvme)
+[boot-time] phase devices: 20.295 ms (at 1550 ms)
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[iommu] runtime domain e1000d (id 9): 00:02.0 -> 32 page(s) at 0x1cc000, nothing else
+[elf] 8 R_X86_64_RELATIVE relocations applied @ base 0x7000000
+[euro] bg-app (pid 131072) -> task 21, arena 0x7000000 span 4 MiB, heap 0x7200000..0x7200000, PML4 0x1f3000
+[euroapp] pid 131072 -> task 21: caps 0x1, profile driver
+[udrv] e1000d started: pid 131072, task 21, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x1cc000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU own domain (DMA confined)
+[udrv-grant] e1000d pid 131072: BAR0 0x810a0000..0x810c0000 mapped for ring 3 (first=true, last=true), page before=false, page after=false; DMA window 32 pages mapped=true, page after=false; LAPIC=false, kernel code=false → OK (exactly the granted ranges) ✓
+[udrv-iommu] device 00:02.0 has its own VT-d domain 'e1000d' with 32 page(s) = the DMA window, nothing else → OK ✓
+[g1] KERNEL STACK OVERFLOW: task 5 hit guard page 0x8000019f70 @ 0xfe1163f → task TERMINATED, kernel keeps running ✓
+[walk] pml4[0]=0x161027
+[walk] pdpt[0]=0x162027
+[walk] pd[0]=0xe3 (2 MiB huge)
+[isolation] ring-3 page fault addr=0x100000 code=PageFaultErrorCode(PROTECTION_VIOLATION | USER_MODE) -> process pid 10 (task 12) TERMINATED
+[isolation]   rip=0x5e01075 rsp=0x5fffe30 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x5e01070, 16 B): [e8, 84, 03, 00, 00, 0f, b6, 04, 25, 00, 00, 10, 00, b2, 0a, 48] | from rip: [0f, b6, 04, 25, 00, 00, 10, 00, b2, 0a, 48]
+[msc] main thread t18446744073709551615: last 32 syscalls (tick num(a1)=ret):
+[tick-late] #1 +1 ticks (65 Mcycles) rip=0x6200024 cs=0x23 task 14 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=1
+[tick-late] #2 +1 ticks (65 Mcycles) rip=0x6400064 cs=0x23 task 15 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=2
+[thread] clone: pid 12 -> thread task 24 (shared address space, own stack/TLS)
+[thread] clone: pid 13 -> thread task 25 (shared address space, own stack/TLS)
+[thread] clone: pid 14 -> thread task 26 (shared address space, own stack/TLS)
+[thread] clone: pid 14 -> thread task 27 (shared address space, own stack/TLS)
+[tick-late] #3 +1 ticks (51 Mcycles) rip=0x6200000 cs=0x23 task 22 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=3
+[udrv-e1000] e1000d (pid 131072, ring 3, profile driver) brought the 82574L (e1000e) up: MAC 52:54:00:12:34:56 reported over EuroIPC; nic backend = e1000 via userspace driver e1000d (EuroIPC) → OK ✓
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-net]   no DNS reply
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED
+[udrv-irq] MSI-X vector 0x4c: 8 interrupt(s) raised, 8 delivered to e1000d as EuroIPC Irq messages → OK ✓
+[udrv-dma]   driver report received=true (slot 4); provoking inbound frames for the aimed slot
+[iommu] DMA FAULT blocked: device 00:02.0 tried to read physical 0x1fb000 (reason 0x6) — outside its domain
+[iommu] DMA FAULT blocked: device 00:02.0 tried to write physical 0x1fa000 (reason 0x5) — outside its domain
+[udrv-dma]   first ARP reply seen=false (expected false: it went to the aimed slot)
+[udrv-dma] malicious e1000d: RX slot 4 aimed at kernel canary 0x1fa000, TX from kernel page 0x1fb000 (driver saw tx done) · IOMMU fault records: TX read 1, RX write 1 (total 2) · canary changed=false · driver still works=true → OK (device DMA confined to the driver's own window) ✓
+[walk] pml4[0]=0x1f4027
+[walk] pdpt[0]=0x1f5027
+[walk] pd[0]=0x1f9027
+[walk] pt[1]=0x1003
+[isolation] ring-3 page fault addr=0x1000 code=PageFaultErrorCode(PROTECTION_VIOLATION | CAUSED_BY_WRITE | USER_MODE) -> process pid 131072 (task 21) TERMINATED
+[isolation]   rip=0x7001a77 rsp=0x73fdfd0 last-syscall=0(a1=0x0)->0x0
+[isolation]   code at rip (aligned 0x7001a70, 16 B): [5f, c3, b8, 00, 10, 00, 00, 48, c7, 00, 00, 00, 00, 00, b8, 0c] | from rip: [48, c7, 00, 00, 00, 00, 00, b8, 0c]
+[msc] main thread t18446744073709551615: last 32 syscalls (tick num(a1)=ret):
+[udrv] e1000d pid 131072 died (memory isolation: access 0x1000 denied) -> device quiesced: bus-master off, IOMMU domain revoked, 32 DMA pages freed; restart at tick 587 (death #1)
+[iommu] runtime domain e1000d (id 9): 00:02.0 -> 32 page(s) at 0x15c000, nothing else
+[elf] 8 R_X86_64_RELATIVE relocations applied @ base 0x5e00000
+[euro] bg-app (pid 131073) -> task 23, arena 0x5e00000 span 4 MiB, heap 0x6000000..0x6000000, PML4 0x135000
+[euroapp] pid 131073 -> task 23: caps 0x1, profile driver
+[udrv] e1000d started: pid 131073, task 23, profile driver · BAR0 0x810a0000+0x20000 (32 pages) · DMA 0x15c000+0x20000 · IRQ MSI-X 0x4c -> EuroIPC · IOMMU own domain (DMA confined)
+[udrv-crash]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-crash]   ARP: gateway 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02]
+[udrv-crash]   no DNS reply
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kernel kept running; sends refused while dead=true; restarted as pid 131073, MAC 52:54:00:12:34:56, DHCP + HTTP again → FAILED
+[udrv] userspace e1000d: pid 131073 task 23 (starts 2, deaths 1), link up, tx 18 rx 9 irq 20
+[net-late] network ready over e1000d (waited 0 ticks): lease 10.0.2.15, gateway 10.0.2.2, dns 10.0.2.3; running the network part of the boot now
+[net] NIC: e1000 via userspace driver e1000d (EuroIPC) MAC 52:54:00:12:34:56
+[net] ARP: 10.0.2.2 is-at [52, 55, 0a, 00, 02, 02] (resolved by udrv::boot over e1000d)
+[net] PING 10.0.2.2: echo-reply OK ✓
+[net] (no DNS reply)
+[net] IPv6 link-local (SLAAC): fe80:0:0:0:5054:ff:fe12:3456
+[net] (no Router Advertisement — IPv6 possibly off)
+[g3] poll/select: 2 fd's multiplexed — listener readable=false (fresh queue empty → expected false)
+[tcp] @1688 FIN from 192.0.2.10:42000 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.25:42015 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.24:42014 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.23:42013 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.22:42012 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.21:42011 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.20:42010 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.19:42009 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.18:42008 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.17:42007 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.16:42006 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.15:42005 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.14:42004 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.13:42003 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.12:42002 to sport 80 — closing
+[tcp] @1688 FIN from 192.0.2.11:42001 to sport 80 — closing
+[conn] fd65537 closed 192.0.2.10:43000 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[conn] fd65538 closed 192.0.2.11:43001 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[conn] fd65539 closed 192.0.2.12:43002 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[conn] fd65540 closed 192.0.2.13:43003 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[conn] fd65541 closed 192.0.2.14:43004 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[conn] fd65542 closed 192.0.2.15:43005 sport 9181: rx 0 B, tx 0 B, open=true, unacked=0
+[tcp] @1710 FIN from 192.0.2.50:80 to sport 64643 — closing
+[net-async] inbound httpd (synthetic peers, TEST-NET-1): 16 concurrent clients: 16 SYN-ACKs from one service() pass, 16 answered, 16 closed, 0 half-open + 0 open left, passes 168889/10114/9381 us (longest 168889 us) → OK ✓
+[net-async] listen: backlog 4, 6 SYNs: 4 half-open + 2 dropped, then 6/6 accepted after the retransmitted SYNs → OK ✓
+[net-async] connect: answered 8384 us; half-open peer (stale ACK): RST at its ACK sent, established in 19054 us; silent drop: fresh port after 3012 ms (2 ports); our FIN after the peer's: sent; bound 6 s → OK ✓
+[net-async] tcp: connect ok 3 (slowest 3012 ms), SYN timeouts 2, stale-peer RSTs 1, new-port retries 1, closed-port answers 0, gave up 0 | inbound: half-open 0, httpd conns 0, served 16 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+[io5] SMB connect/auth to //10.0.2.2/euro skipped/failed (Transport) — no reachable SMB server
+[io6] NFS mount of //10.0.2.2/srv/nfsshare skipped/failed (Transport) — no reachable NFS server
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196608) -> task 22, own address space PML4 0x186000, arena 0x200000
+[bg-out] pid 196608 /bin/msock: msock: HTTP GET via POSIX sockets on EuroOS
+[bg-out] pid 196608 /bin/msock:   target: example.com (172.66.147.243):80
+[bg-out] pid 196608 /bin/msock:   socket() -> fd 3
+[conn] @2029 sock_connect fd65536 -> 172.66.147.243:80
+[conn] TCP handshake FAILED to 172.66.147.243:80
+[bg-out] pid 196608 /bin/msock:   connect() failed
+[exec] /bin/msock (abi=linux, ed25519=ok, scheduled over e1000d, 9 ticks) exit=1 (124 bytes)
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196609) -> task 22, own address space PML4 0x186000, arena 0x200000
+[bg-out] pid 196609 /bin/mdns: mdns: DNS lookups via UDP socket on EuroOS (nameserver 10.0.2.3)
+[bg-out] pid 196609 /bin/mdns:   query: A example.com
+[conn] @2055 sock_connect fd65536 -> 10.0.2.3:53
+[sio] send fd65536 29 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\u{7}example\u{3}com"
+[dns] @2055 sport 57059: query example.com
+[inet] fd65536 -> udp wrote 29 B (sent 29 B in 1 writes)
+[bg-out] pid 196609 /bin/mdns:     no answer (did EuroGuard block the DNS query?)
+[bg-out] pid 196609 /bin/mdns:   query: A ads.doubleclick.net
+[conn] @2364 sock_connect fd65536 -> 10.0.2.3:53
+[sio] send fd65536 37 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\u{3}ads\u{b}doublec"
+[dns] @2364 sport 52096: query ads.doubleclick.net BLOCKED
+[inet] fd65536 -> udp wrote 37 B (sent 66 B in 2 writes)
+[sio] recv fd65536 37 B
+[inet] @2364 fd65536 <- udp read 37 B (total 37 B in 1 calls)
+[bg-out] pid 196609 /bin/mdns:     no A record in the answer
+[exec] /bin/mdns (abi=linux, ed25519=ok, scheduled over e1000d, 333 ticks) exit=0 (200 bytes)
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196610) -> task 22, own address space PML4 0x186000, arena 0x200000
+[bg-out] pid 196610 /bin/mtrack: mtrack: 'telemetry' app tries to phone home
+[bg-out] pid 196610 /bin/mtrack:   target: 203.0.113.5:80 (tracker)
+[conn] @2920 sock_connect fd65536 -> 203.0.113.5:80
+[conn] BLOCKED by EuroGuard: 203.0.113.5:80 (app "/bin/mtrack")
+[bg-out] pid 196610 /bin/mtrack:   connect() DENIED — EuroGuard blocked this ✓
+[exec] /bin/mtrack (abi=linux, ed25519=ok, scheduled over e1000d, 558 ticks) exit=0 (129 bytes)
+[lk] net-late ipc.channel_table: acq=26273 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] net-late ipc.channel (per-port): acq=26273 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=141us hold-avg=0us
+[lk] net-late net.CFG: acq=25103 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=83us hold-avg=0us
+[lk] net-late sched.SCHED (BSP scheduler): acq=20136 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=698us hold-avg=2us
+[lk] net-late net.NET_LEGACY (rx ring): acq=12552 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=165us hold-avg=0us
+[lk] net-late net.socket (per-socket): acq=12442 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1846us hold-avg=15us
+[elf] 11 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x186000, arena 0x200000
+[bgnet] pid 196624 (/bin/msock): socket() DENIED: no CAP_NET in its capability set
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+[net-late] network waits in this suite gave the CPU away 206 time(s); 3 of them were woken early by e1000d (EuroIPC frame delivery)
+[udrv-linux] glibc process /bin/gnet not run: (no arena for glibc) (needs more RAM than this machine has free here) ⬜
+[shell] eurosh:/ $ nslookup example.com
+[shell]   nslookup: cannot resolve 'example.com'
+[shell] eurosh:/ $ nslookup example.com
+[shell]   nslookup: cannot resolve 'example.com'
+[shell] eurosh:/ $ netstat
+[shell]   tcp: connect ok 3 (slowest 3012 ms), SYN timeouts 2, stale-peer RSTs 1, new-port retries 1, closed-port answers 3, gave up 0 | inbound: half-open 0, httpd conns 0, served 16 | queues 0 (0 segs), unowned segs 0 (after-close ACKs 0)
+[shell]   net worker: not running; e1000d woken early 24 (frame to send) + 13 (its interrupt)
+[shell]   DNS cache: 0 hits, 5 misses
+[shell]     (cache empty)
+[net-worker] kernel task 22 started: inbound TCP (SYN queue, httpd, accept queues) runs here, woken by e1000d's frame deliveries (EuroIPC)
+[tcp] @4789 FIN from 192.0.2.100:44000 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.107:44007 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.106:44006 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.105:44005 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.104:44004 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.103:44003 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.102:44002 to sport 80 — closing
+[tcp] @4789 FIN from 192.0.2.101:44001 to sport 80 — closing
+[net-worker] httpd while the boot task is busy (3 s spin, no service()/pump_all from it; synthetic peers): 8 clients, 8 SYN-ACKs, 8 answered (first after 116 ms), 8 closed, 0 half-open + 0 open left, all done after 136 ms in 3 worker passes (task 22) → OK ✓
+[net-worker] net worker: task 22, 3 passes, 8 inbound frames, longest pass 2153 us; kicks 3 (e1000d/task) + 0 (interrupt, 0 found the scheduler busy); e1000d woken early 24 (frame to send) + 13 (its interrupt)
+[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)
+[lk] checker self-test: irqsave=true correct-order-silent=true deliberate-inversion-detected=true task-mode-keeps-IF=true try_lock=true rwlock=true tracker-balanced=true -> OK ✓
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+[boot-time] phase drivers-late: 47934.433 ms (at 49484 ms)
+[glibc] === real glibc dynamic binaries (ld-linux + libc.so.6, scheduled) ===
+[glibc] gtiny: exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] gtest (printf+malloc+qsort): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gthread (pthreads): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gmath (libm + dlopen/dlsym): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gcpp (C++ STL + exceptions): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] === REAL Ubuntu binaries (unmodified /usr/bin) ===
+[glibc] /usr/bin/seq 1 2 9 -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] /usr/bin/factor 360360 -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] === address-space scaling (384 MiB arena) ===
+[glibc] gbig (200 MiB heap): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gsync (mutex+condvar): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] === REAL Ubuntu stdin filters (fd 0) ===
+[glibc] /usr/bin/base64 <stdin> -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] /usr/bin/wc <stdin> -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] /usr/bin/sha256sum <"EuroOS"> -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] /usr/bin/sort <stdin> -> exit=18446744073709551615, output="(no arena for glibc)"
+[glibc] gfile (file I/O roundtrip): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gglib (GLib GHashTable): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gzlib (zlib compress): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gunix (AF_UNIX socketpair): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gshm (MAP_SHARED memfd): exit=18446744073709551615 (want 131)
+[glibc]   (no arena for glibc)
+[glibc] gshm2 (SCM_RIGHTS memfd, cross-process): exit=18446744073709551615 (want 141)
+[glibc]   (no arena for glibc)
+[glibc] gscm3 (sibling socket via broker): exit=18446744073709551615 (want 147)
+[glibc]   (no arena for glibc)
+[glibc] gevfd (eventfd shared across processes): exit=18446744073709551615 (want 153)
+[glibc]   (no arena for glibc)
+[glibc] gvec (vector state across switches): exit=18446744073709551615 (want 159)
+[glibc]   (no arena for glibc)
+[glibc] gnss (NSS initialises): exit=18446744073709551615 (want 167)
+[glibc]   (no arena for glibc)
+[glibc] gunlink (unlinked-but-open + anon shm): exit=18446744073709551615 (want 137)
+[glibc]   (no arena for glibc)
+[glibc] gpoll (poll timeout): exit=18446744073709551615 (want 143)
+[glibc]   (no arena for glibc)
+[glibc] gsleep (nanosleep + absolute deadline): exit=18446744073709551615 (want 149)
+[glibc]   (no arena for glibc)
+[glibc] gscm (SCM_RIGHTS descriptor passing): exit=18446744073709551615 (want 151)
+[glibc]   (no arena for glibc)
+[glibc] gcond (condvar broadcast): exit=18446744073709551615 (want 157)
+[glibc]   (no arena for glibc)
+[glibc] gbrk (zeroed break growth): exit=18446744073709551615 (want 163)
+[glibc]   (no arena for glibc)
+[glibc] gsandbox (full profile): exit=18446744073709551615 (want 161)
+[glibc]   (no arena for glibc)
+[glibc] gsandbox strict (seccomp strict mode): exit=18446744073709551615 (want 137)
+[glibc]   (no arena for glibc)
+[sbx] syscall profiles: full-profile-runs=false · strict-mode-write-allowed=false · strict-mode-open-kills-process=false (exit 18446744073709551615) · never-returned-into-program=true → skipped (glibc self-tests off in this boot)
+[glibc] gfuzz (syscall fuzzer): exit=18446744073709551615 (want 171)
+[glibc]   (no arena for glibc)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 18446744073709551615) → skipped
+[glibc] gsandbox filter (cBPF seccomp): exit=18446744073709551615 (want 159)
+[glibc]   (no arena for glibc)
+[glibc] gsandbox rlimit (RLIMIT_NOFILE): exit=18446744073709551615 (want 165)
+[glibc]   (no arena for glibc)
+[glibc] gsandbox aslr x2: exit=18446744073709551615/18446744073709551615 (want 167)
+[glibc]   (no arena for glibc)
+[glibc]   (no arena for glibc)
+[glibc] gsandbox renderer scope (path scope + uid drop): exit=18446744073709551615 (want 169)
+[glibc]   (no arena for glibc)
+[sbx2] cBPF-filter(getpid-EPERM + socket-kills)=false · rlimits(NOFILE=8 -> EMFILE, hard-limit-raise-EPERM)=false · ASLR(stack/heap/mmap differ across runs: 0/3)=false · renderer-scope(/etc ok, /home EACCES, uid drop to 65534, no raise)=false → skipped (glibc self-tests off in this boot)
+[glibc] === X11: real Xlib client (window + render + events) ===
+[glibc] gxwin (X11 connect+render+PutImage+events+real-kbd): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gsparse (demand paging): exit=18446744073709551615, committed=0 pages (0 KiB), pool delta=0 frames (reclaimed after exit)
+[glibc]   (no arena for glibc)
+[glibc] gfmmap (file-backed demand paging): exit=18446744073709551615 (want 124), pages filled-from-file=0
+[glibc]   (no arena for glibc)
+[chrome] chrome_crashpad_handler (REAL chrome binary): exit=18446744073709551615, lib-pages demand-loaded=0
+[chrome]   (no arena for glibc)
+[europack] no pack disk attached — disk-backed serving test SKIPPED
+[glibc] ═══ LINUX COMPAT: 0/38 real-glibc capabilities PASS ═══
+[glibc]   dynamic-linking · pthreads+mutex/condvar · C++/exceptions · dlopen · file-I/O · demand-paging(4GiB sparse) · AF_UNIX-IPC · X11(window·fill·PutImage·events·real-keyboard)
+[glibc]   9 real libs served: libc libm libstdc++ libgcc_s libgmp libcrypto libglib-2.0 libpcre2 libz | real bins: seq factor base64 wc sha256sum sort
+[glibc] === X11: real Cairo 2D graphics -> X window ===
+[glibc] gcairo (Cairo 2D -> XPutImage): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] gcairotext (Cairo+FreeType text): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] === X11: live interactive desktop app (gxlive) ===
+[glibc] gxlive (live interactive X app; block reacted to staged input):
+[glibc]   (no arena for glibc)
+[glibc] gpango (Pango+HarfBuzz layout): exit=18446744073709551615
+[glibc]   (no arena for glibc)
+[glibc] === SDL2 app (gsdl) ===
+[glibc] arena: 256 MiB unavailable (fragmented) -> using 64 MiB
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x6200000
+[elf] 0 R_X86_64_RELATIVE relocations applied @ base 0x6a00000
+[glibc] spawned scheduled task 21: ld-entry@0x6a1f540 rsp@0xa049e10 phdr@0x6200040 phnum=13
+[linux-abi] mmap(fd=3, off=0, 1949696 B) file-backed -> 0x7b92000 (1926368 B copied)
+[linux-abi] mmap(fd=3, off=180224, 1261568 B) file-backed -> 0x7bbe000 (1261568 B copied)
+[linux-abi] mmap(fd=3, off=1441792, 417792 B) file-backed -> 0x7cf2000 (417792 B copied)
+[linux-abi] mmap(fd=3, off=1859584, 65536 B) file-backed -> 0x7d58000 (65536 B copied)
+[linux-abi] mmap(fd=3, off=0, 2170880 B) file-backed -> 0x7d6e000 (2125328 B copied)
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0x7d96000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0x7f1e000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0x7f6d000 (24576 B copied)
+[linux-abi] mmap(fd=3, off=0, 1089536 B) file-backed -> 0x7f80000 (1084144 B copied)
+[linux-abi] mmap(fd=3, off=176128, 651264 B) file-backed -> 0x7fab000 (651264 B copied)
+[linux-abi] mmap(fd=3, off=827392, 229376 B) file-backed -> 0x804a000 (229376 B copied)
+[linux-abi] mmap(fd=3, off=1052672, 32768 B) file-backed -> 0x8082000 (31472 B copied)
+[linux-abi] mmap(fd=3, off=0, 954368 B) file-backed -> 0x808a000 (952616 B copied)
+[linux-abi] mmap(fd=3, off=65536, 520192 B) file-backed -> 0x809a000 (520192 B copied)
+[linux-abi] mmap(fd=3, off=585728, 360448 B) file-backed -> 0x8119000 (360448 B copied)
+[linux-abi] mmap(fd=3, off=946176, 8192 B) file-backed -> 0x8171000 (6440 B copied)
+[linux-abi] mmap(fd=3, off=0, 331776 B) file-backed -> 0x8173000 (326856 B copied)
+[linux-abi] mmap(fd=3, off=49152, 200704 B) file-backed -> 0x817f000 (200704 B copied)
+[linux-abi] mmap(fd=3, off=249856, 69632 B) file-backed -> 0x81b0000 (69632 B copied)
+[linux-abi] mmap(fd=3, off=315392, 12288 B) file-backed -> 0x81c1000 (11464 B copied)
+[linux-abi] mmap(fd=3, off=0, 1503232 B) file-backed -> 0x81c6000 (1497776 B copied)
+[linux-abi] mmap(fd=3, off=8192, 20480 B) file-backed -> 0x81c8000 (20480 B copied)
+[linux-abi] mmap(fd=3, off=28672, 1466368 B) file-backed -> 0x81cd000 (1466368 B copied)
+[linux-abi] mmap(fd=3, off=1490944, 8192 B) file-backed -> 0x8333000 (6832 B copied)
+[linux-abi] mmap(fd=3, off=0, 1298432 B) file-backed -> 0x8335000 (1298088 B copied)
+[linux-abi] mmap(fd=3, off=102400, 589824 B) file-backed -> 0x834e000 (589824 B copied)
+[linux-abi] mmap(fd=3, off=692224, 585728 B) file-backed -> 0x83de000 (585728 B copied)
+[linux-abi] mmap(fd=3, off=1277952, 20480 B) file-backed -> 0x846d000 (20136 B copied)
+[linux-abi] mmap(fd=3, off=0, 81920 B) file-backed -> 0x8472000 (77512 B copied)
+[linux-abi] mmap(fd=3, off=16384, 45056 B) file-backed -> 0x8476000 (45056 B copied)
+[linux-abi] mmap(fd=3, off=61440, 12288 B) file-backed -> 0x8481000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=69632, 8192 B) file-backed -> 0x8484000 (7880 B copied)
+[linux-abi] mmap(fd=3, off=0, 49152 B) file-backed -> 0x8486000 (43464 B copied)
+[linux-abi] mmap(fd=3, off=8192, 24576 B) file-backed -> 0x8488000 (24576 B copied)
+[linux-abi] mmap(fd=3, off=32768, 8192 B) file-backed -> 0x848e000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=36864, 8192 B) file-backed -> 0x8490000 (6600 B copied)
+[linux-abi] mmap(fd=3, off=0, 77824 B) file-backed -> 0x8492000 (76320 B copied)
+[linux-abi] mmap(fd=3, off=12288, 49152 B) file-backed -> 0x8495000 (49152 B copied)
+[linux-abi] mmap(fd=3, off=61440, 8192 B) file-backed -> 0x84a1000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=69632, 8192 B) file-backed -> 0x84a3000 (6688 B copied)
+[linux-abi] mmap(fd=3, off=0, 32768 B) file-backed -> 0x84a5000 (26800 B copied)
+[linux-abi] mmap(fd=3, off=8192, 12288 B) file-backed -> 0x84a7000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=20480, 4096 B) file-backed -> 0x84aa000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=20480, 8192 B) file-backed -> 0x84ab000 (6320 B copied)
+[linux-abi] mmap(fd=3, off=0, 53248 B) file-backed -> 0x84af000 (47504 B copied)
+[linux-abi] mmap(fd=3, off=8192, 28672 B) file-backed -> 0x84b1000 (28672 B copied)
+[linux-abi] mmap(fd=3, off=36864, 8192 B) file-backed -> 0x84b8000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=40960, 8192 B) file-backed -> 0x84ba000 (6544 B copied)
+[linux-abi] mmap(fd=3, off=0, 20480 B) file-backed -> 0x84bc000 (14648 B copied)
+[linux-abi] mmap(fd=3, off=4096, 4096 B) file-backed -> 0x84bd000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 4096 B) file-backed -> 0x84be000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x84bf000 (6456 B copied)
+[linux-abi] mmap(fd=3, off=0, 94208 B) file-backed -> 0x84c1000 (92760 B copied)
+[linux-abi] mmap(fd=3, off=20480, 49152 B) file-backed -> 0x84c6000 (49152 B copied)
+[linux-abi] mmap(fd=3, off=69632, 16384 B) file-backed -> 0x84d2000 (16384 B copied)
+[linux-abi] mmap(fd=3, off=86016, 8192 B) file-backed -> 0x84d6000 (6744 B copied)
+[linux-abi] mmap(fd=3, off=0, 28672 B) file-backed -> 0x84d8000 (22976 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x84da000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=16384, 4096 B) file-backed -> 0x84dc000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=16384, 8192 B) file-backed -> 0x84dd000 (6592 B copied)
+[linux-abi] mmap(fd=3, off=0, 20480 B) file-backed -> 0x84df000 (14344 B copied)
+[linux-abi] mmap(fd=3, off=4096, 4096 B) file-backed -> 0x84e0000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 4096 B) file-backed -> 0x84e1000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x84e2000 (6152 B copied)
+[linux-abi] mmap(fd=3, off=0, 65536 B) file-backed -> 0x84e4000 (64776 B copied)
+[linux-abi] mmap(fd=3, off=20480, 24576 B) file-backed -> 0x84e9000 (24576 B copied)
+[linux-abi] mmap(fd=3, off=45056, 8192 B) file-backed -> 0x84ef000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=53248, 12288 B) file-backed -> 0x84f1000 (11528 B copied)
+[linux-abi] mmap(fd=3, off=0, 40960 B) file-backed -> 0x84f6000 (35352 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x84f8000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=16384, 4096 B) file-backed -> 0x84fa000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=16384, 20480 B) file-backed -> 0x84fb000 (18968 B copied)
+[linux-abi] mmap(fd=3, off=0, 299008 B) file-backed -> 0x8500000 (293432 B copied)
+[linux-abi] mmap(fd=3, off=20480, 131072 B) file-backed -> 0x8505000 (131072 B copied)
+[linux-abi] mmap(fd=3, off=151552, 135168 B) file-backed -> 0x8525000 (135168 B copied)
+[linux-abi] mmap(fd=3, off=282624, 12288 B) file-backed -> 0x8546000 (10808 B copied)
+[linux-abi] mmap(fd=3, off=0, 45056 B) file-backed -> 0x8549000 (39424 B copied)
+[linux-abi] mmap(fd=3, off=16384, 12288 B) file-backed -> 0x854d000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=28672, 8192 B) file-backed -> 0x8550000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=32768, 8192 B) file-backed -> 0x8552000 (6656 B copied)
+[linux-abi] mmap(fd=3, off=0, 516096 B) file-backed -> 0x8554000 (510288 B copied)
+[linux-abi] mmap(fd=3, off=73728, 303104 B) file-backed -> 0x8566000 (303104 B copied)
+[linux-abi] mmap(fd=3, off=376832, 126976 B) file-backed -> 0x85b0000 (126976 B copied)
+[linux-abi] mmap(fd=3, off=499712, 12288 B) file-backed -> 0x85cf000 (10576 B copied)
+[linux-abi] mmap(fd=3, off=0, 323584 B) file-backed -> 0x85d2000 (317752 B copied)
+[linux-abi] mmap(fd=3, off=49152, 196608 B) file-backed -> 0x85de000 (196608 B copied)
+[linux-abi] mmap(fd=3, off=245760, 69632 B) file-backed -> 0x860e000 (69632 B copied)
+[linux-abi] mmap(fd=3, off=311296, 8192 B) file-backed -> 0x861f000 (6456 B copied)
+[linux-abi] mmap(fd=3, off=0, 167936 B) file-backed -> 0x8623000 (162392 B copied)
+[linux-abi] mmap(fd=3, off=45056, 77824 B) file-backed -> 0x862e000 (77824 B copied)
+[linux-abi] mmap(fd=3, off=122880, 36864 B) file-backed -> 0x8641000 (36864 B copied)
+[linux-abi] mmap(fd=3, off=155648, 8192 B) file-backed -> 0x864a000 (6744 B copied)
+[linux-abi] mmap(fd=3, off=0, 49152 B) file-backed -> 0x864c000 (43600 B copied)
+[linux-abi] mmap(fd=3, off=8192, 28672 B) file-backed -> 0x864e000 (28672 B copied)
+[linux-abi] mmap(fd=3, off=36864, 4096 B) file-backed -> 0x8655000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=36864, 8192 B) file-backed -> 0x8656000 (6736 B copied)
+[linux-abi] mmap(fd=3, off=0, 180224 B) file-backed -> 0x8658000 (174336 B copied)
+[linux-abi] mmap(fd=3, off=16384, 118784 B) file-backed -> 0x865c000 (118784 B copied)
+[linux-abi] mmap(fd=3, off=135168, 32768 B) file-backed -> 0x8679000 (32768 B copied)
+[linux-abi] mmap(fd=3, off=163840, 12288 B) file-backed -> 0x8681000 (10496 B copied)
+[linux-abi] mmap(fd=3, off=0, 49152 B) file-backed -> 0x8684000 (47672 B copied)
+[linux-abi] mmap(fd=3, off=8192, 28672 B) file-backed -> 0x8686000 (28672 B copied)
+[linux-abi] mmap(fd=3, off=36864, 4096 B) file-backed -> 0x868d000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=40960, 8192 B) file-backed -> 0x868e000 (6712 B copied)
+[linux-abi] mmap(fd=3, off=0, 557056 B) file-backed -> 0x8690000 (545896 B copied)
+[linux-abi] mmap(fd=3, off=32768, 397312 B) file-backed -> 0x8698000 (397312 B copied)
+[linux-abi] mmap(fd=3, off=430080, 102400 B) file-backed -> 0x86f9000 (102400 B copied)
+[linux-abi] mmap(fd=3, off=528384, 16384 B) file-backed -> 0x8712000 (16384 B copied)
+[linux-abi] mmap(fd=3, off=0, 20480 B) file-backed -> 0x871a000 (14024 B copied)
+[linux-abi] mmap(fd=3, off=4096, 4096 B) file-backed -> 0x871b000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 4096 B) file-backed -> 0x871c000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x871d000 (5832 B copied)
+[linux-abi] mmap(fd=3, off=0, 917504 B) file-backed -> 0x871f000 (910592 B copied)
+[linux-abi] mmap(fd=3, off=90112, 585728 B) file-backed -> 0x8735000 (585728 B copied)
+[linux-abi] mmap(fd=3, off=675840, 188416 B) file-backed -> 0x87c4000 (188416 B copied)
+[linux-abi] mmap(fd=3, off=860160, 49152 B) file-backed -> 0x87f2000 (49152 B copied)
+[linux-abi] mmap(fd=3, off=0, 32768 B) file-backed -> 0x87ff000 (26616 B copied)
+[linux-abi] mmap(fd=3, off=8192, 12288 B) file-backed -> 0x8801000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=20480, 4096 B) file-backed -> 0x8804000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=20480, 8192 B) file-backed -> 0x8805000 (6136 B copied)
+[linux-abi] mmap(fd=3, off=0, 81920 B) file-backed -> 0x8807000 (80768 B copied)
+[linux-abi] mmap(fd=3, off=12288, 36864 B) file-backed -> 0x880a000 (36864 B copied)
+[linux-abi] mmap(fd=3, off=49152, 24576 B) file-backed -> 0x8813000 (24576 B copied)
+[linux-abi] mmap(fd=3, off=73728, 8192 B) file-backed -> 0x8819000 (7040 B copied)
+[linux-abi] mmap(fd=3, off=0, 24576 B) file-backed -> 0x881b000 (18696 B copied)
+[linux-abi] mmap(fd=3, off=4096, 8192 B) file-backed -> 0x881c000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=12288, 4096 B) file-backed -> 0x881e000 (4096 B copied)
+[linux-abi] mmap(fd=3, off=12288, 8192 B) file-backed -> 0x881f000 (6408 B copied)
+[linux-abi] mmap(fd=3, off=0, 32768 B) file-backed -> 0x8823000 (26776 B copied)
+[linux-abi] mmap(fd=3, off=8192, 8192 B) file-backed -> 0x8825000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=16384, 8192 B) file-backed -> 0x8827000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=20480, 8192 B) file-backed -> 0x8829000 (6296 B copied)
+[linux-abi] mmap(fd=3, off=0, 409600 B) file-backed -> 0x882b000 (407648 B copied)
+[linux-abi] mmap(fd=3, off=32768, 335872 B) file-backed -> 0x8833000 (335872 B copied)
+[linux-abi] mmap(fd=3, off=368640, 32768 B) file-backed -> 0x8885000 (32768 B copied)
+[linux-abi] mmap(fd=3, off=401408, 8192 B) file-backed -> 0x888d000 (6240 B copied)
+[linux-abi] mmap(fd=3, off=0, 188416 B) file-backed -> 0x888f000 (182344 B copied)
+[linux-abi] mmap(fd=3, off=12288, 98304 B) file-backed -> 0x8892000 (98304 B copied)
+[linux-abi] mmap(fd=3, off=110592, 69632 B) file-backed -> 0x88aa000 (69632 B copied)
+[linux-abi] mmap(fd=3, off=176128, 8192 B) file-backed -> 0x88bb000 (6216 B copied)
+[linux-abi] mmap(fd=3, off=0, 700416 B) file-backed -> 0x88bd000 (694408 B copied)
+[linux-abi] mmap(fd=3, off=81920, 12288 B) file-backed -> 0x88d1000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=94208, 487424 B) file-backed -> 0x88d4000 (487424 B copied)
+[linux-abi] mmap(fd=3, off=577536, 118784 B) file-backed -> 0x894b000 (116872 B copied)
+[linux-abi] mmap(fd=3, off=0, 389120 B) file-backed -> 0x8968000 (387368 B copied)
+[linux-abi] mmap(fd=3, off=12288, 303104 B) file-backed -> 0x896b000 (303104 B copied)
+[linux-abi] mmap(fd=3, off=315392, 65536 B) file-backed -> 0x89b5000 (65536 B copied)
+[linux-abi] mmap(fd=3, off=380928, 8192 B) file-backed -> 0x89c5000 (6440 B copied)
+[linux-abi] mmap(fd=3, off=0, 40960 B) file-backed -> 0x89c9000 (34808 B copied)
+[linux-abi] mmap(fd=3, off=8192, 12288 B) file-backed -> 0x89cb000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=20480, 12288 B) file-backed -> 0x89ce000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=28672, 8192 B) file-backed -> 0x89d1000 (6136 B copied)
+[linux-abi] mmap(fd=3, off=0, 376832 B) file-backed -> 0x89d3000 (376344 B copied)
+[linux-abi] mmap(fd=3, off=20480, 241664 B) file-backed -> 0x89d8000 (241664 B copied)
+[linux-abi] mmap(fd=3, off=262144, 106496 B) file-backed -> 0x8a13000 (106496 B copied)
+[linux-abi] mmap(fd=3, off=368640, 8192 B) file-backed -> 0x8a2d000 (7704 B copied)
+[linux-abi] mmap(fd=3, off=0, 483328 B) file-backed -> 0x8a2f000 (297032 B copied)
+[linux-abi] mmap(fd=3, off=24576, 200704 B) file-backed -> 0x8a35000 (200704 B copied)
+[linux-abi] mmap(fd=3, off=225280, 65536 B) file-backed -> 0x8a66000 (65536 B copied)
+[linux-abi] mmap(fd=3, off=290816, 8192 B) file-backed -> 0x8a76000 (6216 B copied)
+[linux-abi] mmap(fd=3, off=0, 53248 B) file-backed -> 0x8aa5000 (51536 B copied)
+[linux-abi] mmap(fd=3, off=12288, 24576 B) file-backed -> 0x8aa8000 (24576 B copied)
+[linux-abi] mmap(fd=3, off=36864, 8192 B) file-backed -> 0x8aae000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=45056, 8192 B) file-backed -> 0x8ab0000 (6480 B copied)
+[linux-abi] mmap(fd=3, off=0, 1343488 B) file-backed -> 0x8ab2000 (1340976 B copied)
+[linux-abi] mmap(fd=3, off=61440, 999424 B) file-backed -> 0x8ac1000 (999424 B copied)
+[linux-abi] mmap(fd=3, off=1060864, 241664 B) file-backed -> 0x8bb5000 (241664 B copied)
+[linux-abi] mmap(fd=3, off=1302528, 36864 B) file-backed -> 0x8bf0000 (36864 B copied)
+[linux-abi] mmap(fd=3, off=0, 139264 B) file-backed -> 0x8bfc000 (137440 B copied)
+[linux-abi] mmap(fd=3, off=12288, 110592 B) file-backed -> 0x8bff000 (110592 B copied)
+[linux-abi] mmap(fd=3, off=122880, 8192 B) file-backed -> 0x8c1a000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=131072, 8192 B) file-backed -> 0x8c1c000 (6368 B copied)
+[linux-abi] mmap(fd=3, off=0, 204800 B) file-backed -> 0x8c1e000 (202904 B copied)
+[linux-abi] mmap(fd=3, off=12288, 139264 B) file-backed -> 0x8c21000 (139264 B copied)
+[linux-abi] mmap(fd=3, off=151552, 45056 B) file-backed -> 0x8c43000 (45056 B copied)
+[linux-abi] mmap(fd=3, off=196608, 8192 B) file-backed -> 0x8c4e000 (6296 B copied)
+[linux-abi] mmap(fd=3, off=0, 761856 B) file-backed -> 0x8c50000 (755864 B copied)
+[linux-abi] mmap(fd=3, off=16384, 684032 B) file-backed -> 0x8c54000 (684032 B copied)
+[linux-abi] mmap(fd=3, off=700416, 53248 B) file-backed -> 0x8cfb000 (53248 B copied)
+[linux-abi] mmap(fd=3, off=749568, 8192 B) file-backed -> 0x8d08000 (6296 B copied)
+[linux-abi] mmap(fd=3, off=0, 90112 B) file-backed -> 0x8d0a000 (80888 B copied)
+[linux-abi] mmap(fd=3, off=16384, 49152 B) file-backed -> 0x8d0e000 (49152 B copied)
+[linux-abi] mmap(fd=3, off=65536, 12288 B) file-backed -> 0x8d1a000 (12288 B copied)
+[linux-abi] mmap(fd=3, off=73728, 8192 B) file-backed -> 0x8d1d000 (7160 B copied)
+[linux-abi] mmap(fd=3, off=0, 151552 B) file-backed -> 0x8d20000 (149760 B copied)
+[linux-abi] mmap(fd=3, off=16384, 90112 B) file-backed -> 0x8d24000 (90112 B copied)
+[linux-abi] mmap(fd=3, off=106496, 36864 B) file-backed -> 0x8d3a000 (36864 B copied)
+[linux-abi] mmap(fd=3, off=143360, 8192 B) file-backed -> 0x8d43000 (6400 B copied)
+[linux-abi] mmap(fd=3, off=0, 61440 B) file-backed -> 0x8d47000 (55536 B copied)
+[linux-abi] mmap(fd=3, off=8192, 36864 B) file-backed -> 0x8d49000 (36864 B copied)
+[linux-abi] mmap(fd=3, off=45056, 8192 B) file-backed -> 0x8d52000 (8192 B copied)
+[linux-abi] mmap(fd=3, off=49152, 8192 B) file-backed -> 0x8d54000 (6384 B copied)
+[linux-abi] arch_prctl SET_FS = 0x8d59040
+[sockfam] socket(domain=1, type=1)
+[x11] client connects to the X server (/tmp/.X11-unix/X0)
+[xserver] client connected: X connection 73728 is fd 69632
+[sockfam] socket(domain=1, type=1)
+[x11] client connects to the X server (/tmp/.X11-unix/X0)
+[xserver] client connected: X connection 73729 is fd 69633
+[linux-abi] Xlib:  extension "RANDR" missing on display ":0".
+[linux-abi] GSDL: SDL_Init ok
+[tick-late] #4 +1 ticks (48 Mcycles) rip=0x7e97894 cs=0x23 task 21 last-syscall=20(a1=0x3) faults-total=0 (0 Mcycles) lost-total=4
+[sc] 0x1e
+[sc] 0x30
+[sc] 0x2e
+[sc] 0x1e
+[sc] 0x30
+[sc] 0x2e
+[xin] -> kind=6 detail=0 conn=0 win=0x400002 local(220,130) root(960,540) queued=416 B
+[linux-abi] GSDL: window created
+[glibc] TIMEOUT waiting for the process to exit | main t21 last=7(a1=0xa0495c8)->0xfffffffffffffffc
+[msc] main thread t21: last 32 syscalls (tick num(a1)=ret):
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 7(0xa049798) = 0x1
+[msc]   @7329 20(0x11000) = 0xc
+[msc]   @7329 47(0x11000) = 0x20
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 7(0xa049638) = 0x1
+[msc]   @7329 20(0x11000) = 0x18
+[msc]   @7329 7(0xa049668) = 0x1
+[msc]   @7329 47(0x11000) = 0x20
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 1(0x1) = 0x15
+[msc]   @7329 262(0xffffff9c) = 0xfffffffffffffffe
+[msc]   @7329 262(0xffffff9c) = 0xfffffffffffffffe
+[msc]   @7329 7(0xa049408) = 0x1
+[msc]   @7329 20(0x11000) = 0x10
+[msc]   @7329 7(0xa049438) = 0x1
+[msc]   @7329 47(0x11000) = 0x4c
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 47(0x11000) = 0xfffffffffffffff5
+[msc]   @7329 7(0xa0494c8) = 0x1
+[msc]   @7329 20(0x11000) = 0x34
+[msc]   @7335 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7400 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7466 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7531 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7596 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7661 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7727 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7792 7(0xa0495c8) = 0xfffffffffffffffc
+[msc]   @7857 7(0xa0495c8) = 0xffffffffffffffff
+[glibc] timed-out program killed: main t21 + 0 thread(s) (1 were still alive)
+[glibc] teardown: vDSO table chain freed (3 frames), then the arena chain
+[glibc] gsdl (SDL2): exit=0
+[glibc]   Xlib:  extension "RANDR" missing on display ":0".
+[glibc]   GSDL: SDL_Init ok
+[glibc]   GSDL: window created
+[glibc] === GTK3 toolkit app (ggtk) — LIVE, alongside desktop ===
+[glibc] ggtk live-demo skipped (idle-friendly default; build --features live-demos to enable)
+[boot-time] phase glibc-suite: 30942.514 ms (at 80427 ms)
+[j1-kmsg] lock-free-ring-test-line 0
+[j1-kmsg] lock-free-ring-test-line 1
+[j1-kmsg] lock-free-ring-test-line 2
+[j1-kmsg] lock-free-ring-test-line 3
+[j1-kmsg] lock-free-ring-test-line 4
+[j1-kmsg] lock-free-ring-test-line 5
+[j1-kmsg] lock-free-ring-test-line 6
+[j1-kmsg] lock-free-ring-test-line 7
+[j1-kmsg] lock-free-ring-test-line 8
+[j1-kmsg] lock-free-ring-test-line 9
+[j1-kmsg] lock-free-ring-test-line 10
+[j1-kmsg] lock-free-ring-test-line 11
+[j1-kmsg] lock-free-ring-test-line 12
+[j1-kmsg] lock-free-ring-test-line 13
+[j1-kmsg] lock-free-ring-test-line 14
+[j1-kmsg] lock-free-ring-test-line 15
+[j1-kmsg] lock-free-ring-test-line 16
+[j1-kmsg] lock-free-ring-test-line 17
+[j1-kmsg] lock-free-ring-test-line 18
+[j1-kmsg] lock-free-ring-test-line 19
+[j1-kmsg] lock-free-ring-test-line 20
+[j1-kmsg] lock-free-ring-test-line 21
+[j1-kmsg] lock-free-ring-test-line 22
+[j1-kmsg] lock-free-ring-test-line 23
+[j1-kmsg] lock-free-ring-test-line 24
+[j1-kmsg] lock-free-ring-test-line 25
+[j1-kmsg] lock-free-ring-test-line 26
+[j1-kmsg] lock-free-ring-test-line 27
+[j1-kmsg] lock-free-ring-test-line 28
+[j1-kmsg] lock-free-ring-test-line 29
+[j1-kmsg] lock-free-ring-test-line 30
+[j1-kmsg] lock-free-ring-test-line 31
+[j1-kmsg] lock-free-ring-test-line 32
+[j1-kmsg] lock-free-ring-test-line 33
+[j1-kmsg] lock-free-ring-test-line 34
+[j1-kmsg] lock-free-ring-test-line 35
+[j1-kmsg] lock-free-ring-test-line 36
+[j1-kmsg] lock-free-ring-test-line 37
+[j1-kmsg] lock-free-ring-test-line 38
+[j1-kmsg] lock-free-ring-test-line 39
+[j1-kmsg] lock-free-ring-test-line 40
+[j1-kmsg] lock-free-ring-test-line 41
+[j1-kmsg] lock-free-ring-test-line 42
+[j1-kmsg] lock-free-ring-test-line 43
+[j1-kmsg] lock-free-ring-test-line 44
+[j1-kmsg] lock-free-ring-test-line 45
+[j1-kmsg] lock-free-ring-test-line 46
+[j1-kmsg] lock-free-ring-test-line 47
+[j1-kmsg] lock-free-ring-test-line 48
+[j1-kmsg] lock-free-ring-test-line 49
+[j1-kmsg] lock-free-ring-test-line 50
+[j1-kmsg] lock-free-ring-test-line 51
+[j1-kmsg] lock-free-ring-test-line 52
+[j1-kmsg] lock-free-ring-test-line 53
+[j1-kmsg] lock-free-ring-test-line 54
+[j1-kmsg] lock-free-ring-test-line 55
+[j1-kmsg] lock-free-ring-test-line 56
+[j1-kmsg] lock-free-ring-test-line 57
+[j1-kmsg] lock-free-ring-test-line 58
+[j1-kmsg] lock-free-ring-test-line 59
+[j1-kmsg] lock-free-ring-test-line 60
+[j1-kmsg] lock-free-ring-test-line 61
+[j1-kmsg] lock-free-ring-test-line 62
+[j1-kmsg] lock-free-ring-test-line 63
+[j1] lock-free kmsg ring: 64 lines claimed (HEAD 928→992), 64 read back intact → OK (no Mutex on the log path) ✓
+[rtc] real wall-clock time: 07:31 Sat 14 November
+[sym] EuroFS symlinks: create+readlink+follow-through=true → OK ✓
+[cu2] coreutils long-tail: md5sum/sha1sum vectors=true · b2sum/shuf/comm/join/split/ln/readlink/realpath/mktemp/env wired → OK ✓
+[boot-time] phase vfs-mounts: 42.632 ms (at 80470 ms)
+[udrv-vec] MSI-X vectors from the pool 0x4c..0x4f: e1000d 0x4c; distinct=true, stubs bound to their owner=true, second claims on a held vector refused 3/3; unowned interrupts 0 → OK ✓
+[lk-stress] 3 round(s) x 1 core(s), mixed fs/ipc/unix + root VFS from every core: 36894 ops, correctness errors=0, order inversions=0, task-lock-with-IF0=0, all rounds completed in 0.9 s (no deadlock) -> OK ✓
+[lk] after-stress sched.SCHED (BSP scheduler): acq=293830 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=698us hold-avg=1us
+[lk] after-stress ring3.BG (background processes): acq=105236 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29445us hold-avg=8us
+[lk] after-stress ipc.channel_table: acq=84175 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress ipc.channel (per-port): acq=84158 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=141us hold-avg=0us
+[lk] after-stress unix.conn_table: acq=31944 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress unix.conn (per-connection): acq=31935 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=77us hold-avg=1us
+[lk] after-stress net.CFG: acq=27315 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=83us hold-avg=0us
+[lk] after-stress net.NET_LEGACY (rx ring): acq=13843 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=383us hold-avg=0us
+[lk] after-stress class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=245us hold-avg=89us
+[lk] after-stress class Sched: acq=293830 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=698us hold-avg=1us
+[lk] after-stress class Process: acq=109841 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29445us hold-avg=8us
+[lk] after-stress class IpcTable: acq=84175 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] after-stress class IpcChannel: acq=84158 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=141us hold-avg=0us
+[lk] after-stress class Net: acq=57174 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=383us hold-avg=0us
+[lk] after-stress class UnixTable: acq=31974 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=230us hold-avg=0us
+[lk] after-stress class UnixConn: acq=31935 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=77us hold-avg=1us
+[lk] after-stress heap per-CPU caches: hits=269321 refills=102 flushes=32 parked=85 KiB
+[lk] after-stress order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[l1] immutability + CAP_IMMUTABLE_ADMIN: cap-gate-on-set=true, write-blocked=true, delete-blocked=true, content-intact=true, cap-gate-on-clear=true, mutable-again-after-clear=true → OK (even root cannot change anything without the cap) ✓
+[l2rec] /bin recursively protected: /bin/doom immutable=true
+[l2] 37 system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)
+[intg] tamper-detection: clean-before=true, tamper-detected=true, restored+clean=true → OK (integrity sweep is live) ✓
+[intg] system integrity at boot: 33/33 files match the signed kernel image ✓
+[3h] per-file versioning (live FS): 3-writes->2 stored, restore-v1=true, replaced-kept->3 -> OK (history is real) ✓
+[p3] append-only audit log: 52 events, persisted=true, append-only-flag=true, tamper-blocked=true, extend-OK=true, lines-on-disk 50→52 → OK (tamper-evident audit trail) ✓
+[3d6-wire] audit hash-chain LIVE: chain-verifies=true, execve+connection-call-sites=true, chain-integrity=true, json-persisted-append-only=true → OK (system audit log is hash-chained + tamper-evident + persisted) ✓
+[s] EuroSnap: snapshot #1 'boot-checkpoint', test file before-rollback=true → after-rollback=false, system-file-intact=true, rollback-ok=true, 1 snapshot(s) → OK (CoW rollback works, system intact) ✓
+[k3] FDE: EuroFS on encrypted block layer (ChaCha20), key-from-TPM=false, key-TPM-sealed-to-boot=false, read-after-write-intact=true → OK (transparent full-disk encryption works) ✓
+[x] EuroPol: policy 'firefox', caps 0b11111→0b01111 (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied=true, violation→P3-audit → OK (policy enforced as capabilities) ✓
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+[3d5] EuroAttr user immutability (no admin cap on your own files): set-own-immutable=true, write-then-blocked=true, system-path-denied=true, other-user-denied=true, owner-can-clear=true, write-after-clear=true → OK (users protect their own files; system files still need CAP_IMMUTABLE_ADMIN) ✓
+[3d6] EuroAudit GDPR trail (hash-chained): chain-verifies=true, tamper-detected=true, json-export=true, query=true, rotation-keeps-chain=true · sealed-vault-persisted+reloaded=true → OK (tamper-evident audit + the sealed vault survives on disk) ✓
+[w] EuroObserve: 13 metric values in OpenMetrics (syscalls=8020, fs_reads=191, msix=0, free-frames=31956, fs_read-histogram count=5) → OK (Prometheus-scrapable) ✓
+[u] EuroVault: 2 secrets, master-from-TPM=false, read-with-cap=true, read-without-cap-denied=true, blob-without-plaintext=true, unseal-OK=true, wrong-key-fails=true → OK (capability-gated, encrypted, tamper-evident) ✓
+[3d1] TPM-seal: no TPM present → FDE/vault master stays sealed (fail-closed; no software fallback hands the key over) — needs a TPM to exercise
+[3e1-wire] FDE unseal-at-boot: no TPM — skipped (fail-closed)
+[z] EuroHealth: no NVMe disk (SMART n/a); FS-errors=0/unrecoverable=0; free 31956/130758 frames → total score 100/100 = HEALTHY ✓
+[n3] EuroFW: 3 rules, incoming Telnet:23-blocked=true, HTTPS:443-allowed=true, blocklist-source-rejected=true → OK (packet filter works in the RX path) ✓
+[n2] EuroVPN: handshake (4×X25519-DH → HKDF) + ChaCha20-Poly1305 transport, seeds-from-TPM=false, pubkey 6a5813d2d70b50a6…, encrypted=true, peer-decrypts=true, reply-ok=true → OK (forward-secret, mutually-authenticated tunnel) ✓
+[3d9] EuroVPN hybrid PQC: X25519 + ML-KEM-768 (FIPS 203, NIST-KAT-verified), ek=1184B ct=1088B, seeds-from-TPM=false, encrypted=true, peer-decrypts=true, reply-ok=true, tampered-KEM-breaks-tunnel=true → OK (secret if EITHER X25519 or ML-KEM stands — harvest-now-decrypt-later resistant) ✓
+[aa] EuroAgent: manifest 'facilitator' v1.0.0 (4 caps), MCP fs_write=allowed/exec=denied(cap), NET denied(policy)/EXEC denied(user-clamp), intent→facilitator, agent loop: 2 tool-calls/1 denied→'Summary saved.', Ed25519 bundle: valid-OK+tampered-rejected=true → OK (kernel trust boundary, capability-isolated, audited, LLM↔MCP loop, signed bundle, registry+anti-hijack) ✓
+[p3] audit: agent-llm-call model=mistral:7b-instruct endpoint=10.0.2.2:11434 local=true
+[bb1] EuroAgent LLM transport READY: HTTP POST /api/chat over EuroNet TCP built; no endpoint on 10.0.2.2:11434 (start Ollama/mock to see the real model response) ✓
+[loc] EuroLocale: 24 EU languages — currency=true, date(nl/en/sv)=true, plural(pl/fr/en)=true, collation=true, month+weekday-names(all 24, CLDR)=true, weekday-calc(el Σάββατο)=true, long-date(bg)=true → OK (sovereign localization for the whole EU) ✓
+[install] EuroInstall planner: 13-step A/B install (FDE before format=true, 5 non-overlapping partitions=true), live mode leaves disk alone=true, wizard lists valid (langs=true, keymaps=true) → OK (guided install + live image, host-tested planner) ✓
+[ca] EuroCA: root CA (seed-from-TPM=false), service cert 'vpn.euro-os.eu' issued+verified=true, refused-after-revocation=true, root-fpr 67e2a0759cfd546d… → OK (sovereign local certificate authority) ✓
+[o2] EuroAttest: quote over 2 PCRs (AK-seed-from-TPM=false), fresh-quote-accepted=true, replay-rejected=true, modified-state-rejected=true → OK (remote attestation — provable trusted state) ✓
+[3d3] EuroCA+Attest: 3-level chain(root→intermediate→leaf)-verifies=true, on-disk-cert-store-roundtrip=true · attestation JSON-report=true, verifier-accepts=true, replay-REFUSED=true, tampered-PCR-REFUSED=true → OK (sovereign PKI + remote attestation over the boot PCRs; live HTTPS endpoint + hardware-resident TPM2_Quote pending) ✓
+[v] EuroIDM: token 'anke'(users) issued+verified=true (IDM-seed-from-TPM=false), caps=read+net-no-write=true, escalation(add-group)-denied=true → OK (identity→capabilities, signed tokens, locally sovereign) ✓
+[k1] EuroID: useradd+Argon2id(TPM-salt=false) → login alice(caps users∪net=true)=true · unknown-user-indistinguishable=true · 5×wrong→bob-locked=true · soft-delete-keeps-record=true · hash-chain-intact=true (13 events, root sha256:e3bf85eba151f9e5) → OK (Sprint K1: sovereign user management + tamper-evident audit, NIS2/GDPR/ISO 27001) ✓
+[k1] eurousers shell-path: 'list'-shows-users=true · 'add carla'=true · 'audit --verify-chain'=true → OK (command path verified live) ✓
+[ae] EuroID login (Argon2id, no more SHA-256): euro/'euro'=true · euro/'wrong'-rejected=true · root-locked-rejected=true → OK (login path on sovereign Argon2id identity) ✓
+[3d10] EuroID EUDI-wallet (SD-JWT VC, EdDSA, keys-from-TPM=false): PID issued, holder discloses ONLY nationality=true · name/birthdate-hidden=true · replay-nonce-denied=true · wrong-issuer-denied=true → OK (selective disclosure + holder key binding, eIDAS 2.0) ✓
+[m2] EuroPkg: dependency resolution 'eurosuite' → 4 packages topological (highest-libc-chosen)=true, missing-detected=true, cycle-detected=true → OK (semver resolver: deps-first, conflict/cycle-safe) ✓
+[3e6] eupkg EXECUTION (signed index + content-addressed store): install-via-resolver=true, /bin-link=true, CAS-blob=true, tampered-pkg-REFUSED=true, forged-index-REFUSED-before-fetch=true, remove+GC=true → OK (install/remove/upgrade for real, dev.key-signed fixtures) ✓
+[app] REFUSED /tmp/hello-cli.eupkg: BadSignature
+[app] developer key 'example-dev' enrolled (69fa04981383cfb8…)
+[app] installed hello-cli v1.0.0 (app, caps 'console,proc', profile utility, display none)
+[app] installed hello-x11 v1.0.0 (app, caps 'console,file,proc', profile utility, display x11)
+[app] app install: hello-x11 v1.0.0 installed (app; caps 'console,file,proc'; profile utility; display x11) — verified: Ed25519 + sha256
+[app] REFUSED /tmp/hello-cli-tampered.eupkg: BadZip
+[app]   (no arena for glibc)
+[app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · signed-package-installed=true · tampered-refused=true · listed-as-app=true · runs-with-manifest-caps+profile(exit 18446744073709551615)=false → FAILED
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed euro-forbidden v1.0.0 (app, caps 'console', profile euro, display none)
+[euro] bg-app (pid 300) -> task 21, arena 0x6200000 span 16 MiB, heap 0x6400000..0x7000000, PML4 0x188000
+[euroapp] pid 300 -> task 21: caps 0x21, profile euro
+[euroapi] pid 300: surface 520x300 created
+[tick-late] #5 +1 ticks (53 Mcycles) rip=0x62016e5 cs=0x23 task 21 last-syscall=7(a1=0xa0495c8) faults-total=0 (0 Mcycles) lost-total=5
+[euro] bg-app (pid 301) -> task 20, arena 0x7200000 span 16 MiB, heap 0x7400000..0x8000000, PML4 0x190000
+[euroapp] pid 301 -> task 20: caps 0x1, profile euro
+[euro] bg-app (pid 302) -> task 19, arena 0x8200000 span 16 MiB, heap 0x8400000..0x9000000, PML4 0x198000
+[euroapp] pid 302 -> task 19: caps 0x1, profile euro
+[sbx] native app pid 302 (task 19): syscall 0x2(0x8200257, 0x0, 0x0) outside the euro profile -> process killed (signal 31, exit 159)
+[euroapp] native app (Euro API, no Linux library): installed=true · abi=euro=true · frame-presented=true · header-blue=true · body-white=true · kernel-text-drawn=true · key-event-redraw=true · escape-exit-0=true · without-window-cap-refused=true · linux-syscall-killed=true · file-scope=true → OK (a native EuroOS app runs under the euro profile with its manifest capabilities) ✓
+[app] installed hello-euro-wasm v1.0.0 (app, caps 'console,window', profile utility, display x11)
+[euroapi] pid 310: surface 520x300 created
+[euroapp-wasm] WASM app (eurowasm, frame-driven, Euro API import): installed=true · abi=wasm=true · init-presented=true · header-blue=true · body-white=true · kernel-text-drawn=true · key-event-redraw=true · escape-exit-0=true · without-window-cap-refused=true · spinning-module-ended-by-fuel=true → OK (one app source, native and WASM, same policy) ✓
+[euro-fscope] WASM file scope: symlink-in-home-refused=true · plain-file-roundtrip=true · empty-path-refused=true → OK (home only, no symlink escape) ✓
+[app] installed efuzz v1.0.0 (app, caps 'console,window,file', profile euro, display none)
+[euro] bg-app (pid 320) -> task 27, arena 0x9200000 span 16 MiB, heap 0x9400000..0xa000000, PML4 0x1a0000
+[euroapp] pid 320 -> task 27: caps 0x25, profile euro
+[euroapi] pid 320: surface 2x2 created
+[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed=true · ran-to-completion=true · exit="done (exit 171)" → OK (every call answered with a value or an error; no fault, no panic) ✓
+[appstore] signed app index: parsed=true · forged-signature-refused=true · wrong-developer-key-refused=true · vouched-package-installed-without-enrolment=true → OK (index signed by EuroOS vouches for developer keys; packages still verified) ✓
+[churn-proc]   after run 1: free frames 31956
+[churn-proc]   after run 2: free frames 31956
+[churn-proc]   after run 3: free frames 31956
+[churn-proc]   after run 4: free frames 31956
+[churn-proc]   after run 16: free frames 31956
+[churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16 · frames 31956→31956 (leak-free=true) · demand-pool 16384→16384 (true) · tasks 28→28 (true) · thread-kstacks 0→0 (true) · file-table 160→160 (true) · heap-used 20859088→20859088 (true) → FAILED
+[bug040] spawn-window self-test skipped: the launch ended before its spawn (exit=0xffffffffffffffff; no glibc arena at this RAM size) · foreign frees refused so far: main=0 pool=0 demand=0 ⬜
+[cap] syscall 2 DENIED — missing capability
+[cap] syscall 4 DENIED — missing capability
+[cap] syscall 20 DENIED — missing capability
+[cap] syscall 60 DENIED — missing capability
+[bug063] foreground program returned (exit 0): exit flag = 0 (want 0), then 30 ticks with interrupts on while drivers and background processes make syscalls → OK ✓
+[euro] bg-musl (pid 263681) -> task 27, own address space PML4 0x188000, arena 0x200000
+[euro] bg-musl (pid 263682) -> task 19, own address space PML4 0x190000, arena 0x6200000
+[bg-out] pid 263681 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=3 w=4 f=5
+[bg-out] pid 263682 /bin/pipehold: pipehold: phase1 pipe=ok file=ok fds r=3 w=4 f=5
+[cap] syscall 2 DENIED — missing capability
+[cap] syscall 4 DENIED — missing capability
+[cap] syscall 20 DENIED — missing capability
+[cap] syscall 60 DENIED — missing capability
+[bg-out] pid 263681 /bin/pipehold: pipehold: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1)
+[bg-out] pid 263681 /bin/pipehold: pipehold: PASS
+[bg-out] pid 263682 /bin/pipehold: pipehold: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1)
+[bg-out] pid 263682 /bin/pipehold: pipehold: PASS
+[fdspace] 2 background processes keep a pipe and a file open across a foreground launch (musl exit=0, glibc exit=-1): phase1=true ended=true pass=2/2 | pid 0x40601: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | pid 0x40602: phase2 pipe=ok (write=2 read=2) file=ok (lseek=0 read=1) | fd spaces in use 3 → 3 → OK ✓
+[elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x20feb8
+[linux-abi] MFDSEM: ok   dup shares the offset: read via the dup gave "cd" (want "cd"), offsets 4/4[linux-abi] 
+[linux-abi] MFDSEM: ok   dup shares the status flags: F_GETFL of the dup = 0x802 after O_NONBLOCK on the original[linux-abi] 
+[linux-abi] MFDSEM: ok   the description lives until its last descriptor closes: read after closing the original = 2[linux-abi] 
+[linux-abi] MFDSEM: ok   open returns the lowest free number: closed 3, next open gave 3[linux-abi] 
+[linux-abi] MFDSEM: ok   no end-of-file while a duplicate of the write end is open: read = -1 errno 11 (want -1 EAGAIN)[linux-abi] 
+[linux-abi] MFDSEM: ok   data written before the close is still read: write 1 read 1[linux-abi] 
+[linux-abi] MFDSEM: ok   POLLHUP on the read end when the last write end closes: revents 0x11[linux-abi] 
+[linux-abi] MFDSEM: ok   end-of-file when the last write end closes: read = 0 errno 0 (want 0)[linux-abi] 
+[linux-abi] MFDSEM: ok   POLLERR on the write end when the last read end closes: revents 0xc[linux-abi] 
+[linux-abi] MFDSEM: ok   EPIPE when the last read end closes: write = -1 errno 32 (want -1, EPIPE = 32)[linux-abi] 
+[linux-abi] MFDSEM: ok   O_CLOEXEC sets FD_CLOEXEC, dup clears it: F_GETFD original 1, dup 0[linux-abi] 
+[linux-abi] MFDSEM: ok   F_DUPFD returns a number at or above its argument: got 50 (want >= 50)[linux-abi] 
+[linux-abi] MFDSEM: ok   F_DUPFD_CLOEXEC: got 100, F_GETFD 1[linux-abi] 
+[linux-abi] MFDSEM: ok   dup3 with O_CLOEXEC: got 200, F_GETFD 1[linux-abi] 
+[linux-abi] MFDSEM: ok   FD_CLOEXEC belongs to the descriptor, not to the file: after F_SETFD on one dup: 1, on another: 0[linux-abi] 
+[linux-abi] MFDSEM: ok   dup errors: dup3(fd,fd)=-1/22 dup2(fd,fd)=3 dup(9999)=-1/9 dup2(9999,60)=-1/9[linux-abi] 
+[linux-abi] MFDSEM: ok   dup2 onto an open descriptor closes it: dup2 = 6, read on the pipe = 0 (want 0)[linux-abi] 
+[linux-abi] MFDSEM: ok   a closed number is EBADF: F_GETFD = -1 errno 9[linux-abi] 
+[sockfam] socket(domain=1, type=1)
+[linux-abi] MFDSEM: ok   sockets are numbered like every other descriptor: lowest free 3: socket 3, socketpair 4,5[linux-abi] 
+[mm-fail] #3 t0 "?" process 0: brk(0x2000) = 0 | arena mmap window 1024 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 19 MiB used 48 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi] MFDSEM: ok   /proc/self/fd lists this process's descriptors: opendir ok, 5 entries, open fd 3 listed=1, closed fd 90 listed=0, std=3[linux-abi] 
+[linux-abi] MFDSEM: ok   /proc/self/fd read in small pieces while closing: no descriptor is skipped: 40 of 40 closed from the listing in 5 calls, 0 still open[linux-abi] 
+[linux-abi] MFDSEM: ok   close_range: fds 300 301 400, CLOEXEC call 0 (flags 1/0), close call 0, after: -1 -1 -1, below the range: 0[linux-abi] 
+[linux-abi] MFDSEM: ok   RLIMIT_NOFILE is at least 4096: soft 4096 hard 4096[linux-abi] 
+[linux-abi] MFDSEM: ok   1200 duplicates of one descriptor: 1200 made, highest number 1203, errno 0[linux-abi] 
+[linux-abi] MFDSEM: ok   700 files open at once in one process: 700 opened, errno 0[linux-abi] 
+[linux-abi] MFDSEM: PASS 25/25[linux-abi] 
+[tick-late] #6 +36 ticks (820 Mcycles) rip=0xfe93e35 cs=0x8 task 0 last-syscall=231(a1=0xab) faults-total=0 (0 Mcycles) lost-total=41
+[euro] bg-musl (pid 263696) -> task 19, own address space PML4 0x188000, arena 0x200000
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   dup gives a second number for the same open file (shared offset)
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   the open file lives until its last descriptor closes
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   open returns the lowest free number
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   F_DUPFD and F_DUPFD_CLOEXEC
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   dup3 with O_CLOEXEC, F_SETFD
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   close_range
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   a closed number is EBADF
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   pipe: no end-of-file while a duplicate of the write end is open
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   pipe: data, then end-of-file when the last write end closes
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   pipe: EPIPE when the last read end closes
+[tick-late] #7 +2 ticks (74 Mcycles) rip=0x200584 cs=0x23 task 19 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=43
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   fork shares the offset
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   a close in the child closes nothing in the parent; the child reuses the number
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   pipe across fork: data, then end-of-file when the child closed the last write end (child alive)
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   child of the fork test
+[tick-late] #8 +1 ticks (60 Mcycles) rip=0x2007f6 cs=0x23 task 19 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=44
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   exit closes the descriptors of the process
+[tick-late] #9 +1 ticks (63 Mcycles) rip=0x200928 cs=0x23 task 19 last-syscall=0(a1=0x0) faults-total=0 (0 Mcycles) lost-total=45
+[bg-out] pid 263696 /bin/fdsem: fdsem: ok   exec closes close-on-exec descriptors and keeps the others (with their offset)
+[bg-out] pid 263696 /bin/fdsem: fdsem: PASS 16/16
+[fdsem] descriptor tables per process: glibc with fork not run (exit -1, want 171: no arena for a glibc program on this machine) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: not run (no arena for a glibc program on this machine)
+[memt] forkmany: not run (no arena for a glibc program on this machine)
+[memt] madvise: not run (no arena for a glibc program on this machine)
+[memt] memfd: not run (no arena for a glibc program on this machine)
+[memt] oom: not run (no arena for a glibc program on this machine)
+[memt] forkkill: not run (no arena for a glibc program on this machine)
+[memt] memory self-test: not run on this machine → OK ✓
+[elf] 8 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x220b78
+[linux-abi] randprobe: start pid=1 mode=quick
+[linux-abi] randprobe: at_random=65a510be64f8b9e640525e09b64ecfbc
+[linux-abi] randprobe: stack_guard=650010be64f8b9e6 fs30=0100000000000000
+[linux-abi] randprobe: getrandom=54d54a96bbdc49831338f2dc510fa225246f2e4fbcf75e543dc94119290106b3 ret=32
+[linux-abi] randprobe: getrandom2=a88c95e196902033ebe008608406695cee1dfbc5561d5fd8daa49ee3084107d0
+[linux-abi] randprobe: getrandom_nonblock=1b30b36a5bafc7891e8adced3719c9cde93b07deadee85e330967bad7f1fa56b ret=32
+[linux-abi] randprobe: getrandom_random=df959f3812b9ee350cba41733ac4d224c1196fa7aef7f6a5bc7515f5ed3a10c4 ret=32
+[linux-abi] randprobe: getrandom_insecure=992dc995b6a5ab9fc0eaabc74566bfaae14ba24ee5e66bcb8f2e98fa159a9fb1 ret=32
+[linux-abi] randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-abi] randprobe: short_reads_le_256=0
+[linux-abi] randprobe: urandom=993f54e37e76c25f84836691b11a6331044160bb7070e36837cc6e451f98ace3 ret=32
+[linux-abi] randprobe: urandom_pread0=34d658cf870c78b5d2de8a18150ebe4a123bb7e637ccb7b37e8fbf58a04ffaa3 again=9e4dc499e5c06a6cedf742aa688320b03fd0fc99c818e62b7c3b061a930eb4f7
+[linux-abi] randprobe: random=7888fdea3abbb3bed65fed15e65daa2cd05a39608e34a380043a089214523d76 ret=32
+[linux-abi] randprobe: random_pread0=99deb896b62a5bc9a4f814175feabc30e33d66d14e677ed54447c8dc153ce216 again=7aad48fd4ecc1b72bf9cbb2b021760e8b04fada72486c4bd0f57955858803979
+[linux-abi] randprobe: PASS
+[tick-late] #10 +3 ticks (95 Mcycles) rip=0xfe95227 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=48
+[elf] 8 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x220b78
+[linux-abi] randprobe: start pid=1 mode=stat
+[linux-abi] randprobe: at_random=f9ca5051f87ef3ba59bdb113a70e8777
+[linux-abi] randprobe: stack_guard=f9005051f87ef3ba fs30=0100000000000000
+[linux-abi] randprobe: getrandom=a64d2b018b6c9c9d9d99fba75ca4a05bdcac872211ee252b7b68e49a64f8c143 ret=32
+[linux-abi] randprobe: getrandom2=cf2a01fecc4435fc8a18f272dafb62c88f7b643b0bef8e7ead2aee6ca2617910
+[linux-abi] randprobe: getrandom_nonblock=533b85a859fcc1325a95c3cf5a2ae1bdbdab1ce8c88a799901ce0d085d9f3831 ret=32
+[linux-abi] randprobe: getrandom_random=257df21324ca021bf71eef42baa8d863b3e61ac4d2a74973adcc1999e92e420f ret=32
+[linux-abi] randprobe: getrandom_insecure=107415a2253024ef5f5db0eb82b252c916abdfe81c5f0312a2257340708c2c1f ret=32
+[linux-abi] randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-abi] randprobe: short_reads_le_256=0
+[linux-abi] randprobe: urandom=c8c858917ea99eaf2439dd5aae41b95e83db8793bd1a886a55d724e08ea90c08 ret=32
+[tick-late] #11 +57 ticks (1283 Mcycles) rip=0xfe95311 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=105
+[elf] 8 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x220b78
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: start pid=1 mode=quick
+[linux-rand]   musl#1 randprobe: at_random=65a510be64f8b9e640525e09b64ecfbc
+[linux-rand]   musl#1 randprobe: stack_guard=650010be64f8b9e6 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=54d54a96bbdc49831338f2dc510fa225246f2e4fbcf75e543dc94119290106b3 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=a88c95e196902033ebe008608406695cee1dfbc5561d5fd8daa49ee3084107d0
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=1b30b36a5bafc7891e8adced3719c9cde93b07deadee85e330967bad7f1fa56b ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=df959f3812b9ee350cba41733ac4d224c1196fa7aef7f6a5bc7515f5ed3a10c4 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=992dc995b6a5ab9fc0eaabc74566bfaae14ba24ee5e66bcb8f2e98fa159a9fb1 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: short_reads_le_256=0
+[linux-rand]   musl#1 randprobe: urandom=993f54e37e76c25f84836691b11a6331044160bb7070e36837cc6e451f98ace3 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=34d658cf870c78b5d2de8a18150ebe4a123bb7e637ccb7b37e8fbf58a04ffaa3 again=9e4dc499e5c06a6cedf742aa688320b03fd0fc99c818e62b7c3b061a930eb4f7
+[linux-rand]   musl#1 randprobe: random=7888fdea3abbb3bed65fed15e65daa2cd05a39608e34a380043a089214523d76 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=99deb896b62a5bc9a4f814175feabc30e33d66d14e677ed54447c8dc153ce216 again=7aad48fd4ecc1b72bf9cbb2b021760e8b04fada72486c4bd0f57955858803979
+[linux-rand]   musl#1 randprobe: PASS
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: start pid=1 mode=stat
+[linux-rand]   musl#2 randprobe: at_random=f9ca5051f87ef3ba59bdb113a70e8777
+[linux-rand]   musl#2 randprobe: stack_guard=f9005051f87ef3ba fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=a64d2b018b6c9c9d9d99fba75ca4a05bdcac872211ee252b7b68e49a64f8c143 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=cf2a01fecc4435fc8a18f272dafb62c88f7b643b0bef8e7ead2aee6ca2617910
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=533b85a859fcc1325a95c3cf5a2ae1bdbdab1ce8c88a799901ce0d085d9f3831 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=257df21324ca021bf71eef42baa8d863b3e61ac4d2a74973adcc1999e92e420f ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=107415a2253024ef5f5db0eb82b252c916abdfe81c5f0312a2257340708c2c1f ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: short_reads_le_256=0
+[linux-rand]   musl#2 randprobe: urandom=c8c858917ea99eaf2439dd5aae41b95e83db8793bd1a886a55d724e08ea90c08 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=dc0b4d83d53240745a001299ddfb35812b93583c667514b7d8e13b3d2d224b68 again=fefcf33e02299180c21eccd15898d830c032782abd0b26d1f73cb6ce29644c67
+[linux-rand]   musl#2 randprobe: random=14c9b21bc8a6eb4eac0f2780aaf72abd35c5bfa6667d818e5adc3456a4487d02 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=b4dfea0b45dec9b7a6b5b736ed01161227f87ed7aba19da7c8a8479cdade665b again=eaa6403d91cb1895600e14713be95242e0f5a5fc055609b91329a9130d745d93
+[linux-rand]   musl#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048730 of 2097152 (off by 154, limit 3622) worst-bit-position-off=320 (limit 1280) chi2=238 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048865 of 2097152 (off by 289, limit 3622) worst-bit-position-off=447 (limit 1280) chi2=261 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: PASS
+[linux-rand] glibc#1 exit=-1
+[linux-rand]   glibc#1 (no arena for glibc)
+[linux-rand] glibc#2 exit=-1
+[linux-rand]   glibc#2 (no arena for glibc)
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: start pid=1 mode=closed
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=9bc6bb088f29cb97365a903af97f4d18d9026e3471c006e4720aa67941cdf9fa
+[linux-rand]   musl#closed randprobe: PASS
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, glibc not run: (no arena for glibc)): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard differs=true, getrandom differs=true, device bytes differ=true, stream statistics (bit balance, chi-square, repeated blocks)=true, closed pool: GRND_NONBLOCK is EAGAIN and a blocking call waited 3 rounds=true → OK ✓
+[linux-abi] (echo capped: 1127 B not echoed last second; full text in OUTPUT)
+[linux-abi] renprobe: setup 16 small files and 3 of 1 MiB written ok
+[shm] MAP_SHARED /tmp/renprobe-flat/f12 -> region 0x280000..0x283000 (one memory for every mapping)
+[linux-abi] mmap anon 1040 KiB -> ENOMEM: arena mmap window full (break 0x283000, end 0x380000, 1012 KiB left; demand paging off)
+[mm-fail] #4 t0 "?" process 0: mmap(addr 0x0, len 0x103064 = 1036 KiB, prot 0x1, flags 0x2, fd 11) = -12 | arena mmap window 1012 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 26 MiB used 41 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi] renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[linux-abi] renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[linux-abi] renprobe: before every file by its path ok
+[linux-abi] renprobe: before every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: before a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: A1 a new file renamed over an earlier file ok
+[linux-abi] renprobe: A1 the temporary name is gone ok
+[linux-abi] renprobe: A1 every file by its path ok
+[linux-abi] renprobe: A1 every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: A1 a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: A1 the shared mapping of f12 ok
+[linux-abi] mmap(fd=8, off=0, 4096 B) file-backed -> 0x283000 (4096 B copied)
+[linux-abi] renprobe: A1 a new mapping through a held descriptor (f13) ok
+[linux-abi] renprobe: A2 a new file renamed over an earlier file ok
+[linux-abi] renprobe: A2 the temporary name is gone ok
+[linux-abi] renprobe: A2 every file by its path ok
+[linux-abi] renprobe: A2 every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: A2 a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: A2 the shared mapping of f12 ok
+[linux-abi] renprobe: A3 a new file renamed over an earlier file ok
+[linux-abi] renprobe: A3 the temporary name is gone ok
+[linux-abi] renprobe: A3 every file by its path ok
+[linux-abi] renprobe: A3 every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: A3 a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: A3 the shared mapping of f12 ok
+[linux-abi] renprobe: B a new file renamed over an OPEN file ok
+[linux-abi] renprobe: B the open descriptor still reads the replaced file ok
+[linux-abi] renprobe: B the path gives the new file ok
+[linux-abi] renprobe: B every file by its path ok
+[linux-abi] renprobe: B every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: B a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: C six saves with a backup (unlink, rename, rename) ok
+[linux-abi] renprobe: C unlink of f04 and of the backup ok
+[linux-abi] renprobe: C every file by its path ok
+[linux-abi] renprobe: C every held descriptor (bytes, offset, size) ok
+[linux-abi] renprobe: C a write through a held descriptor lands in its own file ok
+[linux-abi] renprobe: C the shared mapping of f12 ok
+[linux-abi] mmap anon 1040 KiB -> ENOMEM: arena mmap window full (break 0x284000, end 0x380000, 1008 KiB left; demand paging off)
+[mm-fail] #5 t0 "?" process 0: mmap(addr 0x0, len 0x103064 = 1036 KiB, prot 0x1, flags 0x2, fd 12) = -12 | arena mmap window 1008 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 26 MiB used 41 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi] mmap anon 1040 KiB -> ENOMEM: arena mmap window full (break 0x284000, end 0x380000, 1008 KiB left; demand paging off)
+[mm-fail] #6 t0 "?" process 0: mmap(addr 0x0, len 0x103064 = 1036 KiB, prot 0x1, flags 0x2, fd 12) = -12 | arena mmap window 1008 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 64 MiB free | kernel heap 26 MiB used 41 MiB free, big blocks 0/0 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi] renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[tick-late] #12 +29 ticks (672 Mcycles) rip=0xfe96056 cs=0x8 task 0 last-syscall=60(a1=0x0) faults-total=0 (0 Mcycles) lost-total=134
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path ok
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path ok
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path ok
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file ok
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path ok
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path ok
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path ok
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: PASS
+[rename] glibc exit=-1
+[rename]   glibc (no arena for glibc)
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc not run: (no arena for glibc)) → OK ✓
+[euro] bg-musl (pid 263472): no kernel stack free - not started
+[euro] bg-musl (pid 263472): no kernel stack free - not started
+[euro] bg-musl (pid 263472): no kernel stack free - not started
+[euro] bg-musl (pid 263472): no kernel stack free - not started
+[euro] bg-musl (pid 263472): no frames for page tables - not started
+[euro] bg-musl (pid 263472): no frames for page tables - not started
+[euro] bg-musl (pid 263472): no frames for page tables - not started
+[euro] bg-musl (pid 263472): no frames for page tables - not started
+[euro] bg-musl (pid 263472) -> task 21, own address space PML4 0x198000, arena 0x200000
+[cap] syscall 2 DENIED — missing capability
+[cap] syscall 4 DENIED — missing capability
+[cap] syscall 20 DENIED — missing capability
+[cap] syscall 60 DENIED — missing capability
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc part skipped (no glibc arena at this RAM size) · frames kept by refused starts: 0 · free frames 31956 → 31956 → OK ✓
+[churn-thread] 60 cycles × 4 pthreads create+join in one process: exit=18446744073709551615 (want 77) · sums-correct=false · thread-kstacks 0→0 · tasks 28→28 · frames 31956→31956 → FAILED
+[churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 66) · every-child-reaped-with-its-status=false · tasks 28→28 · process-pool 16384→16384 · demand-pool 0→0 · frames 31956→31956 → FAILED
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: (no result line) (exit not started) · task table 28→28 · thread-kstacks 0→0 · process-pool 16384→16384 · demand-pool 0→0 → OK (fork refused for memory: one process only)
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: (no result line) (exit not started) → OK (not run: no room for a second process)
+[many-threads] 320 threads of one process alive at once: (no result line) (exit not started) · thread-kstacks 0→0 → OK (not run: no arena for a glibc program)
+[churn-fs] 3 rounds × 120 files (write/rename/read/remove): op-failures=0 · bad-reads=0 · leftovers=0 · rmdir-failures=0 · sentinel-intact=true · heap-used after rounds [23086640, 23086640, 23086640] (stable=true) → OK ✓
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10260 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10262 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[conn] @10264 sock_connect fd65536 -> 127.0.0.1:53
+[sio] send fd65536 27 B: "\u{12}4\u{1}\0\0\u{1}\0\0\0\0\0\0\tlocalhost\0\0"
+[dns] local: localhost = 127.0.0.1
+[sio] recv fd65536 43 B
+[churn-net] 64 sockets opened+closed (half UDP to the loopback DNS responder): open-failures=0 · close-failures=0 · loopback-sends=32/32 · table 0→0 → OK ✓
+[euroapi] pid 327680: surface 160x100 created
+[euroapi] pid 327681: surface 160x100 created
+[euroapi] pid 327682: surface 160x100 created
+[euroapi] pid 327683: surface 160x100 created
+[euroapi] pid 327684: surface 160x100 created
+[euroapi] pid 327685: surface 160x100 created
+[euroapi] pid 327686: surface 160x100 created
+[euroapi] pid 327687: surface 160x100 created
+[euroapi] pid 327688: surface 160x100 created
+[euroapi] pid 327689: surface 160x100 created
+[euroapi] pid 327690: surface 160x100 created
+[euroapi] pid 327691: surface 160x100 created
+[euroapi] pid 327692: surface 160x100 created
+[euroapi] pid 327693: surface 160x100 created
+[euroapi] pid 327694: surface 160x100 created
+[euroapi] pid 327695: surface 160x100 created
+[euroapi] pid 327696: surface 160x100 created
+[euroapi] pid 327697: surface 160x100 created
+[euroapi] pid 327698: surface 160x100 created
+[euroapi] pid 327699: surface 160x100 created
+[euroapi] pid 327700: surface 160x100 created
+[euroapi] pid 327701: surface 160x100 created
+[euroapi] pid 327702: surface 160x100 created
+[euroapi] pid 327703: surface 160x100 created
+[euroapi] pid 327704: surface 160x100 created
+[euroapi] pid 327705: surface 160x100 created
+[euroapi] pid 327706: surface 160x100 created
+[euroapi] pid 327707: surface 160x100 created
+[euroapi] pid 327708: surface 160x100 created
+[euroapi] pid 327709: surface 160x100 created
+[euroapi] pid 327710: surface 160x100 created
+[euroapi] pid 327711: surface 160x100 created
+[euroapi] pid 327712: surface 160x100 created
+[euroapi] pid 327713: surface 160x100 created
+[euroapi] pid 327714: surface 160x100 created
+[euroapi] pid 327715: surface 160x100 created
+[euroapi] pid 327716: surface 160x100 created
+[euroapi] pid 327717: surface 160x100 created
+[euroapi] pid 327718: surface 160x100 created
+[euroapi] pid 327719: surface 160x100 created
+[euroapi] pid 327720: surface 160x100 created
+[euroapi] pid 327721: surface 160x100 created
+[euroapi] pid 327722: surface 160x100 created
+[euroapi] pid 327723: surface 160x100 created
+[euroapi] pid 327724: surface 160x100 created
+[euroapi] pid 327725: surface 160x100 created
+[euroapi] pid 327726: surface 160x100 created
+[euroapi] pid 327727: surface 160x100 created
+[euroapi] pid 327728: surface 160x100 created
+[euroapi] pid 327729: surface 160x100 created
+[euroapi] pid 327730: surface 160x100 created
+[euroapi] pid 327731: surface 160x100 created
+[euroapi] pid 327732: surface 160x100 created
+[euroapi] pid 327733: surface 160x100 created
+[euroapi] pid 327734: surface 160x100 created
+[euroapi] pid 327735: surface 160x100 created
+[euroapi] pid 327736: surface 160x100 created
+[euroapi] pid 327737: surface 160x100 created
+[euroapi] pid 327738: surface 160x100 created
+[euroapi] pid 327739: surface 160x100 created
+[euroapi] pid 327740: surface 160x100 created
+[euroapi] pid 327741: surface 160x100 created
+[euroapi] pid 327742: surface 160x100 created
+[euroapi] pid 327743: surface 160x100 created
+[euroapi] pid 327744: surface 160x100 created
+[euroapi] pid 327745: surface 160x100 created
+[euroapi] pid 327746: surface 160x100 created
+[euroapi] pid 327747: surface 160x100 created
+[euroapi] pid 327748: surface 160x100 created
+[euroapi] pid 327749: surface 160x100 created
+[euroapi] pid 327750: surface 160x100 created
+[euroapi] pid 327751: surface 160x100 created
+[euroapi] pid 327752: surface 160x100 created
+[euroapi] pid 327753: surface 160x100 created
+[euroapi] pid 327754: surface 160x100 created
+[euroapi] pid 327755: surface 160x100 created
+[euroapi] pid 327756: surface 160x100 created
+[euroapi] pid 327757: surface 160x100 created
+[euroapi] pid 327758: surface 160x100 created
+[euroapi] pid 327759: surface 160x100 created
+[euroapi] pid 327760: surface 160x100 created
+[euroapi] pid 327761: surface 160x100 created
+[euroapi] pid 327762: surface 160x100 created
+[euroapi] pid 327763: surface 160x100 created
+[euroapi] pid 327764: surface 160x100 created
+[euroapi] pid 327765: surface 160x100 created
+[euroapi] pid 327766: surface 160x100 created
+[euroapi] pid 327767: surface 160x100 created
+[euroapi] pid 327768: surface 160x100 created
+[euroapi] pid 327769: surface 160x100 created
+[euroapi] pid 327770: surface 160x100 created
+[euroapi] pid 327771: surface 160x100 created
+[euroapi] pid 327772: surface 160x100 created
+[euroapi] pid 327773: surface 160x100 created
+[euroapi] pid 327774: surface 160x100 created
+[euroapi] pid 327775: surface 160x100 created
+[euroapi] pid 327776: surface 160x100 created
+[euroapi] pid 327777: surface 160x100 created
+[euroapi] pid 327778: surface 160x100 created
+[euroapi] pid 327779: surface 160x100 created
+[euroapi] pid 327780: surface 160x100 created
+[euroapi] pid 327781: surface 160x100 created
+[euroapi] pid 327782: surface 160x100 created
+[euroapi] pid 327783: surface 160x100 created
+[euroapi] pid 327784: surface 160x100 created
+[euroapi] pid 327785: surface 160x100 created
+[euroapi] pid 327786: surface 160x100 created
+[euroapi] pid 327787: surface 160x100 created
+[euroapi] pid 327788: surface 160x100 created
+[euroapi] pid 327789: surface 160x100 created
+[euroapi] pid 327790: surface 160x100 created
+[euroapi] pid 327791: surface 160x100 created
+[euroapi] pid 327792: surface 160x100 created
+[euroapi] pid 327793: surface 160x100 created
+[euroapi] pid 327794: surface 160x100 created
+[euroapi] pid 327795: surface 160x100 created
+[euroapi] pid 327796: surface 160x100 created
+[euroapi] pid 327797: surface 160x100 created
+[euroapi] pid 327798: surface 160x100 created
+[euroapi] pid 327799: surface 160x100 created
+[euroapi] pid 327800: surface 160x100 created
+[euroapi] pid 327801: surface 160x100 created
+[euroapi] pid 327802: surface 160x100 created
+[euroapi] pid 327803: surface 160x100 created
+[euroapi] pid 327804: surface 160x100 created
+[euroapi] pid 327805: surface 160x100 created
+[euroapi] pid 327806: surface 160x100 created
+[euroapi] pid 327807: surface 160x100 created
+[euroapi] pid 327808: surface 160x100 created
+[euroapi] pid 327809: surface 160x100 created
+[euroapi] pid 327810: surface 160x100 created
+[euroapi] pid 327811: surface 160x100 created
+[euroapi] pid 327812: surface 160x100 created
+[euroapi] pid 327813: surface 160x100 created
+[euroapi] pid 327814: surface 160x100 created
+[euroapi] pid 327815: surface 160x100 created
+[euroapi] pid 327816: surface 160x100 created
+[euroapi] pid 327817: surface 160x100 created
+[euroapi] pid 327818: surface 160x100 created
+[euroapi] pid 327819: surface 160x100 created
+[euroapi] pid 327820: surface 160x100 created
+[euroapi] pid 327821: surface 160x100 created
+[euroapi] pid 327822: surface 160x100 created
+[euroapi] pid 327823: surface 160x100 created
+[euroapi] pid 327824: surface 160x100 created
+[euroapi] pid 327825: surface 160x100 created
+[euroapi] pid 327826: surface 160x100 created
+[euroapi] pid 327827: surface 160x100 created
+[euroapi] pid 327828: surface 160x100 created
+[euroapi] pid 327829: surface 160x100 created
+[euroapi] pid 327830: surface 160x100 created
+[euroapi] pid 327831: surface 160x100 created
+[euroapi] pid 327832: surface 160x100 created
+[euroapi] pid 327833: surface 160x100 created
+[euroapi] pid 327834: surface 160x100 created
+[euroapi] pid 327835: surface 160x100 created
+[euroapi] pid 327836: surface 160x100 created
+[euroapi] pid 327837: surface 160x100 created
+[euroapi] pid 327838: surface 160x100 created
+[euroapi] pid 327839: surface 160x100 created
+[churn-surface] 160 surfaces created+presented+removed: create-failures=0 · present-failures=0 · surfaces 0→0 · absurd-size-refused=true · heap-used 23090992→23154992 (true) → OK ✓
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[app] installed hello-euro v1.0.0 (app, caps 'console,window', profile euro, display x11)
+[churn-pkg] 12 signed-package install+remove cycles (hello-euro): installs=12/12 · removes=12/12 · installed-apps 5→5 · /pkg entries 2→2 · heap-used 23091504→23091504 (true) → OK ✓
+[euroapi] pid 393216: surface 320x200 created
+[storm-io] 300 × 64 KiB root reads + 300 surface presents back to back: bad-reads=0 · bad-presents=0 · ticks elapsed=32 · lost-ticks=0 (≤10%=true) → OK ✓ (timer stays regular under I/O pressure)
+[3e5] GDB RSP stub (COM2): halt=S05=true, g-regs(real RIP/RSP)=true, m-read==direct-read=true, guarded-M-write-roundtrip=true, out-of-window-write-denied=true, qSupported=true → OK (speaks the real gdb protocol against live kernel state; attach with COM2→tcp + `target remote`) ✓
+[m3] EuroRepro: bit-for-bit-reproduction=true, 2-builder-consensus=true, forged-attestation-rejected=true, volatile-input-flagged=true → OK (verifiable source→binary, independently confirmed) ✓
+[p2] EuroAccess: focus-order=true, screen-reader-announcement(nl)=true, cyclic-Tab-navigation=true, multilingual(nl/de/fr)=true → OK (accessibility layer, EN 301 549, multilingual screen reader) ✓
+[bb8] EuroAccess LIVE events: 4 focus steps → screen reader spoke: [tekstveld: Gebruikersnaam, leeg  |  selectievakje: Onthoud mij, niet aangevinkt  |  knop: Aanmelden  |  knop: Annuleren] · 0 EARCONS through the HDA DAC (tone per role: text field 440 · check box 587 · button 784 Hz) · output stream running=false (RUN bit), LPIB 0→0 → chain widget→focus→announcement→AUDIO (EN 301 549) ✓; intelligible speech synthesis = next milestone
+[3f3] EuroAccess EAA: screen-reader(role+state,nl)=true · keyboard-nav(Enter-toggle=true, arrow-slider=true, Escape=true) · high-contrast WCAG(ink/bg=21.0:1, AAA)=true · magnifier(2x-blit=true, follow-focus-lens=true) → OK (a11y tree + full keyboard nav + high-contrast + magnification, EN 301 549 / EAA) ✓
+[3g1] EuroJournal structured log: query(severity/facility)=true, json-export=true, bounded-ring(drops-oldest+counts)=true, panic-path-now-persists-a-minidump=true → OK (queryable structured journal + crash/panic capture to disk) ✓
+[3g2] EuroWatchdog (deadman): alive-within-grace=true, trips-on-hang=true, recovers-after-pet=true → OK (a hung main loop is detected; live reset-on-trip wiring into the scheduler tick pending) ✓
+[3g3] Kernel-hardening baseline (CRA secure-by-design): CR0.WP=true, CR4.SMEP=true, CR4.SMAP=true, EFER.NX=true, W^X-per-page=enforced(build_address_space), stack-canary=active(sched) → OK (hardware exploit-mitigations on; documented in docs/CRA-CONFORMANCE.md) ✓
+[3g5] IPv6/DHCPv6 (RFC 8415): solicit(client-DUID+IA_NA)=true, request(assigned-addr 2001:db8::5)=true → OK (stateful IPv6 config alongside SLAAC; live lease loop pending) ✓
+[3g6] EuroMDNS (RFC 6762/6763): answers-own-.local-name=true, silent-for-others=true, DNS-SD-service-discovery(_ipp._tcp)=true → OK (zero-config .local resolution + service discovery; live multicast socket pending) ✓
+[3g7] EuroDNS DNSSEC (Ed25519, RFC 8080): rrsig-verified=true, spoofed-record-REJECTED=true, wrong-key-REJECTED=true → OK (DNS answers cryptographically validated; DoT/DoH transport + RSA/ECDSA algs pending) ✓
+[3a5] EuroFSID mount-detect: xfs=true, ntfs(readable)=true, btrfs(identified,label=EUROBTR,read-deferred)=true → OK (recognises btrfs/xfs/ntfs; NTFS read via eurontfs, btrfs/xfs full read deferred) ✓
+[3a6] EuroSMB signing (HMAC-SHA256, SMB 2.1): sign+verify=true, tampered-REJECTED=true, wrong-key-REJECTED=true → OK (message authentication; SMB3 AES-CMAC encryption + NFSv4 deferred) ✓
+[3a4] EuroNTFS read: host-verified vs a real mkntfs image (reads a file verbatim through $MFT + runlists + USA fixup); live disk-mount pending — crates/eurontfs ✓
+[es] EuroSuite: Writer(OOXML-round-trip=true, HTML-export=true, word-count=true), Calc(formulas+ranges=true, cycle-detection=true), Impress(slides=true) → OK (sovereign office suite on one Universal Document Model — OOXML+ODF) ✓
+[3f2] EuroSuite real Office files (ZIP+DEFLATE via euroflate): open-real-.docx(inflate+OOXML)=true, save-.docx(deflate)+reopen=true → OK (opens & saves real .docx end-to-end) ✓
+[3f4] keyboard layouts (eurokeymap): US 'Q'-key=Some('q'), AZERTY same key=Some('a') (+shift-digit=Some('1')), QWERTZ 'Z'-key=Some('y'), switch-by-tag=true → OK (US-QWERTY/BE-AZERTY/FR-AZERTY/DE-QWERTZ, installer-selectable) ✓
+[altgr] AltGr third level in both decoders (be, fr, de)=true, AltGr+Tab/1..4 switch nothing=true, typed instead=true, split prefix=true, left Alt still Alt+Tab=true Alt+2=true, latches released at the end=true → OK ✓
+[3f7] EuroPortal (caps, not namespaces): benign-auto-allow=true, camera-ask→grant-once→auto-revoke=true, persisted-refusal-remembered=true, host-scoped-grant=true, persistent-grants-on-disk=true → OK (per-action, user-visible permission portals) ✓
+[robust-paging] process page tables at 0..n free frames: 19 refusals (OutOfFrames, 0 frames kept), 5 builds (freed again) → OK ✓
+[xhci] no xHCI controller found (PCI 0C:03:30)
+[xhci] out of memory (no frame for selftest) — device skipped
+[robust-usb] xHCI init with 0 free frames: refused=true (no controller: nothing to bring up), device frame refused=true, running controller untouched=true (0 HID) → OK ✓
+[hda] no HD-Audio controller found (PCI 04:03)
+[robust-hda] HDA init with 0 free frames: refused=true (no running controller), driver state untouched=true → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+[7app] Unified app control: roster-with-caps=true, one-screen(caps+perms+net)=true, network-clamp-visible=true, revoke-permissions=true → OK (total per-app control: rights + network in one place, clamp an AI agent) ✓
+[7appgui] Desktop app-control (EuroBeheer › Apps): select-app=true, block-switch-cuts-network=true, toggle-restores=true, revoke-runs=true → OK (rights + network controllable per app from the desktop) ✓
+[clip] System clipboard: copy→paste round-trip=true, secret-excluded=true, history-intact=true → OK (live copy/paste, not just an engine) ✓
+[ctx] Context menus: opens=true, item-chosen=true, closes-after-choice=true, click-outside-dismisses=true → OK (right-click menus with real actions) ✓
+[snap] Window snapping: left+right halves tile=true, top→maximize=true, centre→none=true → OK (drag to an edge to snap) ✓
+[launch] App launcher: opens=true, search-filters=true, Enter-opens-match=true, Esc-dismisses=true → OK (type to find and open any app) ✓
+[fdlg] File dialog: lists-a-dir=true, open-returns-file=true, save-returns-path=true → OK (a real file picker for apps) ✓
+[notify] Test: hello
+[notify] Test: again
+[notif] Notifications: posted-to-centre=true, toast-shows=true, toast-expires=true, history-kept=true, centre-toggles=true, change-counters=true, list hit-test and close=true → OK (toasts + a notification centre) ✓
+[shot] Screenshot (PPM): header=true, size=true, pixels=true → OK (capture the screen to a file) ✓
+[tip] Tooltips: set-shows=true, clear-hides=true, dock-names=true → OK (hover labels on controls) ✓
+[help] help pages: window kinds 21/21 · launcher apps 15/15 · 21 pages (18 apps) · shortcut rows 49 · panel open/page/close=true/true/true · shell help 99 cmds ok=true · in-app tooltips=true · tour steps ok=true → OK (every app has a help page; F1, F2, ?) ✓
+[symbol] Symbol picker: opens=true, pick-returns-symbol=true, closes=true → OK (insert symbols into text) ✓
+[spell] Spell-check: known-words-pass=true, typos-flagged=true, span-located=true → OK (underlines unknown words) ✓
+[altab] App switcher: opens=true, starts-on-previous=true, cycles=true, wraps=true → OK (Alt-Tab between windows) ✓
+[ws] Workspaces: restore-saved=true, fresh-workspace-empty=true → OK (Alt+1..4 virtual desktops) ✓
+[netb] Net bridge for apps: url-parse=true/true, request→busy=true, poll-returns-result=true, cleared=true → OK (graphics apps can fetch via the kernel HTTP/TLS/DNS) ✓
+[3f6] audio routing (euroaudio::Router): per-app-mix=true, per-app-route-to-device=true, per-stream-volume=true, master-mute=true, default-device-hotplug-reroute=true → OK (mixer + per-app routing + device policy; HDA plays render()) ✓
+[ab] EuroWeb tokenizer+DOM+CSS+layout+flex: 23 nodes, html=1 li=3 strong=1, title="EuroOS — sovereign", h1.class=hero, h1.color=green strong.color(inherited)=gray, layout div2.y=50 flex(2×grow→150)=true ✓
+[ag2] EuroWeb images+forms: QOI=true PPM=true img-box=true field=true button=true submit-GET="http://euro-os.eu/zoek?q=sovereignty" ✗ ERROR
+[post] EuroWeb form POST: method=true action-abs=true body="naam=Ada&bericht=Hallo+EuroOS" (correct urlencoded) get-stays-get=true ✓
+[js] EuroJS: 1 script(s) executed · 1 console line(s) · 1 document.write
+[js] EuroJS on a page: engine(console+document.write)=true dom-mutated=true rendered=true ✓
+[ar] EuroReken: 1+2*3=7 2^10=1024 sqrt2+sin(pi/2)=2.414213562373095 | 0xF0|0x0F=255=0xFF 1<<8=256 | 1mi=1.6093km 100C=212F ✓
+[an] EuroNotes: title="Sprint plan #euros", 7 blocks, headings=1 list items=3 (nested=true), tags=["euros", "q3-2026"] ✓
+[az] EuroArchive: tar 3584 bytes, round-trip=true, corruption-detected=true, manifest-verify=1/2 ✓
+[sf] EuroSafe: 3 apps, high-risk=1, top-cap=Key vault, denied=1, recommendations=3, system-risk=High ✓
+[wm] window management: buttons(close=true min=true max=true empty=true), maximize→work area 1518×1052 ok=true, restore ok=true, hide ok=true ✓
+[cl] EuroClip: dedup-promote=true, password-excluded=true, after-expire only-pinned=true, GDPR-persist=1/1 ✓
+[ck] EuroClock: Brussels=11:00(true) NYC=05:00(true) 12h=true TZ+1=true | timer=true stopwatch=true alarm=true ✓
+[st] EuroShot: full-screen=true, region-clamp=true, manifest-detects-change=true, Ed25519-payload=true, FNV=true ✓
+[ct] EuroContacts: vCards=2, sort(surname)=true, fields(ORG/EMAIL)=true, search+group=true, round-trip=true ✓
+[cal] EuroCalendar: date/weekday=true, weekly x3=true, monthly(feb-clamp)=true, reminder=true, next-upcoming=true ✓
+[sg] EuroSign: .eurosig-round-trip=true, valid=true, tampering-detected=true, bad-signature=true ✓
+[mu] EuroMusic: search=true, album-sort=true, duration=true, queue=true, repeat-all-wrap=true, shuffle-permutation=true ✓
+[ma] EuroMail: base64=true QP=true RFC2047=true | from=true subject("Café")=true text=true attachment=true ✓
+[ft] EuroFont: parse(family/style/upem/glyphs)=true, non-font-rejected=true, bounds-safe=true ✓
+[js] EuroJS: factorial(6)=720=true, closure=42=true, array+loop+object(sumEven)=30=true, console.log+Math=true ✓
+[fl] EuroFiles: path=/etc/euro, 2 directories/3 files, dirs-first=true, visible=4 (of 5), kernel.efi🔒signed=true ✓
+[mv] EuroMedia QOI: gradient 16×16 lossless=true (1149 bytes), solid 64×64 16384→93 bytes (×176 compression) ✓
+[n1] EuroWiFi: beacon→scan (SSID 'EuroGov-Secure', channel 36, Wpa3)=true, WPA-PTK derivation (48B, direction-symmetric)=true → OK (802.11 protocol core; radio driver = hardware work) ✓
+[bb3] EuroWiFi radio: no Intel 802.11 radio present (QEMU emulates no AX200/210). Protocol core (beacon scan + WPA2/3 PTK) PROVEN by [n1]; the iwlwifi-style radio driver (firmware load/MAC-PHY/TX-RX rings + 4-way) is HONESTLY hardware-attended — real Intel WiFi required, not a false check ✓
+[k4] EuroGPU: virtio-gpu command stream (displayinfo→create-2d→backing→scanout→transfer→flush)=true, displayinfo-response-parsed=Some((1024, 768)), OK-response-recognized=true → OK (virtio-gpu protocol core; modern-virtio driver = hardware-attended) ✓
+[bb2] virtio-gpu: no device present (boot with QEMU -device virtio-gpu-pci to prove the modern-virtio driver)
+[3b7] virtio-snd: no device present (boot with QEMU -device virtio-sound-pci to prove the modern-virtio audio driver)
+[bb4] EuroPrint IPP transport READY: IPP request built + HTTP/1.1 POST over EuroNet-TCP; no printer/CUPS reachable on 10.0.2.2:{631,6631} (start one to see the print job) ✓
+[m72] EuroScan eSCL transport READY: ScanSettings XML built + HTTP round-trip over EuroNet-TCP; no scanner reachable on 10.0.2.2:8631 (start one to see a real scan) ✓
+[cu] EuroCoreutils: printf=true, expr=true, test=true, factor=true, numfmt=true → OK (GNU-compatible coreutils core live in the shell) ✓
+[find] CU-5 find: -name *.txt (recursive)=true, -type d=true, -maxdepth 1=true → OK (VFS walk + glob/type/depth filters) ✓
+[wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS=true, with-cap fd_write+run()=55=true, without-cap host-call-denied=true → OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓
+[pipe] built-in pipeline: cat|grep|wc-l=2 →true, seq|tail-2 →true, echo|tr →true, seq|tee|wc(through=true,file=true), xargs(echo=true,-n2=true), sha224-filter=true → OK (stdout→stdin + tee + xargs + sha-filter) ✓
+[3e2] EuroUpdate delivery: client READY (signed channel manifest → version compare → sha256-pinned + Ed25519-verified image → A/B stage); no update server on 10.0.2.2:8722 — start toolchain/update-server/serve.py for the live end-to-end
+[aa-fs] EuroAgent real tools: fs_write+fs_read on EuroFS (sandbox /agents/facilitator)=true, path-escape-blocked=true, without-cap-denied+nothing-written=true → OK (agent does real work, capability-isolated in a sandbox) ✓
+[aa-nv] EuroAgent net+vault: vault_get(cap)→real-EuroVault-value=true+not-in-audit=true, without-cap-denied=true · net_get(cap+domain) path-open=true(no peer (transport ready)), forbidden-domain-denied=true, without-cap-denied=true → OK (least agency: cap ∧ domain allow-list; credentials at the boundary, value never logged) ✓
+[p3-agent] EuroAgent audit PERSISTENT: 2 tool-calls→disk, fs_write-allowed-logged=true, exec-denied-logged=true, append-only-flag=true, tampering-blocked=true, lines 52→66 → OK (agent trail no longer RAM-only: irreversible + survives a restart) ✓
+[af-jit] JIT elevation: elevated-cap-without-grant-denied=true, after-grant-one-action-allowed=true, auto-revoke-2nd-call-denied=true → OK (least agency in time: elevate-for-the-task, auto-revoke) ✓
+[af-anom] behavior detection (deterministic, audit-fed): learning-phase-quiet=true, known-behavior-quiet=true, probing(4×deny)-flagged=true, drift(new-tool)-flagged=true → OK (anomalous agent behavior visible to audit/response) ✓
+[policy-learn] manifest learning: denied-before=2 · wants-fs_write=true · proposal(required+fs_write=true, exec-stays-out=true) · export→import-equal=true · newer-schema-refused=true · approve-as-owner=true · on-disk-equal=true · denied-after=1 (only the denied exec) · non-owner-approve-refused=true → OK ✓ (enforcement on while learning; the person approves the boundary)
+[app-policy] a Linux program under a policy from the outside: no-policy exit=18446744073709551615 (hostname+home ok; identity store readable in this context=true) · learning(empty policy, enforcement on) exit=18446744073709551615 (want 0) wants-read-hostname=false wants-write-home=false · proposal adds both=false, identity store never proposed=true · export→import-equal=true · newer-schema-refused=true · approve-as-owner=true · approved run exit=18446744073709551615 (want 3: hostname+home ok, identity store refused BY POLICY) · non-owner-refused=true → FAILED
+[llm-local] on-device inference: no model pack attached (PACK=llm-pack.img serves /pack/llama-simple + /pack/model.gguf): skipped, not a failure
+[ae-persist] EuroID persistent on EuroFS: written=true, euro-Argon2id-after-reread=true, root-locked-after-reread=true, new-user-survives-remount=true → OK (identity + password hashes survive a reboot) ✓
+[3e3] session lifecycle: switch-closes-previous=true, /home/alice auto-created+alice-owned=true, session-files-owned-by-user=true, logout-closes=true → OK (multi-user session model live) ✓
+[3e9] per-user disk quota (limit 2 blocks): within-quota-write=true, usage/limit=(2, 2), over-quota-REFUSED(+no-partial-file)=true, delete-credits→write-OK=true → OK (quota enforced on the live root FS) ✓
+[prefs-rt] settings round trip (/etc/euroos/selftest.conf): defaults-when-missing=true, save=Ok(Atomic), typed-values-read-back=true, temp-file-gone=true, overwrite=true → OK (typed key=value store, atomic save) ✓
+[prefs-bad] damaged settings file: intact-lines-kept=true, broken-lines-skipped=4 (4 expected), binary-file-gives-defaults=true, next-save-is-clean=true → OK (tolerant parser, no panic) ✓
+[prefs-user] per-user settings (/home/<user>/.config/euroos/<app>.conf): saved=true, separate-per-user=true, owned-by-user=true, path-escape-refused=true, cleaned-up=true → OK (per-user store on the live root FS) ✓
+[uikit] EuroUI forms: hit-test=true, tab-order=true, checkbox=true, dropdown=true, slider=true, text-field=true, scroll=true, disabled-inert=true, wrap=true → OK (interactive toolkit: focus, input, events) ✓
+[set] keyboard layout set to de-qwertz: Ok(Atomic)
+[set] keyboard layout set to fr-azerty: Ok(Atomic)
+[set-keymap] Settings › Language & keyboard: dropdown-opens=true, click-picks-German=true (Z-key: Some('z') → Some('y')), /etc/keymap=de-qwertz=true, arrow-key-steps-to-French=true (Q-key → Some('a')), /etc/keymap=fr-azerty=true, panel-shows-it=true → OK (layout switches live and is saved) ✓
+[set] time zone set to Europe/Brussels: Ok(Atomic)
+[set-time] Settings › Date & time: zone-applied=true, clock-shifted=true, saved-in-/etc/euroos/settings.conf=true, 12h-clock=true (8:32 AM), per-user-saved=true, 24h-clock=true (08:32), reloaded-from-file=true → OK (time zone + clock format live and saved) ✓
+[set] computer name set to euro-test-7: Ok(Atomic)
+[set-host] Settings › System: field-takes-typing=true, /etc/hostname-written=true, panel-shows-it=true, protection-flag-kept=true (flags 0x1), invalid-name-refused=true → OK (computer name changeable from the desktop) ✓
+[set-guard] EuroGuard rules across a restart: change-noticed=true, saved=true, forgotten-after-reset=true, loaded(2 domain change(s), 2 app rule(s)): blocked-domain-back=true, unblocked-system-domain-stays-unblocked=true, app-block-back=true, allow-list-back=true → OK (user rules persist via prefs) ✓
+[disks] sizes formatted=true, 1 disk(s) [sata0 256 MiB SATA (AHCI)], each with name, size and bus=true, system disk marked consistently=true → OK ✓
+[3f5] MIME + default-app (euromime): magic-beats-extension(png-as-.txt→euroshot)=true, real-.docx→eurowriter=true, text→eurotext=true, user-override=true → OK (open-with routing on the live FS) ✓
+[ae-mustchange] must-change enforcement: correct-pw-but-blocked=true, self-service-change-clears-flag=true, login-with-new-pw-OK=true, old-pw-fails=true → OK (forced password change enforced end-to-end) ✓
+[aa-mcp] EuroAgent MCP daemon: socket-bind=true, served-via-AF_UNIX=true, client-got-result=true, file-on-EuroFS-via-socket=true → OK (MCP gateway as sovereign agent service over AF_UNIX) ✓
+[aa-wasm] WASM agent host: WASM code→host import→MCP gateway→EuroFS, with-cap-written=true, file-on-disk=true, without-cap-denied=true → OK (agent code runs in WASM sandbox, capability-gated at kernel level) ✓
+[3e1] EnrollFde: no TPM — skipped (fail-closed: no plaintext fallback)
+[q1x] EuroInstall execution: EuroFS-format=true, 5 steps provisioned, after remount: hostname=true, user=true, locale=true, EuroCA=true → OK (installation actually executed + survives reboot) ✓
+[ps2] lab default keyboard layout: be-azerty (self-test builds; the harnesses type AZERTY)
+[boot-time] phase subsystems: 27114.785 ms (at 107584 ms)
+[euroupdate] slot A confirmed GOOD (boot succeeded)
+[3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+[g5] scrub #1: 132 inodes, 379 data blocks, data verified 125, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 40 ms
+[boot-time] phase boot-good-scrub: 44.033 ms (at 107628 ms)
+[h2] display-server @ /run/eurodisplay.sock: 1 client(s), 1 app window(s) via AF_UNIX → compositor (5 windows total) ✓
+[h5] real Wayland protocol: handshake processed, 108 bytes of events back (registry globals + xdg-configure), 1 window(s)
+[h5] Wayland window (surface 5) → compositor (6 windows total) ✓
+[bb5] EuroSuite renderer: Writer/Calc/Impress rendering tested (demo documents, not on dock) ✓
+[b6] EuroWeb: usable browser (tabs + address bar) ready (open via dock; type a URL) ✓
+[rk] EuroReken REALLY interactive: 12+34*2 = 80 (engine, expected 80, with precedence) ✓
+[set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓
+[set] EuroBeheer manages for REAL: domain before=false → after add_blocked_domain=true ✓
+[bb6] EuroAgent dispatch panel ready (intent → cap-gated agent loop + live audit; open via dock) ✓
+[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓
+[ag] EuroApps: EuroFiles (live FS @ /), EuroNotes (euronotes), EuroClock (RTC 07:32) — 3 windows + dock tiles 0/1/2 ✓
+[boot-time] phase desktop-build: 131.226 ms (at 107760 ms)
+[ag-lock] GUI lockscreen: correct-password-signs-in=true, wrong-rejected=true, screen-drawn=true, background 0 of 15360 sampled pixels off the per-pixel gradient, frame 800 ms → OK (desktop session behind EuroID-Argon2id instead of auto-euro) ✓
+[lock] unattended boot — no input within grace → auto-login as euro (demo/CI)
+[prefs] session settings applied: /home/euro/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+[boot-time] phase lockscreen: 1650.184 ms (at 109410 ms)
+[euro] EuroDesktop compositor active — 22 windows + mouse
+[bug032] scheduler write watch off (debug.schedwatch=on arms it)
+[bug032] DF set across context switches: 3 switch(es) interrupted code with DF=1, handler saw DF=1 in 0, DF back after iretq=true, SYSCALL clears DF (FMASK 0x4700)=true → OK ✓
+[ap-tss] no application processor online: nothing to check ⬜
+[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)
+[boot-time] phase first-frame: 2784.749 ms (at 112195 ms)
+[desktop] interactive loop started — input + shell live
+[serial] quiet console from here: per-event diagnostic lines go to the kernel log only (dmesg; `chatter on` or serial.chatter=on for all)
+[boot-time] desktop after 112195 ms since kernel entry (HPET, selftest build): firmware-exit=181 cpu-mm=6 storage-rootfs=99 storage-checks=120 identity-config=307 net=1 userland-demos=169 sched-init=39 acpi-pci-tpm=381 smp-timer=220 devices=20 drivers-late=47934 glibc-suite=30942 vfs-mounts=42 subsystems=27114 boot-good-scrub=44 desktop-build=131 lockscreen=1650 first-frame=2784 (ms per phase)
+[lk] boot-total sched.SCHED (BSP scheduler): acq=540980 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=882us hold-avg=1us
+[lk] boot-total ring3.BG (background processes): acq=200963 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29445us hold-avg=7us
+[lk] boot-total heap (linked-list allocator): acq=100465 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=88652 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=88635 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=141us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=31968 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=31954 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=77us hold-avg=1us
+[lk] boot-total net.CFG: acq=27403 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=83us hold-avg=0us
+[lk] boot-total net.NET_LEGACY (rx ring): acq=13891 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=383us hold-avg=0us
+[lk] boot-total net.socket (per-socket): acq=13034 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1846us hold-avg=15us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=245us hold-avg=89us
+[lk] boot-total class Sched: acq=540980 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=882us hold-avg=1us
+[lk] boot-total class Process: acq=219727 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29445us hold-avg=9us
+[lk] boot-total class IpcTable: acq=88652 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=88635 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=141us hold-avg=0us
+[lk] boot-total class Net: acq=57369 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=383us hold-avg=0us
+[lk] boot-total class UnixTable: acq=32012 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=431us hold-avg=0us
+[lk] boot-total class UnixConn: acq=31954 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=77us hold-avg=1us
+[lk] boot-total class NetSocket: acq=13034 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1846us hold-avg=15us
+[lk] boot-total class FsMountTable: acq=4576 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=612931 refills=2927 flushes=2715 parked=87 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held vfs.mount (per-mount): acq=4482 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=38156us hold-avg=562us
+[lk] boot-total longest-held ring3.BG (background processes): acq=200963 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29445us hold-avg=7us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=9403 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=28347us hold-avg=40us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=5765 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=13156us hold-avg=36us
+[lk] boot-total longest-held net.socket (per-socket): acq=13034 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1846us hold-avg=15us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=540980 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=882us hold-avg=1us
+[lk] boot-total longest-held unix.listeners: acq=44 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=431us hold-avg=50us
+[lk] boot-total longest-held net.NET_LEGACY (rx ring): acq=13891 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=383us hold-avg=0us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=1741 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=283us hold-avg=0us
+[lk] boot-total longest-held net.PORTQ (TCP port queues): acq=836 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=282us hold-avg=3us
+[bg-enosys] boot total: 0 background-path syscall(s) answered -ENOSYS (first use of each number logged above); background socket calls served 16 (refused for a missing CAP_NET: 1)
+[notify] Welcome to EuroOS: Click here to see notifications
+[ramfiles] freed 2 files without a name (16 KiB of bytes, 0 shared frames); since boot 2 files, 0 MiB of bytes, 0 MiB of frames
+[scon-ready]
+[intg] system integrity periodic: 33/33 files match the signed kernel image ✓
+[ioapic] keyboard IRQs received via IO-APIC: 1
+[euro] bg-musl (pid 101) -> task 20, own address space PML4 0x188000, arena 0x200000
+[euroupdate] no slot partitions on the boot disk: automatic updates are off (install EuroOS to enable them)
+[desk] #1 the desktop loop was away 1714 ms: its pass took 1705 ms (network and DevTools 1, devices and windows 0, menus 0, keys and drawing 1702, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: repaint: sidebar 722 ms; ticks of the loop at rip 0xffdcc15 x1, 0xffddaf1 x2, 0xffdca46 x2, 0xffddb39 x3, 0xfd48627 x1, 0xfd4874c x1; ticks of other tasks: t11 x7, t7 x7, t8 x6, t9 x6, t10 x6, t4 x2; the loop meanwhile: Ready x36, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0xfe0d302; loop stack: 0xfcda73b 0xfcffb03 0xffef13f 0xfe3be9c 0xfd10960 0xfee28da 0xfee28da 0x100870e1 0xfed454f 0x1007e25e
+[desk] #2 the desktop loop was away 1639 ms: its pass took 1629 ms (network and DevTools 1, devices and windows 0, menus 0, keys and drawing 1628, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: repaint: sidebar 717 ms; ticks of the loop at rip 0xffdcffe x7, 0xfcda978 x1, 0xffddb14 x1, 0xffdcc45 x2, 0xfcda77d x1, 0xffdcb78 x1; ticks of other tasks: t11 x7, t7 x6, t8 x6, t9 x6, t10 x6, t4 x1; the loop meanwhile: Ready x32, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0xfe0d302; loop stack: 0xfe3f401 0xfd4722e 0x15ea7ca0 0x15ea7be0 0x15ea7c08 0x15ea7c29 0x1002f648 0xfe3be9c 0xfe3bb0d 0x17a08d68
+[desk] #3 the desktop loop was away 1580 ms: its pass took 1570 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 1569, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: repaint: sidebar 713 ms; ticks of the loop at rip 0xffdcffe x5, 0xfcdb293 x1, 0xffdca46 x3, 0xfcda799 x1, 0xffdc0e0 x2, 0xffdcae5 x3; ticks of other tasks: t10 x6, t11 x6, t7 x6, t8 x6, t9 x5, t4 x1; the loop meanwhile: Ready x30, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0xfe0d302; loop stack: 0xfd48944 0x15ea7ca0 0x15ea7be0 0x15ea7c08 0x15ea7c29 0x1002f648 0xfe3be9c 0xfe3bb0d 0x17a08d68 0xfcb89d5
+[desk] #4 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 209, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #5 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓
+[desk] #6 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #7 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 203 ms
+[desk] #8 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 203 ms
+[desk] #9 the desktop loop was away 219 ms: its pass took 209 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 209, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #10 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #11 the desktop loop was away 219 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #12 the desktop loop was away 219 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 209, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 200 ms
+[desk] #13 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 209, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 202 ms
+[desk] #14 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 209, hosted window and console 0), then 10 ms without the CPU (8 other tasks were ready); longest step: drawing 202 ms
+[euro] bg-musl (pid 102) -> task 20, own address space PML4 0x188000, arena 0x200000
+[desk] #15 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 202 ms
+[desk] #16 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 201 ms
+[desk] #17 the desktop loop was away 219 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 203 ms
+[desk] #18 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 204 ms
+[desk] #19 the desktop loop was away 219 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 203 ms
+[desk] #20 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 202 ms
+[desk] #21 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 202 ms
+[desk] #22 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 203 ms
+[desk] #23 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (9 other tasks were ready); longest step: drawing 189 ms
+[desk] #24 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 189 ms
+[desk] #25 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 201 ms
+[desk] #26 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 204 ms
+[desk] #27 the desktop loop was away 219 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 204 ms
+[desk] #28 the desktop loop was away 220 ms: its pass took 210 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 210, hosted window and console 0), then 9 ms without the CPU (6 other tasks were ready); longest step: drawing 200 ms
+[desk] #29 the desktop loop was away 210 ms: its pass took 200 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 200, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 190 ms
+[g5] scrub #2: 143 inodes, 379 data blocks, data verified 136, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 20 ms
+[desk] #30 the desktop loop was away 240 ms: its pass took 229 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 229, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 199 ms
+[desk] #31 the desktop loop was away 199 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 188 ms
+[desk] #32 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 179 ms
+[desk] #33 the desktop loop was away 189 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 179 ms
+[desk] #34 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 178 ms
+[desk] #35 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #36 the desktop loop was away 199 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 188 ms
+[desk] #37 the desktop loop was away 209 ms: its pass took 200 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 199, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 189 ms
+[desk] #38 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #39 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #40 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 188 ms
+[desk] #41 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 177 ms
+[desk] #42 the desktop loop was away 200 ms: its pass took 189 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #43 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: drawing 187 ms
+[desk] #44 the desktop loop was away 199 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 186 ms
+[desk] #45 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 179 ms
+[desk] #46 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #47 the desktop loop was away 210 ms: its pass took 199 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 199, hosted window and console 0), then 10 ms without the CPU (7 other tasks were ready); longest step: drawing 191 ms
+[desk] #48 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 179, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 179 ms
+[desk] #49 the desktop loop was away 209 ms: its pass took 200 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 199, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 190 ms
+[desk] #50 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 176 ms
+[desk] #51 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 184 ms
+[desk] #52 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 179 ms
+[desk] #53 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 178 ms
+[desk] #54 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 178 ms
+[desk] #55 the desktop loop was away 199 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 186 ms
+[desk] #56 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 190, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #57 the desktop loop was away 190 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 180, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 178 ms
+[desk] #58 the desktop loop was away 200 ms: its pass took 190 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 187 ms
+[desk] #59 the desktop loop was away 199 ms: its pass took 189 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 189, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 188 ms
+[desk] #60 the desktop loop was away 189 ms: its pass took 180 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 179, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: drawing 177 ms
+[g5] scrub #3: 143 inodes, 379 data blocks, data verified 136, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 10 ms

@@ -1,0 +1,32 @@
+# storage-smp1-iommu-1g of the first matrix (01bdda3): the [memt] forkmany run killed by its deadline (BUG-180); two reruns of the same image
+[glibc] TIMEOUT waiting for the process to exit | main t14 last=7(a1=0x12040a68)->0xfffffffffffffffc
+[glibc] timed-out program killed: main t14 + 0 thread(s) (1 were still alive)
+[glibc] TIMEOUT waiting for the process to exit | main t6 last=7(a1=0x1c06f5c8)->0xfffffffffffffffc
+[glibc] timed-out program killed: main t6 + 0 thread(s) (1 were still alive)
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 104623 free (was 104623), process pool 40960 (was 40960) → OK ✓
+[glibc] TIMEOUT waiting for the process to exit | main t14 last=61(a1=0x4f7)->0x4f7
+[glibc] timed-out program killed: main t14 + 0 thread(s) (1 were still alive)
+[memt] forkmany: (no result line) (exit 0); frames after the run: 104623 free (was 104623), process pool 16384 (was 40960) → FAILED
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 104623 free (was 104623), process pool 16384 (was 16384) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 104623 free (was 104623), process pool 16384 (was 16384) → OK ✓
+[memt]   oom: FAIL a child is forked (pid -1) and takes 39320 kB
+[memt] oom: GMEMT oom: FAILED 0/1 (exit 1); frames after the run: 104623 free (was 104623), process pool 16384 (was 16384) → FAILED
+[memt] memory self-test, 5 modes → FAILED
+-- rerun i1r1
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 104623 free (was 104623), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+-- rerun i1r2
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 104623 free (was 104623), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 5 modes → OK ✓
+
+# BUG-180 test: [memt] forkkill, KVM, t1-before = 85c84fd (test only), t1-after = 85c84fd + fix (= af6f415)
+kvm/tb-4g.log:[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410875 free (was 410875), process pool 402428 (was 427008) → FAILED
+kvm/tb-4g.log:[memt] memory self-test, 6 modes → FAILED
+kvm/tb-1g.log:[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107512 free (was 107512), process pool 16381 (was 40960) → FAILED
+kvm/tb-1g.log:[memt] memory self-test, 6 modes → FAILED
+kvm/ta-4g.log:[fork] task 25 ended inside a fork: 0 MiB of demand pages and 96 MiB of arena and tables given back (BUG-180)
+kvm/ta-4g.log:[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410873 free (was 410873), process pool 427008 (was 427008) → OK ✓
+kvm/ta-4g.log:[memt] memory self-test, 6 modes → OK ✓
+kvm/ta-1g.log:[fork] task 28 ended inside a fork: 0 MiB of demand pages and 96 MiB of arena and tables given back (BUG-180)
+kvm/ta-1g.log:[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107511 free (was 107511), process pool 40960 (was 40960) → OK ✓
+kvm/ta-1g.log:[memt] memory self-test, 6 modes → OK ✓

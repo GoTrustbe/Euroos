@@ -1,0 +1,20 @@
+# chrome-smoke --only localvideo (fv1), intel-hda + hda-duplex, -audiodev wav
+[gui-smoke] FAIL local video h264+aac: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/h264.html; state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=fals
+[gui-smoke] FAIL local video h264+aac: the picture advances for 60 s: 0 of 28 consecutive screendumps of the player differ | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL local video h264+aac: the video's time increases: currentTime 0.0 -> 0.0 s in 60.5 s of wall clock | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL local video h264+aac: sound reaches the audio device for 60 s: 0 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-p
+[gui-smoke] FAIL local video h264+aac: no media error: last state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': '4', 'can': 'no'} | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.56 -> 60.97 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1150, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 60.97, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9v.html; state {'st': 'paused', 't': 0.01, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.04 -> 62.51 s in 61.5 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 62.51, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/opus.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.9 -> 60.9 s in 60.5 s of wall clock
+[gui-smoke] ok   local video opus audio only: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video opus audio only: no media error: last state {'st': 'playing', 't': 60.9, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[chrome-smoke] FAIL (5 step(s)) - 16/21 steps ok, report and screenshots in /srv/euroos/integ3-runs/runs/fv1
