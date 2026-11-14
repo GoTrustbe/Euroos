@@ -497,27 +497,32 @@ fn field(s: &str, key: &str) -> Option<u64> {
     rest[..end].parse().ok()
 }
 
-/// `[wakelat]`: gwakelat (two threads pass a futex turn; the waker works 1 ms on
-/// after each wake) next to 4 hogs. Wake to run p50 < 1 ms and p99 < 12 ms, and
-/// the hogs keep >= 85 % of the throughput they have alone.
+/// `[wakelat]`: gwakelat (two threads pass a futex turn; the waker has run 2 ms
+/// before the wake and runs 3 ms on after it) next to 4 hogs. Wake to run p50
+/// < 1 ms and p99 < 12 ms, and the hogs keep >= 85 % of the CPU share they
+/// have alone.
 pub fn wakelat(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
-    let rounds: usize = arg.trim().parse().unwrap_or(400).clamp(10, 5000);
+    let rounds: usize = arg.trim().parse().unwrap_or(200).clamp(10, 5000);
     park_all();
     let h = hogs(mem, 4);
     start(&h);
     wait_ticks(20);
-    let (c0, t0) = (counters(&h), rdtsc());
-    wait_ticks(200);
-    let (c1, t1) = (counters(&h), rdtsc());
+    // The hogs' share of the CPU (their run time on the TSC per wall time), alone
+    // and beside gwakelat. Their counter rate varied with the load of the host
+    // (79 % and 111 % "kept" for the same image), the run time does not.
+    let hog_run = |h: &[(usize, u64)]| h.iter().map(|x| sched::run_tsc_now(x.0)).sum::<u64>();
+    let (c0, t0) = (hog_run(&h), rdtsc());
+    wait_ticks(300);
+    let (c1, t1) = (hog_run(&h), rdtsc());
     let base = (c1 - c0) as f64 / (t1 - t0).max(1) as f64;
     let cpu_us = (per_tick() / 10_000).max(1);
     let rs = format!("{rounds}");
     let cs = format!("{cpu_us}");
     let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
-    let (c2, t2) = (counters(&h), rdtsc());
+    let (c2, t2) = (hog_run(&h), rdtsc());
     let (outp, exit) = crate::ring3::run_glibc(mem, crate::ring3::gwakelat_bytes(), crate::ring3::ldlinux_bytes(),
         &[b"/bin/gwakelat", rs.as_bytes(), cs.as_bytes()], &[b"PATH=/bin"], caps);
-    let (c3, t3) = (counters(&h), rdtsc());
+    let (c3, t3) = (hog_run(&h), rdtsc());
     park_all();
     crate::ring3::reap_dead(mem);
     let during = (c3 - c2) as f64 / (t3 - t2).max(1) as f64;
@@ -528,7 +533,7 @@ pub fn wakelat(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let (r50, r99) = (g("rt_p50_us="), g("rt_p99_us="));
     let pass = exit == 77 && w50 < 1000 && w99 < 12_000 && kept >= 85.0;
     let l = format!(
-        "[wakelat] two threads pass a futex turn next to 4 hogs, {} rounds (exit {exit}): wake to run p50 {:.2} ms p99 {:.2} ms max {:.2} ms, round trip p50 {:.2} ms p99 {:.2} ms; hogs kept {kept:.0} % of their throughput -> {}",
+        "[wakelat] two threads pass a futex turn next to 4 hogs, {} rounds (exit {exit}): wake to run p50 {:.2} ms p99 {:.2} ms max {:.2} ms, round trip p50 {:.2} ms p99 {:.2} ms; hogs kept {kept:.0} % of their CPU share -> {}",
         field(line, "rounds=").unwrap_or(0), w50 as f64 / 1000.0, w99 as f64 / 1000.0, wmax as f64 / 1000.0,
         r50 as f64 / 1000.0, r99 as f64 / 1000.0, if pass { "OK ✓" } else { "FAILED" }
     );

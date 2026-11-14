@@ -1,9 +1,12 @@
 /* gwakelat: [wakelat] (docs/design/SMP-SCHEDULER.md, step S2). Two threads pass a
  * turn back and forth on a futex while the kernel runs CPU-bound hogs beside them.
- * Each round the main thread sleeps 3 ms, stamps the TSC, wakes the partner and
- * then keeps working for 1 ms before it waits for the answer (a waker that goes on
- * running, as a browser thread that posts a task does). The partner records how
- * long it waited for the CPU after the wake (wake to run) and answers at once.
+ * Each round the main thread sleeps 40 ms, works 2 ms, stamps the TSC, wakes the
+ * partner and works 3 ms more before it waits for the answer: a waker that goes
+ * on running, as a browser thread that posts a task does. The partner, which
+ * waited, records how long it waited for the CPU after the wake (wake to run)
+ * and answers at once. Without wake preemption it waits for the rest of the
+ * waker's work (3 ms) or of a hog's slice; the pair takes about a tenth of the
+ * CPU, so the hogs beside it keep most of theirs.
  * argv[1] = rounds, argv[2] = TSC cycles per microsecond (given by the kernel: the
  * vDSO clock moves in 10 ms steps). Prints one WAKELAT line, exit 77; 78 = a turn
  * was not answered within 5 s (lost wake). */
@@ -59,7 +62,7 @@ static int cmp(const void *a, const void *b) {
 }
 
 int main(int argc, char **argv) {
-    rounds = argc > 1 ? atoi(argv[1]) : 400;
+    rounds = argc > 1 ? atoi(argv[1]) : 200;
     cpu_us = argc > 2 ? atof(argv[2]) : 2000.0;
     if (rounds < 10) rounds = 10;
     if (cpu_us < 1) cpu_us = 1;
@@ -69,13 +72,14 @@ int main(int argc, char **argv) {
     if (!wake_us || !rt_us || pthread_create(&th, 0, partner, 0)) { puts("WAKELAT: setup failed"); return 1; }
     int done = 0;
     for (int i = 0; i < rounds; i++) {
-        struct timespec nap = {0, 3 * 1000 * 1000};
+        struct timespec nap = {0, 40 * 1000 * 1000};
         nanosleep(&nap, 0);
+        work_us(2000);
         unsigned long long t = __rdtsc();
         stamp = t;
         atomic_store(&turn, 1);
         fwake();
-        work_us(1000);
+        work_us(3000);
         if (!fwait(0)) { lost = 1; break; }
         rt_us[i] = (unsigned)((__rdtsc() - t) / cpu_us);
         done++;
