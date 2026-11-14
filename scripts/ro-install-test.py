@@ -1,62 +1,72 @@
 #!/usr/bin/env python3
-"""BUG-200 / BUG-201: boot a SELF-TEST image with a blank READ-ONLY virtio disk as disk 0.
+"""BUG-200 / BUG-201 (and the late self-test markers) on a SELF-TEST image, KVM, no network.
 
-The self-test image installs itself onto a blank virtio disk 0. The disk refuses every
-write, so nothing may read back: the check "after remount" must say hostname/user/
-euroid-store = false and the install FAILED (BUG-200: it read the write-back cache and
-said true). The wizard target list must not offer the disk (BUG-201, [wizard-targets]).
+The self-test image installs itself onto a blank virtio disk 0.
 
-MODE=inject (env): BUG-200 on its own. The disk is NOT read-only but QEMU's blkdebug fails every write to the first
-sector of the EuroFS root partition (sector 919552 of a 2 GiB disk: 2048 + 256 MiB ESP + two 96 MiB slots). The boot files
-and the root blocks reach the cache without error, the flush fails, and the check "after remount" must not be satisfied
-by cache lines: nothing of the root partition is on the medium, so hostname/user/euroid-store must read false.
+MODE=plain (default): disk 0 is a normal blank disk, disk 1 a blank READ-ONLY disk.
+  - the install on disk 0 must verify OK;
+  - the wizard target list ([wizard-targets], BUG-201) must not offer disk 1 (read-only);
+  - the late markers [randid] (BUG-086/087) and [nmi-bound] (BUG-202) must be OK.
+MODE=inject: BUG-200 on its own. Disk 0 is NOT read-only, but QEMU's blkdebug fails every write to the second
+  4 KiB block of the EuroFS root (sector 919560 = 2048 + 256 MiB ESP + two 96 MiB slots + 8; the boot-file writer
+  only zeroes the first block). The root blocks reach the cache without error, the flush fails, and "after remount"
+  must not be satisfied by cache lines: that block is not on the medium, so the mount cannot succeed and
+  hostname/user/euroid-store must read false.
 
-usage: [MODE=inject] ro-install-test.py IMAGE OUTDIR [CPUS]   (KVM, restrict=on, no network)
+usage: [MODE=plain|inject] ro-install-test.py IMAGE OUTDIR [CPUS]
 """
-import os, re, subprocess, sys, time
+import os, subprocess, sys, time
 IMG, OUT = sys.argv[1], os.path.abspath(sys.argv[2])
 CPUS = sys.argv[3] if len(sys.argv) > 3 else "24-27"
+MODE = os.environ.get("MODE", "plain")
 os.makedirs(OUT, exist_ok=True)
-tgt = os.path.join(OUT, "ro-target.img"); log = os.path.join(OUT, "serial-ro.log")
-subprocess.run(["qemu-img", "create", "-f", "raw", tgt, "2G"], check=True, stdout=subprocess.DEVNULL)
-MODE = os.environ.get("MODE", "ro")
+tgt = os.path.join(OUT, "target0.img"); ro = os.path.join(OUT, "target1-ro.img"); log = os.path.join(OUT, f"serial-{MODE}.log")
+for f in (tgt, ro):
+    subprocess.run(["qemu-img", "create", "-f", "raw", f, "2G"], check=True, stdout=subprocess.DEVNULL)
+drives = []
 if MODE == "inject":
     conf = os.path.join(OUT, "blkdebug.conf")
-    open(conf, "w").write(chr(10).join(["[inject-error]", 'event = "write_aio"', 'errno = "5"', 'sector = "919552"', 'immediately = "on"', ""]))
-    drive = f"id=tgt,format=raw,file=blkdebug:{conf}:{tgt},if=none"
+    open(conf, "w").write(chr(10).join(["[inject-error]", 'event = "write_aio"', 'errno = "5"', 'sector = "919560"', 'immediately = "on"', ""]))
+    drives += ["-drive", f"id=t0,format=raw,file=blkdebug:{conf}:{tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on"]
 else:
-    drive = f"id=tgt,format=raw,file={tgt},if=none,readonly=on"
+    drives += ["-drive", f"id=t0,format=raw,file={tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on",
+               "-drive", f"id=t1,format=raw,file={ro},if=none,readonly=on", "-device", "virtio-blk-pci,drive=t1,disable-modern=on"]
 p = subprocess.Popen(["taskset", "-c", CPUS, "qemu-system-x86_64", "-machine", "q35", "-enable-kvm", "-cpu", "host", "-m", "2048M", "-smp", "2",
     "-bios", "/usr/share/ovmf/OVMF.fd", "-display", "none", "-serial", f"file:{log}", "-no-reboot", "-nic", "none",
-    "-drive", f"format=raw,file={IMG},snapshot=on", "-drive", drive,
-    "-device", "virtio-blk-pci,drive=tgt,disable-modern=on"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    "-drive", f"format=raw,file={IMG},snapshot=on"] + drives, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 def txt():
     try: return open(log, errors="replace").read()
     except FileNotFoundError: return ""
-end = time.time() + 900
-while time.time() < end and "[q1x3] EuroInstall" not in txt() and "[q1x3] target" not in txt() and p.poll() is None:
-    time.sleep(2)
-end = time.time() + 900          # the late self-test markers ([wizard-targets], [nmi-bound], [randid])
-while time.time() < end and "[nmi-bound]" not in txt() and p.poll() is None:
-    time.sleep(2)
+def wait(needle, secs):
+    end = time.time() + secs
+    while time.time() < end and needle not in txt() and p.poll() is None:
+        time.sleep(2)
+wait("[q1x3] EuroInstall", 900)
+if MODE == "plain":
+    wait("[nmi-bound]", 900)       # the late self-test markers
 time.sleep(3)
 t = txt()
 if p.pid and p.pid > 1: p.kill()
 res = []
-def check(n, ok): res.append(ok); print(f"[ro-install] {PASS if ok else FAIL}: {n}", flush=True)
-line = next((l for l in t.splitlines() if l.startswith("[q1x3] EuroInstall")), "")
-print("[ro-install] " + line[:300])
-check("install reported on the read-only disk", bool(line))
-check("after remount nothing reads back (hostname/user/euroid-store = false)",
-      bool(line) and "=true" not in line.split("after remount")[-1].split("→")[0])
-check("install verdict FAILED", bool(line) and line.rstrip().endswith("FAILED"))
-w = [l for l in t.splitlines() if l.startswith("[wizard-targets]")]
-print("\n".join("[ro-install] " + l for l in w))
-if MODE == "ro":
-    check("wizard does not offer the read-only disk", bool(w) and all("FAILED" not in l for l in w))
-for tag in ("[randid] dhcp xid", "[randid] smb client challenge", "[nmi-bound]"):
+def check(n, ok): res.append(ok); print(f"[ro-install] {'PASS' if ok else 'FAIL'}: {n}", flush=True)
+def show(tag):
     l = [x for x in t.splitlines() if x.startswith(tag)]
-    print(chr(10).join("[ro-install] " + x for x in l))
-    check(f"marker {tag}", bool(l) and all("FAILED" not in x for x in l))
-os.unlink(tgt)
+    for x in l: print("[ro-install]   " + x[:330])
+    return l
+line = show("[q1x3] EuroInstall")
+fa = show("[q1x3] target")
+check("install reported", bool(line))
+if MODE == "inject":
+    after = line[0].split("after remount")[-1].split("→")[0] if line else "=true"
+    check("after remount nothing reads back from the cache (hostname/user/euroid-store = false)", bool(line) and "=true" not in after)
+    check("install verdict FAILED", bool(line) and line[0].rstrip().endswith("FAILED"))
+else:
+    check("install on the writable disk 0 verified OK", bool(line) and line[0].rstrip().split("→")[-1].strip().startswith("OK"))
+    w = show("[wizard-targets]")
+    check("wizard does not offer the read-only disk 1", bool(w) and all("FAILED" not in x for x in w))
+    for tag in ("[randid] dhcp xid", "[randid] smb client challenge", "[nmi-bound]"):
+        l = show(tag)
+        check(f"marker {tag}", bool(l) and all("FAILED" not in x for x in l))
+for f in (tgt, ro):
+    os.unlink(f)
 sys.exit(0 if all(res) else 1)
