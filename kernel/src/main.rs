@@ -1595,7 +1595,7 @@ fn main() -> Status {
         // ── DHCP: fetch a REAL lease (DISCOVER → OFFER → REQUEST → ACK). ──
         let any = Ipv4Addr([0, 0, 0, 0]);
         let bcast = Ipv4Addr([255, 255, 255, 255]);
-        let xid = 0x4505_5201u32;
+        let xid = net::dhcp_xid();
         let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
             let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
             let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
@@ -1619,7 +1619,7 @@ fn main() -> Status {
                                     let dport = u16::from_be_bytes([ipl[2], ipl[3]]);
                                     if dport == 68 {
                                         if let Some(info) = dhcp::parse(&ipl[8..]) {
-                                            if info.msg_type == want {
+                                            if info.msg_type == want && info.answers(xid, my_mac.0) {
                                                 return Some(info);
                                             }
                                         }

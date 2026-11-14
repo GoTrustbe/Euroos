@@ -767,7 +767,7 @@ pub fn late_bring_up() {
 
     let any = Ipv4Addr([0, 0, 0, 0]);
     let bcast = Ipv4Addr([255, 255, 255, 255]);
-    let xid = 0x4C41_5445u32; // "LATE"
+    let xid = dhcp_xid();
     let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
         let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
         let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
@@ -789,7 +789,7 @@ pub fn late_bring_up() {
                                 let dport = u16::from_be_bytes([ipl[2], ipl[3]]);
                                 if dport == 68 {
                                     if let Some(info) = dhcp::parse(&ipl[8..]) {
-                                        if info.msg_type == want {
+                                        if info.msg_type == want && info.answers(xid, my_mac.0) {
                                             return Some(info);
                                         }
                                     }
@@ -1960,9 +1960,12 @@ pub fn rand_u64() -> u64 {
     u64::from_le_bytes(crate::entropy::draw_wait::<8>())
 }
 
-/// Transaction id of one DHCP exchange (BUG-086).
+/// Transaction id of one DHCP exchange (BUG-086): 32 bits from the CSPRNG per
+/// exchange. A reply is accepted only with this id and our own hardware address
+/// (`DhcpInfo::answers`), so a host that answers faster than the DHCP server has
+/// to guess the id instead of reading it from a constant.
 pub fn dhcp_xid() -> u32 {
-    0x4E55_5021
+    rand_u64() as u32
 }
 
 /// **[randid]** (BUG-086, BUG-087): the DHCP transaction id and the SMB client

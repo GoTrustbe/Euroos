@@ -24,7 +24,10 @@ def txt():
 end = time.time() + 900
 while time.time() < end and "[q1x3] EuroInstall" not in txt() and "[q1x3] target" not in txt() and p.poll() is None:
     time.sleep(2)
-time.sleep(5)
+end = time.time() + 900          # the late self-test markers ([wizard-targets], [nmi-bound], [randid])
+while time.time() < end and "[nmi-bound]" not in txt() and p.poll() is None:
+    time.sleep(2)
+time.sleep(3)
 t = txt()
 if p.pid and p.pid > 1: p.kill()
 res = []
@@ -38,5 +41,10 @@ check("install verdict FAILED", bool(line) and line.rstrip().endswith("FAILED"))
 w = [l for l in t.splitlines() if l.startswith("[wizard-targets]")]
 print("\n".join("[ro-install] " + l for l in w))
 check("wizard does not offer the read-only disk", bool(w) and all("FAILED" not in l for l in w))
+for tag in ("[randid] dhcp xid", "[randid] smb client challenge", "[nmi-bound]"):
+    l = [x for x in t.splitlines() if x.startswith(tag)]
+    print("
+".join("[ro-install] " + x for x in l))
+    check(f"marker {tag}", bool(l) and all("FAILED" not in x for x in l))
 os.unlink(tgt)
 sys.exit(0 if all(res) else 1)

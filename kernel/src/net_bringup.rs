@@ -100,7 +100,7 @@ fn wait_frame<T>(ticks: u64, mut want: impl FnMut(&[u8]) -> Option<T>) -> Option
     }
 }
 
-fn dhcp_reply(rx: &[u8], xid_type: u8) -> Option<dhcp::DhcpInfo> {
+fn dhcp_reply(rx: &[u8], xid_type: u8, xid: u32, mac: [u8; 6]) -> Option<dhcp::DhcpInfo> {
     let (h, p) = EthernetHeader::parse(rx).ok()?;
     if h.ethertype != EtherType::Ipv4 {
         return None;
@@ -109,7 +109,7 @@ fn dhcp_reply(rx: &[u8], xid_type: u8) -> Option<dhcp::DhcpInfo> {
     if iph.protocol != Protocol::Udp || ipl.len() <= 8 || u16::from_be_bytes([ipl[2], ipl[3]]) != 68 {
         return None;
     }
-    dhcp::parse(&ipl[8..]).filter(|i| i.msg_type == xid_type)
+    dhcp::parse(&ipl[8..]).filter(|i| i.msg_type == xid_type && i.answers(xid, mac))
 }
 
 fn arp_lookup(my_mac: MacAddr, my_ip: Ipv4Addr, ip: Ipv4Addr) -> Option<MacAddr> {
@@ -141,7 +141,7 @@ fn bring_up() {
     let my_mac = MacAddr(mac);
     let any = Ipv4Addr([0, 0, 0, 0]);
     let bcast = Ipv4Addr([255, 255, 255, 255]);
-    let xid = 0x4E55_5021u32;
+    let xid = crate::net::dhcp_xid();
     let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
         let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
         let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
@@ -154,11 +154,11 @@ fn bring_up() {
     let mut tries = 0u32;
     let lease = loop {
         send_dhcp(dhcp::DISCOVER, None, None);
-        if let Some(offer) = wait_frame(pause, |rx| dhcp_reply(rx, dhcp::OFFER)) {
+        if let Some(offer) = wait_frame(pause, |rx| dhcp_reply(rx, dhcp::OFFER, xid, my_mac.0)) {
             send_dhcp(dhcp::REQUEST, Some(offer.your_ip), Some(offer.server_id));
             // The ACK repeats the offer and may add options; without one the
             // offer stands (as on the inline path).
-            let ack = wait_frame(200, |rx| dhcp_reply(rx, dhcp::ACK));
+            let ack = wait_frame(200, |rx| dhcp_reply(rx, dhcp::ACK, xid, my_mac.0));
             let l = ack.unwrap_or(offer);
             break dhcp::DhcpInfo { router: l.router.or(offer.router), dns: l.dns.or(offer.dns), server_id: offer.server_id, ..l };
         }
