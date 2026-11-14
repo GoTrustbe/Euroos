@@ -1,0 +1,99 @@
+# KVM self-test boots of the final image, R630, 2 vCPU, -nic none, intel-hda + hda-duplex (kboot-hda.sh); 1, 2, 4, 8 GiB
+k-1g end=marker after 249s failed-lines=2 crash-lines=0
+k-2g end=marker after 281s failed-lines=0 crash-lines=0
+k-4g end=marker after 285s failed-lines=0 crash-lines=0
+k-8g end=marker after 289s failed-lines=0 crash-lines=0
+
+== 1 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 208 (DMA running → audio plays ✓)
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107490 free (was 107490), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 34→34 · process-pool 40960→40960 · demand-pool 0→0 · frames 107490→107490 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 34→34 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+-- FAILED lines:
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+-- crash lines: 0
+
+== 2 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 204 (DMA running → audio plays ✓)
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 271330 free (was 271330), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 50→50 · process-pool 73728→73728 · demand-pool 0→0 · frames 271330→271330 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 50→50 · thread-kstacks 0→0 · process-pool 73728→73728 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+-- FAILED lines:
+-- crash lines: 0
+
+== 4 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410849 free (was 410849), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 427008→427008 · demand-pool 0→0 · frames 410849→410849 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 427008→427008 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+-- FAILED lines:
+-- crash lines: 0
+
+== 8 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 884449 free (was 884449), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 887296→887296 · demand-pool 0→0 · frames 884449→884449 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 887296→887296 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+-- FAILED lines:
+-- crash lines: 0

@@ -1,0 +1,70 @@
+# CI q35 matrix, KVM, every NIC restrict=on (EK_RESTRICT=1 EK_ACCEL=kvm, 13 legs), self-test image of the merged tree
+[matrix] image=/srv/euroos/final-runs/q35/img.raw legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbnet,usbaudio,scan,printer,power,hwprobe work=/srv/euroos/final-runs/tmp/ek-matrix-nlx35jsz
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: printer
+  [printer] PASS ✓
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] FAIL: hwprobe output not seen over serial
+  [hwprobe] FAIL ✗
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbnet   PASS
+  usbaudio PASS
+  scan     PASS
+  printer  PASS
+  power    PASS
+  hwprobe  FAIL
+
+# the hwprobe leg alone, repeated (one line per run)
+hw-st1:   hwprobe  FAIL
+hw-st2:   hwprobe  FAIL
+hw-st3:   hwprobe  FAIL
+hw-us:   hwprobe  FAIL
+hw-chat:   hwprobe  FAIL
+hw-integ:   hwprobe  PASS
+hw-integ2:   hwprobe  FAIL
+hw-mem2:   hwprobe  FAIL
+hw-audio:   hwprobe  FAIL
+hw-base:   hwprobe  PASS
+hw-base2:   hwprobe  PASS
+hw-sttcg:   hwprobe  FAIL
+hw-plain1:   hwprobe  FAIL
+hw-plain2:   hwprobe  FAIL
+hw-rel1:   hwprobe  FAIL
+hwq-final-1:   hwprobe  PASS
+hwq-final-2:   hwprobe  FAIL
+hwq-final-3:   hwprobe  FAIL
+hwq-integ-1:   hwprobe  FAIL
+hwq-integ-2:   hwprobe  PASS
+hwq-integ-3:   hwprobe  PASS
+hwq-base-1:   hwprobe  PASS
+hwq-base-2:   hwprobe  PASS
+hwq-base-3:   hwprobe  PASS

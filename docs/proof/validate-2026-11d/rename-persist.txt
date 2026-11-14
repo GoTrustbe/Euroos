@@ -1,0 +1,48 @@
+# rename-persist.py, public image installed on a blank disk by the wizard, KVM; per run: phase 0 verdict and checks
+final rp: t] FAIL phase 0: the wizard installed the system on a blank disk | t] 11/24 checks ok
+final rp2: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp3: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp4: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp5: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp6: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp7: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rp8: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq1: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq2: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq3: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq4: t] FAIL phase 0: the wizard installed the system on a blank disk | t] 11/24 checks ok
+final rq5: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq6: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq7: t] FAIL phase 0: the wizard installed the system on a blank disk | t] 11/24 checks ok
+final rq8: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+final rq9: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rprel: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rprel2: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rprel3: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rq10: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rq11: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+2026.11.13 rq12: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+40f853a-public rq13: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+40f853a-public rq14: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+40f853a-public rq15: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri1: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri2: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri3: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri4: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri5: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+integ-public ri6: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+mem2-public rm1: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+mem2-public rm2: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+mem2-public rm3: t] ok   phase 0: the wizard installed the system on a blank disk | t] 21/24 checks ok
+
+== the failed checks of one complete run (rp2)
+[rename-persist]      terminal: renprobe: check a.txt holds the version FAILED version 2 0
+[rename-persist]      terminal: renprobe: check b.txt holds the version FAILED version 2 0
+[rename-persist] FAILED: phase 1: the file system (shell `cat`, `ls`) has the same: a.txt and b.txt version 2, no c.txt, no temporary file
+[rename-persist] FAILED: phase 2, after the restart: `renprobe check` in the Terminal: the documents hold version 2
+[rename-persist] FAILED: phase 2, after the restart: the file system (shell `cat`, `ls`) has the same: a.txt and b.txt version 2, no c.txt, no temporary file
+
+== phase 0 failure, serial log of the installer (rq4): the q1x3 line
+[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-test'=false user='tester'=false euroid-store=false → FAILED
+== same, a passing run (rq1)
+[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-test'=true user='tester'=true euroid-store=true → OK (bootable + provisioned installation from own media; boots standalone)

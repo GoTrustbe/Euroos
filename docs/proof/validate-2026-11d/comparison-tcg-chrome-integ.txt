@@ -1,0 +1,97 @@
+# markers-compare.py: base/chrome-integ/tcg-*.markers (proof of that branch) against the final image (R630, TCG, restrict=on)
+
+== user-smp4-iommu
+== base/chrome-integ/tcg-user-smp4-iommu.markers  vs  out/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== user-smp4-noiommu
+== base/chrome-integ/tcg-user-smp4-noiommu.markers  vs  out/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== kernel-smp4
+== base/chrome-integ/tcg-kernel-smp4.markers  vs  out/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== storage-smp4-iommu-1g
+== base/chrome-integ/tcg-storage-smp4-iommu-1g.markers  vs  out/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base FAILx2 | new FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 1
+   pcmch: OKx1
+
+== combined-smp4-iommu-1g
+== base/chrome-integ/tcg-combined-smp4-iommu-1g.markers  vs  out/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base FAILx2 | new FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 1
+   pcmch: OKx1
+
+== user-smp1-iommu
+== base/chrome-integ/tcg-user-smp1-iommu.markers  vs  out/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== user-smp1-noiommu
+== base/chrome-integ/tcg-user-smp1-noiommu.markers  vs  out/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== kernel-smp1
+== base/chrome-integ/tcg-kernel-smp1.markers  vs  out/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   pcmch: OKx1
+
+== storage-smp1-iommu-1g
+== base/chrome-integ/tcg-storage-smp1-iommu-1g.markers  vs  out/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base FAILx2 | new FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 1
+   pcmch: OKx1
+
+== combined-smp1-iommu-1g
+== base/chrome-integ/tcg-combined-smp1-iommu-1g.markers  vs  out/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base FAILx2 | new FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 1
+   pcmch: OKx1

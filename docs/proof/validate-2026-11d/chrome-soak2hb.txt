@@ -1,0 +1,50 @@
+# chrome-mem-soak.py --no-video --free-video-seconds 0 --hours 2 --local-video-dir (vp9.webm: VP9+Opus) --local-seconds 60, public image (ui.tour=off;update.check=off), 8 GiB, 2 vCPU, KVM, session-B-quiet-host
+[chrome-mem-soak] round 1 done after 643 s: heap 120 MiB used, 391 MiB free; big 57/454 MiB (peak 61); files 59 MiB; demand 2581 MiB free
+[chrome-smoke] running - 19/19 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 2 done after 1315 s: heap 120 MiB used, 391 MiB free; big 61/450 MiB (peak 73); files 62 MiB; demand 2565 MiB free
+[chrome-smoke] running - 35/35 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 3 done after 1986 s: heap 120 MiB used, 391 MiB free; big 65/446 MiB (peak 77); files 65 MiB; demand 2564 MiB free
+[chrome-smoke] running - 51/51 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 4 done after 2660 s: heap 120 MiB used, 391 MiB free; big 65/446 MiB (peak 81); files 68 MiB; demand 2561 MiB free
+[chrome-smoke] running - 67/67 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 5 done after 3340 s: heap 120 MiB used, 391 MiB free; big 70/441 MiB (peak 81); files 69 MiB; demand 2560 MiB free
+[chrome-smoke] running - 83/83 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 6 done after 4022 s: heap 121 MiB used, 390 MiB free; big 73/438 MiB (peak 86); files 71 MiB; demand 2559 MiB free
+[chrome-smoke] running - 99/99 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 7 done after 4694 s: heap 121 MiB used, 390 MiB free; big 73/438 MiB (peak 89); files 72 MiB; demand 2549 MiB free
+[chrome-smoke] running - 115/115 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 8 done after 5368 s: heap 121 MiB used, 390 MiB free; big 74/437 MiB (peak 89); files 74 MiB; demand 2552 MiB free
+[chrome-smoke] running - 131/131 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 9 done after 6044 s: heap 121 MiB used, 390 MiB free; big 77/434 MiB (peak 90); files 75 MiB; demand 2547 MiB free
+[chrome-smoke] running - 147/147 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 10 done after 6720 s: heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 93); files 76 MiB; demand 2545 MiB free
+[chrome-smoke] running - 163/163 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] round 11 done after 7397 s: heap 121 MiB used, 390 MiB free; big 78/433 MiB (peak 95); files 77 MiB; demand 2548 MiB free
+[chrome-smoke] running - 179/179 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-smoke] PASS - 179/179 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2hb
+[chrome-mem-soak] PASS: 11 rounds in 7397 s
+-- steps that failed:
+-- serial: FROZEN 0, aborts 0, spawn-refused 0, oom 0, isolation 0, NMI probes 0, panic/fault lines 0
+-- local clip (VP9+Opus) steps:
+55
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1145, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1154, 1158, 1158, 1158, 1158, 1158, 1129, 1158, 1158])
+-- mem-curve.py:
+after the warm-up (15 min): 282 samples over 107 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      705    687    613    882    +10.8
+anon                      268    246    204    409     +2.5
+zero                        5      5      4     12     +0.2
+noaccess                    0      0      0      0     +0.0
+fileprivate               150    150    135    180     -0.8
+tables                     11     17     10     19     +3.6
+pagecache                 235    244    235    244     +4.7
+shm                        39     28     27     63     +0.3
+heap_used                 120    121    120    122     +0.7
+big_used                   60     78     56     80    +10.4
+ramfile_bytes              18     35     18     35     +9.0
+
+lowest free: 2350 MiB of 3232; largest unattributed: 71464 KiB
+verdict: NOT flat (in use +10.8 MiB/h = +0.3% of the pool per hour; 0 kill/exhaustion lines; 70 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):

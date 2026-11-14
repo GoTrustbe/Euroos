@@ -1,0 +1,53 @@
+# Soak, R630 KVM, self-test image of the merged tree: loadtest.py --kvm --smp 4 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hostfwd ... --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 7500
+ltstat samples: 1349, t = 2 .. 7501 s (125.0 min)
+heap_used first / at 10 min / last: 157 498 416 / 156 339 584 / 156 373 888
+heap slope after 10 min (least squares): +0.23 kB/min, range 1293 kB
+tasks: first 334, at 10 min 334, last 334, min 334, max 334 (after 10 min)
+files: first 1677, at 10 min 1677, last 1677, min 1677, max 1677 (after 10 min)
+kstacks: first 0, at 10 min 0, last 0, min 0, max 0 (after 10 min)
+procpool_free: first 887296, at 10 min 887296, last 887296, min 887296, max 887296 (after 10 min)
+frames_free: first 2962698, at 10 min 2979858, last 2979858, min 2963218, max 2979858 (after 10 min)
+bg_zombie: first 0, at 10 min 0, last 0, min 0, max 6 (after 10 min)
+bg_live: first 36, at 10 min 3, last 3, min 3, max 35 (after 10 min)
+commands: 3513; columns: id, command, status, elapsed_ms, output_lines, t_s
+by status: {'ok': 3513}
+churn proc commands: 450
+serial: loadtest-serial-20261114-111628.log 4.7 MB
+  'GLIBC-DYNAMIC-OK': 24
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  [churn-proc] verdict lines: 2593, with FAILED: 0
+  [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- end of the harness output:
+serial: loadtest-serial-20261114-111628.log 4764715 bytes
+  'GLIBC-DYNAMIC-OK': 24
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  'timer-probe] FROZEN': 0
+  '[spawn-refused]': 3
+  '[oom]': 3
+  [churn-proc] verdict lines: 2593, with FAILED: 0
+  FAILED lines after the desktop (count, line):
+      1 [3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb) FAILED
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- end of the harness output:
+  [ 3450/?] ✓ ok            32ms t= 7377.0s  write /home/euro/lt-soak/f31 round-331
+  [ 3475/?] ✓ ok           202ms t= 7426.2s  fetch 10.0.2.100
+  [ 3500/?] ✓ ok           380ms t= 7487.6s  spawn worker 32
+[loadtest] completed clean · results → /srv/euroos/final-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/final-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 827487, "err": 0, "p50_ms": 5.4, "p99_ms": 161.8, "max_ms": 7246.7, "busy_windows": 429, "busy_s": 6145, "busy": {"ok": 705227, "err": 0, "p50_ms": 5.3, "p99_ms": 136.3, "max_ms": 1384.2}, "idle": {"ok": 122260, "err": 0, "p50_ms": 6.3, "p99_ms": 222.9, "max_ms": 7246.7}}
+[loadtest] host HTTP server served 405 request(s)

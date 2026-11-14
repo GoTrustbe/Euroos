@@ -1,0 +1,14 @@
+f98da76: 2744 commands over 125.2 min = 1315 per hour; by status {'ok': 2744}
+   churn proc    n= 351  median     6234 ms  mean     6118 ms  p10     3623  p90     7986  max    12589
+   spawn worker  n= 263  median     1850 ms  mean     1845 ms  p10     1723  p90     1963  max     2238
+   churn fs      n=  88  median    34317 ms  mean    34343 ms  p10    32003  p90    36548  max    40302
+   churn net     n=  87  median      490 ms  mean      659 ms  p10      427  p90      839  max     3753
+   sha256sum     n= 263  median     1896 ms  mean     1949 ms  p10     1772  p90     2048  max     5962
+   fetch         n= 263  median      506 ms  mean      525 ms  p10      485  p90      574  max      715
+final: 3513 commands over 125.0 min = 1686 per hour; by status {'ok': 3513}
+   churn proc    n= 450  median     6564 ms  mean    12529 ms  p10     4557  p90    33040  max    43942
+   spawn worker  n= 337  median      398 ms  mean      401 ms  p10      329  p90      474  max      566
+   churn fs      n= 112  median     9726 ms  mean     9922 ms  p10     8720  p90    11461  max    14565
+   churn net     n= 112  median      112 ms  mean      351 ms  p10       93  p90      835  max     2688
+   sha256sum     n= 337  median      501 ms  mean      494 ms  p10      421  p90      559  max      661
+   fetch         n= 337  median      253 ms  mean      253 ms  p10      174  p90      293  max     1083

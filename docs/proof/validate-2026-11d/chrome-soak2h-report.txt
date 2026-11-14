@@ -1,0 +1,235 @@
+chrome-smoke: FAIL (1 step(s))
+kvm smp=2 mem=8192M input=usb nic=virtio-net-pci, 7468 s, max console latency 51 ms; desktop loop while the browser ran: slowest console answer 1243 ms, median 12 ms over 27946 echoes
+
+ok   boot: desktop after 4 s, screen 1920x1080, layout us
+ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 13.5 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.1, first child process 5.5, renderer 8.3), 18 colours in the content area
+ok   chrome's infobars are closed or absent: 0 left
+ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.7 s, load finished 3.3 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 223 ms; fds: 5 processes, 311 descriptors, 282 objects, 188/4096 file objects; RAM files: 260 files, 12 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 513 ms, 9 over 100 ms, console output queued at most 316 ms
+ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.6 s, load finished 11.3 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 849 ms; fds: 7 processes, 397 descriptors, 354 objects, 226/4096 file objects; RAM files: 265 files, 12 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 869 ms, 4 over 100 ms, console output queued at most 852 ms
+ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.3 s, load finished 26.2 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 291 ms; fds: 8 processes, 460 descriptors, 403 objects, 257/4096 file objects; RAM files: 271 files, 13 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 395 ms, 2 over 100 ms, console output queued at most 265 ms
+ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False), ('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False), ('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False), ('reject all', True), ('reject all', False), ('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False)]
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.6 s, load finished 16.9 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 139 ms; fds: 10 processes, 615 descriptors, 533 objects, 341/4096 file objects; RAM files: 410 files, 16 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 210 ms, 3 over 100 ms, console output queued at most 302 ms
+ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.9 s, load finished 4.6 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 162 ms; fds: 9 processes, 565 descriptors, 489 objects, 314/4096 file objects; RAM files: 412 files, 16 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 119 ms, 2 over 100 ms, console output queued at most 379 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.6 s, load finished 3.0 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 120 ms; fds: 13 processes, 729 descriptors, 627 objects, 381/4096 file objects; RAM files: 418 files, 16 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 70 ms, 0 over 100 ms, console output queued at most 334 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 0, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.2 -> 60.92 s in 61.0 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1153, 1158, 1158, 1158, 1158, 1158, 1149, 1158, 1158, 1158, 1158, 1145])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 60.92, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.4 s, load finished 6.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 237 ms; fds: 10 processes, 606 descriptors, 524 objects, 342/4096 file objects; kernel stopwatch: longest gap between desktop passes 244 ms, 4 over 100 ms, console output queued at most 456 ms
+ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 2.7 s, load finished 5.5 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 153 ms; fds: 10 processes, 610 descriptors, 528 objects, 343/4096 file objects; RAM files: 422 files, 17 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 118 ms, 1 over 100 ms, console output queued at most 502 ms
+ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.5 s, load finished 23.6 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 177 ms; fds: 10 processes, 605 descriptors, 523 objects, 338/4096 file objects; RAM files: 422 files, 18 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 198 ms, 4 over 100 ms, console output queued at most -1 ms
+ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.7 s, load finished 16.6 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 186 ms; fds: 11 processes, 701 descriptors, 599 objects, 390/4096 file objects; RAM files: 425 files, 18 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 90 ms, 0 over 100 ms, console output queued at most 366 ms
+ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.4 s, load finished 4.5 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 50 ms; fds: 9 processes, 575 descriptors, 496 objects, 332/4096 file objects; RAM files: 424 files, 18 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 130 ms, 2 over 100 ms, console output queued at most 552 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.5 s, load finished 2.9 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 99 ms; fds: 12 processes, 698 descriptors, 601 objects, 375/4096 file objects; RAM files: 424 files, 19 MiB of bytes, 0 MiB of holes
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 3.05 -> 61.54 s in 61.0 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1148, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.54, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.3 s, load finished 0.0 s later; content 1389 colours, commonest 29%; desktop loop: slowest console answer 149 ms; fds: 9 processes, 582 descriptors, 503 objects, 333/4096 file objects; RAM files: 424 files, 19 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 169 ms, 3 over 100 ms, console output queued at most 386 ms
+ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+FAIL site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.5 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 1243 ms; fds: 9 processes, 584 descriptors, 505 objects, 334/4096 file objects; RAM files: 424 files, 19 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 1384 ms, 22 over 100 ms, console output queued at most 1055 ms | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 26.2 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 120 ms; fds: 9 processes, 581 descriptors, 502 objects, 329/4096 file objects; RAM files: 424 files, 21 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 179 ms, 2 over 100 ms, console output queued at most 326 ms
+ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 17.0 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 846 ms; fds: 11 processes, 700 descriptors, 598 objects, 390/4096 file objects; kernel stopwatch: longest gap between desktop passes 1037 ms, 14 over 100 ms, console output queued at most 314 ms
+ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.2 s, load finished 4.5 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 158 ms; fds: 9 processes, 575 descriptors, 496 objects, 332/4096 file objects; RAM files: 426 files, 22 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 119 ms, 2 over 100 ms, console output queued at most 589 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.7 s, load finished 2.6 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 50 ms; fds: 12 processes, 711 descriptors, 614 objects, 388/4096 file objects; RAM files: 426 files, 22 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 229 ms, 1 over 100 ms, console output queued at most 328 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.98 -> 61.48 s in 60.6 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.48, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.1 s, load finished 0.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 183 ms; fds: 9 processes, 580 descriptors, 501 objects, 333/4096 file objects; RAM files: 426 files, 22 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 191 ms, 2 over 100 ms, console output queued at most 585 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.5 s, load finished 3.7 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 172 ms; fds: 9 processes, 582 descriptors, 503 objects, 334/4096 file objects; RAM files: 426 files, 22 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 184 ms, 4 over 100 ms, console output queued at most 310 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 21.4 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 327 ms; fds: 9 processes, 579 descriptors, 500 objects, 329/4096 file objects; RAM files: 426 files, 23 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 360 ms, 10 over 100 ms, console output queued at most 357 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.2 s, load finished 15.0 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 211 ms; fds: 11 processes, 702 descriptors, 600 objects, 392/4096 file objects; RAM files: 429 files, 24 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 139 ms, 4 over 100 ms, console output queued at most 366 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.3 s, load finished 4.0 s later; content 2020 colours, commonest 36%; desktop loop: slowest console answer 166 ms; fds: 9 processes, 577 descriptors, 498 objects, 334/4096 file objects; RAM files: 428 files, 25 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 118 ms, 2 over 100 ms, console output queued at most 331 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 2.0 s, load finished 2.9 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 66 ms; fds: 12 processes, 713 descriptors, 616 objects, 390/4096 file objects; RAM files: 428 files, 25 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 58 ms, 0 over 100 ms, console output queued at most 311 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 3.13 -> 61.63 s in 60.7 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1157, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.63, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.5 s, load finished 6.8 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 199 ms; fds: 9 processes, 585 descriptors, 506 objects, 336/4096 file objects; RAM files: 428 files, 25 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 118 ms, 4 over 100 ms, console output queued at most 342 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.7 s, load finished 3.7 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 152 ms; fds: 9 processes, 586 descriptors, 507 objects, 336/4096 file objects; RAM files: 428 files, 25 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 136 ms, 1 over 100 ms, console output queued at most 321 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 19.9 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 184 ms; fds: 9 processes, 582 descriptors, 503 objects, 330/4096 file objects; RAM files: 428 files, 26 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 129 ms, 2 over 100 ms, console output queued at most 325 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.3 s, load finished 12.3 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 249 ms; fds: 11 processes, 702 descriptors, 600 objects, 392/4096 file objects; RAM files: 431 files, 27 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 130 ms, 4 over 100 ms, console output queued at most 296 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.4 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 112 ms; fds: 9 processes, 577 descriptors, 498 objects, 334/4096 file objects; RAM files: 432 files, 27 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 151 ms, 1 over 100 ms, console output queued at most 410 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.6 s, load finished 2.3 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 66 ms; fds: 12 processes, 713 descriptors, 616 objects, 390/4096 file objects; RAM files: 432 files, 27 MiB of bytes, 0 MiB of holes
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 3.05 -> 61.05 s in 60.7 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1157, 1158, 1158, 1158, 1158, 1158, 1153, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.05, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.6 s, load finished 5.6 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 87 ms; fds: 10 processes, 606 descriptors, 524 objects, 344/4096 file objects; RAM files: 432 files, 26 MiB of bytes, 0 MiB of holes
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 2.0 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 439 ms; fds: 10 processes, 607 descriptors, 525 objects, 345/4096 file objects; RAM files: 432 files, 27 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 166 ms, 3 over 100 ms, console output queued at most 431 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.3 s, load finished 22.2 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 184 ms; fds: 10 processes, 601 descriptors, 519 objects, 338/4096 file objects; RAM files: 432 files, 27 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 125 ms, 2 over 100 ms, console output queued at most 379 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.0 s, load finished 18.0 s later; content 287 colours, commonest 88%; desktop loop: slowest console answer 232 ms; fds: 11 processes, 701 descriptors, 599 objects, 392/4096 file objects; RAM files: 435 files, 28 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 139 ms, 2 over 100 ms, console output queued at most 347 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.8 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 193 ms; fds: 9 processes, 576 descriptors, 497 objects, 334/4096 file objects; RAM files: 434 files, 28 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 135 ms, 1 over 100 ms, console output queued at most 407 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.6 s, load finished 2.6 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 74 ms; fds: 12 processes, 712 descriptors, 615 objects, 390/4096 file objects; RAM files: 434 files, 28 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 87 ms, 0 over 100 ms, console output queued at most 310 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.7 -> 60.98 s in 60.5 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1149, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 60.98, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.3 s, load finished 4.5 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 187 ms; fds: 9 processes, 582 descriptors, 503 objects, 335/4096 file objects; RAM files: 434 files, 28 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 202 ms, 5 over 100 ms, console output queued at most 562 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 2.1 s, load finished 3.7 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 166 ms; fds: 9 processes, 584 descriptors, 505 objects, 336/4096 file objects; RAM files: 434 files, 28 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 162 ms, 2 over 100 ms, console output queued at most 296 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 19.5 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 186 ms; fds: 9 processes, 579 descriptors, 500 objects, 329/4096 file objects; RAM files: 434 files, 29 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 162 ms, 3 over 100 ms, console output queued at most -1 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 12.4 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 178 ms; fds: 11 processes, 701 descriptors, 599 objects, 392/4096 file objects; RAM files: 437 files, 29 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 157 ms, 5 over 100 ms, console output queued at most 314 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.5 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 220 ms; fds: 9 processes, 576 descriptors, 497 objects, 334/4096 file objects; RAM files: 436 files, 30 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 139 ms, 3 over 100 ms, console output queued at most 382 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.7 s, load finished 2.3 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 128 ms; fds: 12 processes, 712 descriptors, 615 objects, 390/4096 file objects; RAM files: 436 files, 30 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 160 ms, 1 over 100 ms, console output queued at most 363 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 3.1 -> 61.1 s in 60.7 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1157, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.1, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.5 s, load finished 4.2 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 83 ms; fds: 9 processes, 583 descriptors, 504 objects, 335/4096 file objects; RAM files: 436 files, 30 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 196 ms, 3 over 100 ms, console output queued at most -1 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.7 s, load finished 3.1 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 162 ms; fds: 9 processes, 585 descriptors, 506 objects, 336/4096 file objects; RAM files: 436 files, 30 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 134 ms, 2 over 100 ms, console output queued at most -1 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 17.9 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 162 ms; fds: 9 processes, 581 descriptors, 502 objects, 330/4096 file objects; RAM files: 436 files, 30 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 100 ms, 0 over 100 ms, console output queued at most 481 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.7 s, load finished 11.4 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 154 ms; fds: 11 processes, 701 descriptors, 599 objects, 392/4096 file objects; RAM files: 439 files, 31 MiB of bytes, 0 MiB of holes
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.9 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 113 ms; fds: 9 processes, 576 descriptors, 497 objects, 334/4096 file objects; RAM files: 438 files, 31 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 116 ms, 3 over 100 ms, console output queued at most -1 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.7 s, load finished 2.6 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 46 ms; fds: 12 processes, 712 descriptors, 615 objects, 390/4096 file objects; RAM files: 438 files, 31 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 89 ms, 0 over 100 ms, console output queued at most 252 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.74 -> 61.59 s in 61.1 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1152, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.59, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.3 s, load finished 0.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 321 ms; fds: 9 processes, 582 descriptors, 503 objects, 335/4096 file objects; RAM files: 438 files, 31 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 168 ms, 5 over 100 ms, console output queued at most 431 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 2.2 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 174 ms; fds: 9 processes, 584 descriptors, 505 objects, 336/4096 file objects; RAM files: 438 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 110 ms, 2 over 100 ms, console output queued at most 536 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 18.7 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 204 ms; fds: 9 processes, 579 descriptors, 500 objects, 329/4096 file objects; RAM files: 438 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 170 ms, 1 over 100 ms, console output queued at most 350 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.9 s, load finished 11.6 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 253 ms; fds: 11 processes, 700 descriptors, 598 objects, 390/4096 file objects; RAM files: 441 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 149 ms, 4 over 100 ms, console output queued at most 318 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.8 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 150 ms; fds: 9 processes, 574 descriptors, 495 objects, 332/4096 file objects; RAM files: 440 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 130 ms, 2 over 100 ms, console output queued at most 350 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.6 s, load finished 2.3 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 412 ms; fds: 12 processes, 710 descriptors, 613 objects, 388/4096 file objects; RAM files: 440 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 240 ms, 1 over 100 ms, console output queued at most -1 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.84 -> 61.34 s in 60.6 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1153, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.34, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.2 s, load finished 0.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 113 ms; fds: 9 processes, 581 descriptors, 502 objects, 333/4096 file objects; RAM files: 440 files, 32 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 217 ms, 1 over 100 ms, console output queued at most 374 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.4 s, load finished 3.4 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 150 ms; fds: 9 processes, 583 descriptors, 504 objects, 334/4096 file objects; RAM files: 440 files, 33 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 109 ms, 3 over 100 ms, console output queued at most 294 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 19.0 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 234 ms; fds: 9 processes, 580 descriptors, 501 objects, 329/4096 file objects; RAM files: 440 files, 33 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 110 ms, 3 over 100 ms, console output queued at most 443 ms
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.1 s, load finished 11.9 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 202 ms; fds: 11 processes, 701 descriptors, 599 objects, 390/4096 file objects; RAM files: 443 files, 33 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 140 ms, 5 over 100 ms, console output queued at most 445 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.1 s, load finished 3.7 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 124 ms; fds: 9 processes, 574 descriptors, 495 objects, 332/4096 file objects; RAM files: 442 files, 33 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 130 ms, 3 over 100 ms, console output queued at most 351 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 2.0 s, load finished 2.9 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 83 ms; fds: 12 processes, 710 descriptors, 613 objects, 388/4096 file objects; RAM files: 442 files, 33 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 137 ms, 1 over 100 ms, console output queued at most 398 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.82 -> 61.33 s in 60.8 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1153, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.33, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   consent euro-os-last: no banner button found: find-in-page matched none of 17 labels
+ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.5 s, load finished 4.5 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 191 ms; fds: 9 processes, 580 descriptors, 501 objects, 333/4096 file objects; RAM files: 442 files, 34 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 196 ms, 3 over 100 ms, console output queued at most 532 ms
+ok   consent wikipedia-last: no banner button found: find-in-page matched none of 17 labels
+ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.9 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 137 ms; fds: 9 processes, 581 descriptors, 502 objects, 333/4096 file objects; RAM files: 442 files, 34 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 110 ms, 4 over 100 ms, console output queued at most 352 ms
+ok   consent github-last: no banner button found: find-in-page matched none of 17 labels
+ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.2 s, load finished 18.1 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 125 ms; fds: 9 processes, 579 descriptors, 500 objects, 329/4096 file objects; RAM files: 442 files, 34 MiB of bytes, 0 MiB of holes
+ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.8 s, load finished 11.9 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 162 ms; fds: 11 processes, 701 descriptors, 599 objects, 392/4096 file objects; RAM files: 445 files, 34 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 138 ms, 5 over 100 ms, console output queued at most 315 ms
+ok   consent openstreetmap-last: no banner button found: find-in-page matched none of 17 labels
+ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.6 s, load finished 3.1 s later; content 2283 colours, commonest 36%; desktop loop: slowest console answer 195 ms; fds: 9 processes, 576 descriptors, 497 objects, 334/4096 file objects; RAM files: 444 files, 35 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 130 ms, 3 over 100 ms, console output queued at most 460 ms
+ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.6 s, load finished 2.6 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 33 ms; fds: 12 processes, 712 descriptors, 615 objects, 390/4096 file objects; RAM files: 444 files, 35 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 90 ms, 0 over 100 ms, console output queued at most 486 ms
+ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+ok   local video vp9+opus: the video's time increases: currentTime 2.88 -> 61.38 s in 60.8 s of wall clock
+ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1153])
+ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.38, 'rs': 4, 'err': 'none', 'can': 'probably'}
+
+memory_start: no [cpu] heartbeat line yet
+
+soak_rounds: 11
+
+soak_memory: [
+ [
+  667,
+  "heap 120 MiB used, 391 MiB free; big 54/457 MiB (peak 59); files 59 MiB; demand 2564 MiB free"
+ ],
+ [
+  1357,
+  "heap 120 MiB used, 391 MiB free; big 56/455 MiB (peak 71); files 61 MiB; demand 2574 MiB free"
+ ],
+ [
+  2049,
+  "heap 120 MiB used, 391 MiB free; big 61/450 MiB (peak 73); files 64 MiB; demand 2568 MiB free"
+ ],
+ [
+  2726,
+  "heap 120 MiB used, 391 MiB free; big 66/445 MiB (peak 77); files 67 MiB; demand 2560 MiB free"
+ ],
+ [
+  3407,
+  "heap 120 MiB used, 391 MiB free; big 67/444 MiB (peak 82); files 69 MiB; demand 2545 MiB free"
+ ],
+ [
+  4098,
+  "heap 121 MiB used, 390 MiB free; big 71/440 MiB (peak 83); files 70 MiB; demand 2560 MiB free"
+ ],
+ [
+  4773,
+  "heap 121 MiB used, 390 MiB free; big 70/441 MiB (peak 87); files 72 MiB; demand 2557 MiB free"
+ ],
+ [
+  5447,
+  "heap 121 MiB used, 390 MiB free; big 72/439 MiB (peak 87); files 74 MiB; demand 2553 MiB free"
+ ],
+ [
+  6116,
+  "heap 121 MiB used, 390 MiB free; big 75/436 MiB (peak 88); files 75 MiB; demand 2551 MiB free"
+ ],
+ [
+  6790,
+  "heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 91); files 76 MiB; demand 2554 MiB free"
+ ],
+ [
+  7468,
+  "heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 95); files 77 MiB; demand 2550 MiB free"
+ ]
+]
+
+memory_end: heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 95); files 77 MiB; demand 2550 MiB free

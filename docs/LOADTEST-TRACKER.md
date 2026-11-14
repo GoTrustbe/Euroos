@@ -2264,6 +2264,9 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   still arrives; PPR 0x40 is the NIC handler that runs the probe. Cause not found.
 - **Next:**     scheduler/interrupt owners (Fable team): the ISR above 0x3f at the probe, the LAPIC timer mode and whether the
   BSP idle hlt is entered with the tick masked.
+- **Seen again (validation of `feature/chrome-final`):** once in 60 fresh browser starts (start 3 of the first 20-start run) and not in the
+  other 59, nor in 3 two-hour sessions' worth of rounds so far. The new FROZEN line shows `ISR` bit 0x4B only (the handler that prints it),
+  `IRR` 0x20 pending, PPR 0x40, `2315 Mcycles` since the last tick taken, `halted-at rip=0x100802fe9db` in user mode with IF=true.
 
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
@@ -2414,5 +2417,42 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 
 - The `sched.rs:755` panic and the TCG self-test stops that the net-async work noted here are
   BUG-032 and BUG-033 now.
+
+### BUG-190 — in the self-test image, text typed after the desktop does not reach the Terminal in some boots (q35 `hwprobe` leg) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (seen in the self-test image only; the public image types fine: `gui-smoke` 67/67, 67/67, 78/78 and 59 of 60 browser starts typed a URL)
+- **Actual:**   `scripts/run-metal-matrix.py --legs hwprobe` types `hwprobe` ten seconds after `[desktop] interactive loop started`.
+  In the failing boots the xHCI reports of all eight key codes arrive (`[krep]` lines) but the Terminal shows nothing: no
+  `[e2e] $ hwprobe`, and four commands typed 10, 42, 74 and 106 s later (`uname`, `hwprobe`, `uname`, `hwprobe`) never appear on the
+  screen either (screendumps in `proof/validate-2026-11d/`). The desktop clock goes on, the loop is alive.
+- **Rate:**     the leg alone, KVM, restrict=on, self-test image, pass/fail: `40f853a` 5/0 (and 13/13 in the harness team's own matrix),
+  `7d6d073` (merge of w23) 4/2, `3990f17` (+ mem) 2/4, `fd72e2c` (chrome-integ) 3/2, `7405ea0` (mem2) 0/1, `fee4cdb` (audio) 0/1,
+  final merge 1/7 (0 of 4 while other guests loaded the machine, 1 of 3 when little else ran; and 0 of 4 with a changed typing table,
+  a boot option, or longer waits). So it starts with the w23 merge and gets more frequent with the mem merge; load alone does not explain it.
+- **Reading:**  not found. Not the keyboard layout (the same with an unmapped US table), not the time of typing (four attempts over
+  106 s), not the NIC. A guess to test first: the self-test image has the hosted GTK demo window (`EuroOS GTK - ggtk`, which takes no
+  input, BUG-112); if that window ends up with the keyboard focus in the failing boots the keys go to the X server and are dropped.
+  W23 changed the timing of the desktop loop (`desktop_idle_hlt`, the starved loop of BUG-143), which would move that race.
+- **Next:**     W23/Fable owners: serial line for the focus change; check which window has the focus at the first key.
+
+### BUG-191 — the install wizard sometimes ends with "Installation FAILED": `EuroFs::format` returns an error and no step is provisioned ⬜ OPEN (not new)
+- **Status:**   OPEN, found by the validation of `feature/chrome-final`; present in the download 2026.11.13 as well · **Severity:** MEDIUM
+- **Actual:**   `rename-persist.py` phase 0 (the public image installs itself on a blank 4 GiB virtio disk, KVM, 2 vCPU):
+  `[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 0 steps provisioned, after
+  remount hostname='euro-test'=false user='tester'=false euroid-store=false → FAILED` (a good run: `+ 5 steps provisioned … → OK`).
+  The keyboard is not the cause (147 keyboard IRQs in both). The line in `instexec.rs` that gives 0 is `Err(_) => 0` of
+  `EuroFs::format(...)`: the error is thrown away, nothing says why.
+- **Rate:**     phase 0 of `rename-persist.py`, installs failed / made: ten at once on the R630: download 2026.11.13 6 of 10, final 2 of 10;
+  nine at once: final 2 of 9, download 0 of 3; seven final installs with little else running: 0 of 7, download 0 of 3, public image
+  of `40f853a` 0 of 3, chrome-integ 0 of 6, chrome-mem2 0 of 3 (and the very first final run, 1 of 1 failed). It follows the load of the host, not the branch.
+- **Next:**     print the error of `EuroFs::format` (and of the block writes under it); find what a loaded host changes (a write that times out?).
+
+### BUG-192 — in the soak, `churn proc 8` takes 32 to 44 s about every 27 minutes ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (the soak finished clean: 3 513 commands ok, no fault, heap +0.23 kB/min)
+- **Actual:**   R630 soak of the final self-test image, 125 min: `churn proc 8` median 6.6 s as before (6.2 s), but four rounds took
+  32.5, 32.4, 34.1 and 31.6 s (t = 1 359, 2 986, 4 717, 6 360 s) and the slowest was 43.9 s; the soak of `f98da76` (validate-2026-11c)
+  had a worst round of 12.6 s. In those rounds the desktop loop (which runs the serial-console commands) is away 32 s inside
+  "devices and windows" (`[desk] #21 … away 32187 ms`), the loop itself gets 58 of ~3 200 ticks, no tick is lost (`[tick-late]` shows no
+  jump), the other commands of the round are normal. 4 of 450 rounds; `spawn worker`, `churn fs` and `fetch` are faster than in 11c (0.4 s against 1.85 s, 9.7 s against 34 s, 0.25 s against 0.5 s).
+- **Next:**     find what the eight processes wait for in those rounds (a lock, the reaper, the lazy arena of BUG-156).
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

@@ -1,0 +1,53 @@
+# chrome-mem-soak.py --no-video --free-video-seconds 0 --hours 2 --local-video-dir (vp9.webm: VP9+Opus) --local-seconds 60, public image (ui.tour=off;update.check=off), 8 GiB, 2 vCPU, KVM, session-A-loaded-host
+[chrome-mem-soak] round 1 done after 667 s: heap 120 MiB used, 391 MiB free; big 54/457 MiB (peak 59); files 59 MiB; demand 2564 MiB free
+[chrome-smoke] running - 19/19 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 2 done after 1357 s: heap 120 MiB used, 391 MiB free; big 56/455 MiB (peak 71); files 61 MiB; demand 2574 MiB free
+[chrome-smoke] running - 35/35 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 3 done after 2049 s: heap 120 MiB used, 391 MiB free; big 61/450 MiB (peak 73); files 64 MiB; demand 2568 MiB free
+[chrome-smoke] running - 50/51 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 4 done after 2726 s: heap 120 MiB used, 391 MiB free; big 66/445 MiB (peak 77); files 67 MiB; demand 2560 MiB free
+[chrome-smoke] running - 66/67 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 5 done after 3407 s: heap 120 MiB used, 391 MiB free; big 67/444 MiB (peak 82); files 69 MiB; demand 2545 MiB free
+[chrome-smoke] running - 82/83 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 6 done after 4098 s: heap 121 MiB used, 390 MiB free; big 71/440 MiB (peak 83); files 70 MiB; demand 2560 MiB free
+[chrome-smoke] running - 98/99 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 7 done after 4773 s: heap 121 MiB used, 390 MiB free; big 70/441 MiB (peak 87); files 72 MiB; demand 2557 MiB free
+[chrome-smoke] running - 114/115 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 8 done after 5447 s: heap 121 MiB used, 390 MiB free; big 72/439 MiB (peak 87); files 74 MiB; demand 2553 MiB free
+[chrome-smoke] running - 130/131 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 9 done after 6116 s: heap 121 MiB used, 390 MiB free; big 75/436 MiB (peak 88); files 75 MiB; demand 2551 MiB free
+[chrome-smoke] running - 146/147 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 10 done after 6790 s: heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 91); files 76 MiB; demand 2554 MiB free
+[chrome-smoke] running - 162/163 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] round 11 done after 7468 s: heap 121 MiB used, 390 MiB free; big 79/432 MiB (peak 95); files 77 MiB; demand 2550 MiB free
+[chrome-smoke] running - 178/179 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-smoke] FAIL (1 step(s)) - 178/179 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] FAIL (1 step(s)): 11 rounds in 7468 s
+-- steps that failed:
+[gui-smoke] FAIL site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.5 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 1243 ms; fds: 9 processes, 584 descriptors, 505 objects, 334/4096 file objects; RAM files: 424 files, 19 MiB of bytes, 0 MiB of holes; kernel stopwatch: longest gap between desktop passes 1384 ms, 22 over 100 ms, console output queued at most 1055 ms | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[chrome-smoke] FAIL (1 step(s)) - 178/179 steps ok, report and screenshots in /srv/euroos/final-runs/runs/soak2h
+[chrome-mem-soak] FAIL (1 step(s)): 11 rounds in 7468 s
+-- serial: FROZEN 0, aborts 0, spawn-refused 0, oom 0, isolation 0, NMI probes 0, panic/fault lines 0
+-- local clip (VP9+Opus) steps:
+55
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1153, 1158, 1158, 1158, 1158, 1158, 1149, 1158, 1158, 1158, 1158, 1145])
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1148, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+-- mem-curve.py:
+after the warm-up (15 min): 285 samples over 108 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      735    682    614    897    +11.7
+anon                      277    245    204    396     +6.0
+zero                        5      5      4     11     +0.1
+noaccess                    0      0      0      0     +0.0
+fileprivate               164    150    134    180     -0.4
+tables                     11     18      9     19     +4.0
+pagecache                 235    239    235    239     +1.9
+shm                        44     28     26     54     -0.6
+heap_used                 120    121    120    122     +0.9
+big_used                   55     79     51     83    +12.8
+ramfile_bytes              18     35     18     35     +9.2
+
+lowest free: 2335 MiB of 3232; largest unattributed: 96476 KiB
+verdict: NOT flat (in use +11.7 MiB/h = +0.4% of the pool per hour; 0 kill/exhaustion lines; 94 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):

@@ -1,0 +1,35 @@
+# boot-time.py --pin 38-39 --hold 5, public image of the merged tree (final) and the public image 2026.11.13 (rel), alternating
+== while 14 other guests ran (first block)
+final-1: kernel-entry 1.94s desktop 2.79s
+rel-1: kernel-entry 2.00s desktop 2.95s
+final-2: kernel-entry 1.90s desktop 2.80s
+rel-2: kernel-entry 2.06s desktop 3.03s
+final-3: kernel-entry 2.21s desktop 3.12s
+rel-3: kernel-entry 1.86s desktop 2.89s
+final-4: kernel-entry 1.88s desktop 2.79s
+rel-4: kernel-entry 1.88s desktop 2.90s
+final-5: kernel-entry 2.09s desktop 3.09s
+rel-5: kernel-entry 2.13s desktop 3.12s
+final-6: kernel-entry 1.99s desktop 2.88s
+rel-6: kernel-entry 2.00s desktop 2.96s
+final-7: kernel-entry 2.15s desktop 2.99s
+rel-7: kernel-entry 1.76s desktop 2.71s
+final-8: kernel-entry 1.95s desktop 2.80s
+rel-8: kernel-entry 1.92s desktop 2.91s
+== second block, quiet machine
+final-1: kernel-entry 1.91s desktop 2.73s
+rel-1: kernel-entry 2.08s desktop 2.99s
+final-2: kernel-entry 1.79s desktop 2.56s
+rel-2: kernel-entry 1.61s desktop 2.46s
+final-3: kernel-entry 1.66s desktop 2.50s
+rel-3: kernel-entry 1.87s desktop 2.71s
+final-4: kernel-entry 1.73s desktop 2.53s
+rel-4: kernel-entry 1.70s desktop 2.56s
+final-5: kernel-entry 1.67s desktop 2.55s
+rel-5: kernel-entry 1.68s desktop 2.55s
+final-6: kernel-entry 1.69s desktop 2.51s
+rel-6: kernel-entry 1.94s desktop 2.91s
+final-7: kernel-entry 1.73s desktop 2.57s
+rel-7: kernel-entry 1.92s desktop 2.86s
+final-8: kernel-entry 1.72s desktop 2.52s
+rel-8: kernel-entry 2.16s desktop 3.03s

@@ -1,0 +1,6 @@
+# markers-compare.py: public image 2026.11.13 (the download) -> public image of the merged tree, both from the gui-smoke boot
+== /srv/euroos/final-runs/out/pub-2026.11.13.markers  vs  /srv/euroos/final-runs/out/pub-final.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

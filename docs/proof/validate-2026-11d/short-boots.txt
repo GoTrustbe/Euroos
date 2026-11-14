@@ -1,0 +1,21 @@
+# 100 short boots of the self-test image (short-boots.sh, KVM -cpu host, 2 GiB, smp 2, no NIC), each to the [rename] verdict, six lanes
+boots: 107  (by lane: short-a 24, short-b 25, short-c 21, short-d 13, short-e 11, short-f 13)
+ended at the marker: 107, timeout: 0, qemu exit: 0
+[3d8]: OK in 107, FAILED in 0
+[3d7]: OK in 107, FAILED in 0
+[3d3]: OK in 107, FAILED in 0
+[entropy]: one status line in 107, seeded in 107, NOT SEEDED in 0
+[linux-rand]: OK in 107, FAILED in 0
+boots with a crash line: 0
+FAILED lines per boot (any tag, up to the marker): {'0': 107}
+credited bits: min 495, median 538, max 576; jitter batches: [4]
+entropy::init: min 0.605 ms, median 0.824 ms, max 1.531 ms
+seconds to the marker: min 222, median 229, max 310
+at_random: 428 values over all processes of all boots, 428 distinct, 0 seen more than once
+stack_guard: 428 values over all processes of all boots, 428 distinct, 0 seen more than once
+getrandom: 428 values over all processes of all boots, 428 distinct, 0 seen more than once
+urandom: 428 values over all processes of all boots, 428 distinct, 0 seen more than once
+random: 428 values over all processes of all boots, 428 distinct, 0 seen more than once
+
+(the marker line of every boot is the [rename] verdict; FAILED lines are counted up to and including it)
+== FAILED lines, any tag, all boots (count, line)

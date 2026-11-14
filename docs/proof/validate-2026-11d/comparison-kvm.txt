@@ -1,0 +1,79 @@
+# markers-compare.py, KVM self-test boots of the final image against the earlier proof boots (same machine and options except -audiodev)
+
+== 1 GiB: chrome-mem2 f08c678 (t2) -> final
+== /srv/euroos/mem2-runs/kvm/t2-1g.log  vs  kvm/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 1 GiB: chrome-integ af6f415 (f) -> final
+== /srv/euroos/integ3-runs/kvm/f-1g.log  vs  kvm/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   churn-fork: base FAILx1 | new OKx1
+   glibc: base FAILx2 | new FAILx1
+   linux-abi: base OKx1 FAILx2 | new OKx1 FAILx1
+-- only in base: 1
+   fork: FAILx10
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 2 GiB: chrome-mem2 f08c678 (t2) -> final
+== /srv/euroos/mem2-runs/kvm/t2-2g.log  vs  kvm/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 2 GiB: chrome-integ af6f415 (f) -> final
+== /srv/euroos/integ3-runs/kvm/f-2g.log  vs  kvm/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   churn-fork: base FAILx1 | new OKx1
+-- only in base: 1
+   fork: FAILx9
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 4 GiB: chrome-mem2 f08c678 (t2) -> final
+== /srv/euroos/mem2-runs/kvm/t2-4g.log  vs  kvm/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 4 GiB: chrome-integ af6f415 (f) -> final
+== /srv/euroos/integ3-runs/kvm/f-4g.log  vs  kvm/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 8 GiB: chrome-mem2 f08c678 (t2) -> final
+== /srv/euroos/mem2-runs/kvm/t2-8g.log  vs  kvm/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1
+
+== 8 GiB: chrome-integ af6f415 (f) -> final
+== /srv/euroos/integ3-runs/kvm/f-8g.log  vs  kvm/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   hda: OKx1
+   pcmch: OKx1

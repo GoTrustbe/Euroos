@@ -1,0 +1,22 @@
+# TCG matrix, R630, restrict=on, final image (self-test image of the merged tree)
+user-smp1-iommu done 11:20:28 after 240s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 11:20:28 after 240s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 11:24:19 after 231s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 11:24:24 after 236s desktop=1 wd=0 nmi=0
+kernel-smp1 done 11:27:59 after 220s desktop=1 wd=0 nmi=0
+kernel-smp4 done 11:28:04 after 220s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 11:39:41 after 702s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 11:40:16 after 732s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 11:51:38 after 717s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 11:52:53 after 757s desktop=1 wd=0 nmi=0
+matrix f done 11:52:53
+user-smp4-iommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 1831 ms
+user-smp4-noiommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 2019 ms
+kernel-smp4: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=6 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 1941 ms
+storage-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=7 | [memt] memory self-test, 7 modes → OK ✓ | pcmch: not run | longest desk gap 1751 ms
+combined-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=7 | [memt] memory self-test, 7 modes → OK ✓ | pcmch: not run | longest desk gap 2006 ms
+user-smp1-iommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 1775 ms
+user-smp1-noiommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 1775 ms
+kernel-smp1: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=6 | [memt] memory self-test: not run on this machine → OK ✓ | pcmch: → OK | longest desk gap 1745 ms
+storage-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=7 | [memt] memory self-test, 7 modes → OK ✓ | pcmch: not run | longest desk gap 1735 ms
+combined-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=7 | [memt] memory self-test, 7 modes → OK ✓ | pcmch: not run | longest desk gap 1815 ms
