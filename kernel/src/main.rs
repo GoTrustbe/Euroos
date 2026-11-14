@@ -446,6 +446,27 @@ static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 ///
 /// The boot-phase run proved chrome CAN paint here; this is what makes it an app you
 /// open, next to the other windows, with the desktop routing input into it.
+/// BUG-112: the live GTK demo of `--features live-demos` waits for the desktop loop to start it.
+static GTK_DEMO_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Start the live GTK demo as a hosted app, from the desktop loop (see `GTK_DEMO_PENDING`).
+fn launch_gtk_demo(mem: &mut euromm::FrameAllocator) {
+    let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
+    // A live window: its one-second timer must run in real time, not on the boot test's fast-forward.
+    ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
+    // Whatever the boot stages for X clients stays out of this app.
+    while mouse::take_button_event().is_some() {}
+    // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen, so the desktop
+    // composites it as a framed window.
+    xserver::forget_clients();
+    xserver::set_windowed(true);
+    match ring3::spawn_glibc_persistent(mem, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps) {
+        Some(t) => serial_println!("[glibc] ggtk live on task {t} (started by the desktop loop)"),
+        None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+    }
+}
+
 fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     if !ring3::europack_has("/pack/chrome") {
         return (false, String::from("chrome: no /pack/chrome — attach the Chromium EuroPack disk"));
@@ -3709,14 +3730,13 @@ fn main() -> Status {
             // a live GTK window on the desktop.
             let live_gtk_demo = cfg!(feature = "live-demos");
             if live_gtk_demo {
-                // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
-                // so the desktop composites it as a framed window.
-                xserver::forget_clients();
-                xserver::set_windowed(true);
-                match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
-                    Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
-                    None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
-                }
+                // BUG-112: not started here. The boot still has self-tests to run after this
+                // point, and they launch other glibc processes whose per-process globals (the
+                // address space, the arena, the main task, the break) replace those of a
+                // persistent app that is already running: the demo then failed to load a library
+                // or stopped after its first frame. The desktop loop starts it, once the boot is over.
+                GTK_DEMO_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+                serial_println!("[glibc] ggtk live-demo: starts when the desktop loop runs (after the boot self-tests)");
             } else {
                 serial_println!("[glibc] ggtk live-demo skipped (idle-friendly default; build --features live-demos to enable)");
             }
@@ -5430,6 +5450,9 @@ fn main() -> Status {
         // A process that is to be ended for memory (BUG-155).
         ring3::oom_deferred_poll();
         sched::deskwatch::mark(1);
+        if GTK_DEMO_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            launch_gtk_demo(ctx.mem);
+        }
         // Interrupt-independent USB input HERE TOO: the boot launcher polls the
         // xHCI ring every iteration, but the desktop loop did not — so desktop
         // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
