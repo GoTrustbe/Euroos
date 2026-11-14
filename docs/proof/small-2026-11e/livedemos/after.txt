@@ -1,0 +1,16 @@
+## lda1 (after)
+[glibc] ggtk live-demo: starts when the desktop loop runs (after the boot self-tests)
+[glibc] ggtk live on task 6 (started by the desktop loop)
+[gtk-test] focused + typed 'hi'
+[keylat] key 1: ring to X client 3 us, X queue to client read 897 us, read to first draw 2655 us, draw to screen 6189 us; total 9745 us
+[gtk-test] deliver_button to Reset @local(240,272) of 480x290
+[gtk-test] closed GTK window; free RAM 1218 -> 1602 MiB
+mm-fail lines: 122
+## lda2 (after)
+[glibc] ggtk live-demo: starts when the desktop loop runs (after the boot self-tests)
+[glibc] ggtk live on task 6 (started by the desktop loop)
+[gtk-test] focused + typed 'hi'
+[keylat] key 1: ring to X client 4 us, X queue to client read 762 us, read to first draw 2616 us, draw to screen 5456 us; total 8840 us
+[gtk-test] deliver_button to Reset @local(240,272) of 480x290
+[gtk-test] closed GTK window; free RAM 1218 -> 1602 MiB
+mm-fail lines: 122

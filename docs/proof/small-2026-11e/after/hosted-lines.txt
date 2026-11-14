@@ -1,0 +1,19 @@
+[app] installed hello-x11 v1.0.0 (app, caps 'console,file,proc', profile utility, display x11)
+[app] app install: hello-x11 v1.0.0 installed (app; caps 'console,file,proc'; profile utility; display x11) — verified: Ed25519 + sha256
+[e2e] $ app run hello-x11
+[hosted] desktop: 1470 loops, 2 window repaints, 6 full repaints in 28200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 396 loops, 0 window repaints, 0 full repaints in 400 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 200 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 184 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] the app ended by itself: frame closed, free RAM 1224 -> 1608 MiB
+[e2e] $ app run hello-x11
+[hosted] desktop: 4067 loops, 1 window repaints, 2 full repaints in 4200 ticks
+[hosted] desktop: 594 loops, 0 window repaints, 0 full repaints in 600 ticks
+[hosted] desktop: 595 loops, 0 window repaints, 0 full repaints in 600 ticks
+[hosted] desktop: 398 loops, 0 window repaints, 0 full repaints in 400 ticks

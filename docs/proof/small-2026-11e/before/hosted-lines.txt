@@ -1,0 +1,20 @@
+[app] installed hello-x11 v1.0.0 (app, caps 'console,file,proc', profile utility, display x11)
+[app] app install: hello-x11 v1.0.0 installed (app; caps 'console,file,proc'; profile utility; display x11) — verified: Ed25519 + sha256
+[e2e] $ app run hello-x11
+[hosted] desktop: 3705 loops, 2 window repaints, 6 full repaints in 30600 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 199 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 199 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 199 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 199 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 199 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 198 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 396 loops, 0 window repaints, 0 full repaints in 400 ticks
+[hosted] desktop: 183 loops, 0 window repaints, 0 full repaints in 200 ticks
+[hosted] desktop: 185 loops, 0 window repaints, 1 full repaints in 200 ticks
+[hosted] desktop: 179 loops, 0 window repaints, 0 full repaints in 200 ticks
+[e2e] $ app run hello-x11
+[e2e] a hosted app is already running (close its window first)

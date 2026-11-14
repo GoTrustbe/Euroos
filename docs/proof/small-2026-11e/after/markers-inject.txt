@@ -1,0 +1,4 @@
+[q1x3] target virtio disk 0: installation FAILED: creating the EuroFS root failed: Corruption
+[q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-pc'=false user='anke'=false euroid-store=false → FAILED
+[randid] dhcp xid: 16 draws, all different, none of the old constants ✓
+[randid] smb client challenge: 16 draws, all different, no RTC/EURO pattern ✓

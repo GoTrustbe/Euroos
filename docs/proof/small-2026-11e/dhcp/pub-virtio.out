@@ -1,0 +1,9 @@
+pub-virtio (virtio-net-pci) end=marker
+[net] NIC: virtio-net MAC 52:54:00:12:34:56
+[net] DHCP runs in the background: the network comes up shortly after the desktop
+[linux-abi]   Linux uname.sysname = [linux-abi] Linux[linux-abi]   release = [linux-abi] 6.6.0-euroos[linux-abi] 
+[linux-abi]   [linux-abi] /etc/os-release[linux-abi] : [linux-abi] NAME="EuroOS"[linux-abi] 
+[linux-abi]     [f] [linux-abi] os-release[linux-abi] 
+[net-up] kernel task 2: DHCP + ARP + router discovery over virtio-net run in the background
+[net-up] lease 10.0.2.15 (gateway 10.0.2.2, dns 10.0.2.2, 86400 s) over virtio-net; IPv6 router found; 50 ms after the task started ✓
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓

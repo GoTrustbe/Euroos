@@ -1681,8 +1681,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     pet from the long shell commands, or check the scheduler's progress instead of the desktop loop;
   keep the verdict lines of the whole soak log in the proof.
 
-### BUG-086 — the DHCP transaction id is a constant and a reply is not matched on it ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW to MEDIUM (a host on the same link that answers faster than the DHCP server
+### BUG-086 — the DHCP transaction id is a constant and a reply is not matched on it ✅ FIXED (`13b46b3`, test `f350026`)
+- **Status:**   FIXED · **Severity:** LOW to MEDIUM (a host on the same link that answers faster than the DHCP server
   sets address, gateway and DNS server; the id is what makes that a race it has to win blind)
 - **Found:**    2026-11-12 · by reading, the grep round of BUG-080/081 for randomness in a security context. Not provoked.
 - **Actual:**   five senders use a fixed `xid`: `main.rs` (`0x4505_5201`), `net_bringup.rs` (`0x4E55_5021`), `net.rs`
@@ -1692,9 +1692,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     `xid` from `net::rand_u64` (the CSPRNG since BUG-081) per exchange; `DhcpInfo` carries the reply's
   `xid` and the client MAC, and a reply with another one is dropped; host tests in `euronet`. Not done here: it
   touches all four bring-up paths, and each needs its DHCP run again on every NIC driver.
+- **Fix:**      `net::dhcp_xid()` = 32 bits of the CSPRNG per exchange, used by all five senders (`main.rs`, `net_bringup.rs`, `net.rs` late bring-up,
+  `udrv.rs` twice); `dhcp::parse` returns the reply's `xid` and `chaddr` (`DhcpInfo`), and every reply loop accepts a reply only when
+  `DhcpInfo::answers(xid, own_mac)` (host test in `euronet`, `reply_is_matched_on_xid_and_mac`).
+- **Test first:** `[randid] dhcp xid` (16 draws all different, none an old constant): FAILED on the image of the test commit, OK after the fix.
+- **Proof:**    `proof/small-2026-11e/README.md` (also a DHCP lease on virtio-net and e1000e, user-net restrict=on). Not run: every other NIC driver (r8169, bcm5720, usb-net).
 
-### BUG-087 — the SMB client challenge is the RTC second ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW to MEDIUM (the client challenge is the client's contribution to the
+### BUG-087 — the SMB client challenge is the RTC second ✅ FIXED (`81a322c`, test `f350026`)
+- **Status:**   FIXED · **Severity:** LOW to MEDIUM (the client challenge is the client's contribution to the
   NTLM response; a server that knows it in advance can prepare its side)
 - **Found:**    2026-11-12 · by reading (the same grep round). Not provoked.
 - **Actual:**   `smbfs::open_share` builds the 8-byte client challenge of the session setup from `rtc::epoch()`
@@ -1702,6 +1707,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   unpredictable per session.
 - **Next:**     `crate::entropy::draw_wait::<8>()`. Two lines; not changed in this round because the images under
   test were already built and the SMB mount self-test (`[io5]`) only runs in a dev build with a server.
+- **Fix:**      `smbfs::client_challenge()` = `entropy::draw_wait::<8>()`.
+- **Test first:** `[randid] smb client challenge` (16 draws all different, no `EURO` tail): FAILED before, OK after. The SMB mount self-test `[io5]`
+  (needs a server) was not run.
+- **Proof:**    `proof/small-2026-11e/README.md`
 
 ### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ⬜ OPEN
 - **Status:**   OPEN · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
@@ -1876,8 +1885,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     `vfs_rename` carries the dirty mark to the new name; the write-back also removes what the program
   unlinked; a program's `open` falls through to EuroFS for a path the table does not know.
 
-### BUG-112 — the GTK demo (feature `live-demos`) stops after its first frame, and often does not load ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (the demo is in no image that is built by default; there is no GTK test in the
+### BUG-112 — the GTK demo (feature `live-demos`) stops after its first frame, and often does not load ✅ FIXED for the load and the input (`9facaee`); the one-second timer was not checked
+- **Status:**   FIXED · **Severity:** LOW (the demo is in no image that is built by default; there is no GTK test in the
   boot suite) · not new: the same on `c6f033f`
 - **Found:**    2026-11-12 · `gtk-live.py` and `gtk-diag.sh`, self-test image built with `--features live-demos`, R630,
   KVM; validation of `feature/chrome-workplace-2`.
@@ -1887,9 +1896,21 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   queued on the branch). (2) In many starts the loader fails on one library or another
   (`liblz4.so.1: failed to map segment from shared object`, `libcap.so.2: cannot read file data: Operation not
   permitted`), or the window never appears.
-- **Analysis:** not done. For (2): the demo is started "alongside the desktop" while the boot still runs the self-tests
+- **Analysis (first look, before the fix):** not done. For (2): the demo is started "alongside the desktop" while the boot still runs the self-tests
   that come after the glibc suite, and those launch other processes; the failures differ from start to start.
 - **Proof:**    `proof/validate-2026-11c/gtk-demo.txt`, `screenshots/gtk-demo-*.png`.
+- **Cause:**    the demo was started in the middle of the boot ("alongside the desktop") while the boot still ran self-tests that launch other glibc
+  processes. The per-process state of a persistent glibc app is global (address space, arena, main task, break), so the later processes replaced it:
+  the loader failed on a different library per start, and an app that did load never got its input read.
+- **Fix:**      `launch_gtk_demo`: the boot only latches `GTK_DEMO_PENDING`; the desktop loop starts the demo on its first pass, after the boot self-tests,
+  with `TICKLESS_IDLE` off and the staged button queue emptied (as the browser launch does).
+- **Measured** (self-test image with `--features live-demos`, KVM, 4 GiB, `proof/small-2026-11e/`): before, 3 of 4 boots `ggtk: error while loading shared libraries`
+  (`libc.so.6`, `libgmodule-2.0.so.0`, `libgdk-3.so.0`: `failed to map segment`), 0 of 4 with a `[keylat]` line (the typed key read by the client); after, 0 of 2 load errors,
+  2 of 2 `[keylat]` lines (ring to client 4 us, queue to read 0.8 ms, draw to screen 5 ms) and the click delivered.
+- **Not checked:** the one-second timer (`GGTK: live tick`): the demo's self-test closes the window 90 desktop loops after its first frame (`[gtk-test] closed GTK window`),
+  before the first tick. In the same boots `[mm-fail]` lines show glib's 64 and 128 MiB thread-arena mmaps refused in the 384 MiB arena (it copes). `[keyfocus]` reports FAILED
+  in a live-demos build (the GTK frame is on top and takes the keyboard, by design there).
+- **Proof:**    `proof/small-2026-11e/README.md`
 
 ### BUG-113 — a hosted X app came up with the windows of X clients that were gone ✅ FIXED
 - **Status:**   FIXED (`f98da76`) · **Severity:** HIGH for a hosted X app that is not the first X client of the boot
@@ -1908,18 +1929,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Proof:**    `proof/validate-2026-11c/README.md`, section 3; `x11-app-*.txt`, `screenshots/x11-app-*.png`.
 - **Open:**     the connections are still not closed when their process ends; they are dropped at the next start.
 
-### BUG-114 — a hosted app that ended by itself leaves its frame, and the next start is refused ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW
+### BUG-114 — a hosted app that ended by itself leaves its frame, and the next start is refused ✅ FIXED (`583cd76`, test `47f4102`)
+- **Status:**   FIXED · **Severity:** LOW
 - **Found:**    2026-11-12 · `hello-x11` on the desktop, validation of `feature/chrome-workplace-2` (`f98da76`).
 - **Actual:**   the app gets its key, destroys its window and ends. The frame stays with the last picture, and
   `app run hello-x11` answers "a hosted app is already running (close its window first)" until the frame is closed
   with its close button. Also: the first start of a boot is resized to its frame (800x600), a later start keeps its
   own 480x240 and is centred.
-- **Analysis:** not done. Whether the base does the same was not determined (there is no X trace on the base to tell
+- **Analysis (first look, before the fix):** not done. Whether the base does the same was not determined (there is no X trace on the base to tell
   whether the key arrived).
+- **Cause:**    the desktop only closed a hosted app on the close button of its frame (`kill_persistent_glibc`); an app that ended by itself
+  (its main task Dead) stayed as "running": frame, arena, address space and the refusal of the next start.
+- **Fix:**      `ring3::persistent_ended()`; the desktop loop closes the app like the close button does and logs `[hosted] the app ended by itself`.
+- **Test first:** `scripts/hosted-end-test.py` (hello-x11, key, second start): before 2 PASS / 3 FAIL (`a hosted app is already running`), after 5/5.
+- **Not done:** the second symptom (the first start of a boot is resized to its frame, a later one keeps its own 480x240 and is centred).
+- **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-115 — with virtio input the first-run tour sometimes ignores Esc ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (the tour then closes on the next click or key) · not new: the same on `c6f033f`
+### BUG-115 — with virtio input the first-run tour sometimes ignores Esc ✅ FIXED (`0c7e65a`, test `scripts/tour-esc-test.py`)
+- **Status:**   FIXED · **Severity:** LOW (the tour then closes on the next click or key) · not new: the same on `c6f033f`
 - **Found:**    2026-11-13 · `gui-smoke.py --input virtio`, monkey soak of the public image (R630, KVM), validation of
   `feature/chrome-workplace-2`: "first-run tour: shown on the first desktop, Esc closes it: no [tour] closed line".
 - **Actual:**   `[tour] first-run tour shown`, then `[vinput] Key { code: 1, pressed: true }` and its release: the Esc
@@ -1927,6 +1954,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   only, virtio input, five times each: the base failed 2 of 5, `f98da76` 0 of 5; `f98da76` failed it once in the
   virtio monkey soak (`proof/validate-2026-11c/tour-virtio.txt`). Not seen with USB input.
 - **Next:**     where the desktop loop takes the Esc of a virtio keyboard while the tour is up.
+- **Cause:**    the tour looks at the key ring once per loop at the top; keys that arrive later in the iteration (the virtio-input poll in the timer tick and
+  the poll right before the key readers) were taken by the character loop (Esc to the focused window) before the tour saw them.
+- **Fix:**      `onboarding::pump_keys()` right before the readers, and while the tour is up (`keys_reserved`) the character loop, the editors and
+  EuroBeheer leave the ring alone: Esc and arrows are the tour's, typing closes it and stays for the desktop.
+- **Test first:** `tour-esc-test.py` (public image, virtio keyboard, Esc 0..1.5 s after the tour appeared): before 27/30 (3 failed), after 80/80.
+- **Proof:**    `proof/small-2026-11e/README.md`
 
 ### BUG-120 — a foreground program after a glibc program got that program's brk region ✅ FIXED
 - **Status:**   FIXED (`75f254f`) · **Severity:** MEDIUM (a musl program started from the shell after the browser
@@ -2483,20 +2516,29 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   Next: where t7 to t11 run (all on the BSP?) and why the scheduler gives the desktop task no larger share; the 27-minute
   period was not seen in this shorter run.
 
-### BUG-200 — the install check "after remount" on virtio disk 0 reads the write-back cache, not the disk ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (since BUG-191 a refused write or flush fails the install before this check)
+### BUG-200 — the install check "after remount" on virtio disk 0 reads the write-back cache, not the disk ✅ FIXED (`7b5c2e0`, test `207c14e` + `scripts/ro-install-test.py`)
+- **Status:**   FIXED · **Severity:** LOW (since BUG-191 a refused write or flush fails the install before this check)
 - **Actual:**   install onto a read-only blank virtio target with the final merge: `after remount hostname=true user=true
   euroid-store=true` although nothing reached the disk. `RootBlk::disk_on(0, ..)` goes through the global root block cache
   (`Backend::Virtio(0)`), so the remount reads the blocks the format just wrote into that cache.
 - **Next:**     verify an install through uncached reads (or drop the cache entries of the target first).
+- **Fix:**      `RootBlk::disk_on_direct`: the installer formats, provisions and verifies a virtio target without the root block cache (writes
+  and reads go to the device; a refused write fails where it is made; clean cache lines of the old content are dropped first).
+- **Test first:** `MODE=inject ro-install-test.py`: disk 0 is a QEMU null-co device (writes accepted and lost, reads zeros). Before: `after remount
+  hostname=true user=true euroid-store=true` with `GPT=false ESP=false` (the check was satisfied by cache lines). After: all false, `creating the EuroFS root failed`.
+  A read-only target as in the report no longer gets that far since BUG-191 and BUG-201.
+- **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-201 — the install wizard offers a read-only disk as target ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW
+### BUG-201 — the install wizard offers a read-only disk as target ✅ FIXED (`b2c1de1`, test `207c14e`)
+- **Status:**   FIXED · **Severity:** LOW
 - **Actual:**   a blank virtio disk with `readonly=on` (the driver logs `READ-ONLY`) is selectable; the install then fails
   (since BUG-191 with the reason `the disk refused ... write(s)`). It should not be offered.
+- **Fix:**      `Target::read_only` (`virtio_blk::is_read_only_dev`): the disk is shown as "read-only" in the list, is not selectable and Next says why.
+- **Test first:** `[wizard-targets]` with a blank read-only virtio disk 1: `selectable=true` FAILED before, `selectable=false` OK after.
+- **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-202 — the NMI probe reads past the top of a small kernel stack and the task it interrupted is ended as a stack overflow ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (only when an NMI probe lands on a kernel task near its stack top; here the serial TX task)
+### BUG-202 — the NMI probe reads past the top of a small kernel stack and the task it interrupted is ended as a stack overflow ✅ FIXED (`26e31a2`, test `207c14e`)
+- **Status:**   FIXED · **Severity:** MEDIUM (only when an NMI probe lands on a kernel task near its stack top; here the serial TX task)
 - **Actual:**   `chrome-smoke --only sites --rounds 3`, public image of `feature/chrome-fix190`, R630 under load: the harness saw a
   13 s console answer and sent an NMI; the probe interrupted task 4 (`serial::tx_task`, in `Uart::write_direct`) with RSP
   0x8000018e20, printed eight addresses of its stack scan, then `[g1] KERNEL STACK OVERFLOW: task 4 hit guard page
@@ -2507,5 +2549,17 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   overflow of task 4. Not related to the fix190 changes (BUG-157 probe of `feature/chrome-mem2`).
 - **Next:**     bound the scan by the top of the interrupted task stack (or the end of its page), with a test that probes a
   task whose RSP is within 2 KiB of its stack top.
+- **Fix:**      `interrupts::nmi_scan_end(rsp, stack_top)`: at most 2 KiB, never past the top of the interrupted scheduler-task stack
+  (`sched::task_stack_top_containing`, lock-free), and on an unknown stack (boot, AP, IST) never out of the page of RSP.
+- **Test first:** `[nmi-bound]` with RSP 0x1e0 below a top: scan end 0x8000019620 (past the top) FAILED before, 0x8000019000 OK after. An NMI was not provoked on a loaded machine.
+- **Proof:**    `proof/small-2026-11e/README.md`
+
+### BUG-220 — the self-test image panics at boot when the install on a read-only disk 0 failed (`EuroFS format: IoError`) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (the self-test image installs on a blank disk 0 by itself; a release image never writes at boot)
+- **Found:**    2026-11-14 · `scripts/ro-install-test.py` on the self-test image of `3ecde9e`, read-only blank virtio disk as disk 0 (`proof/small-2026-11e/`).
+- **Actual:**   after `[q1x3] ... installation FAILED: the disk refused 51256 write(s)` the boot goes on to use disk 0 as its root: no root partition mounts,
+  `EuroFs::format(...).expect("EuroFS format")` at `main.rs` (the `Err(_)` arm of the root mount) fails with `IoError` and the kernel panics (`[PANIC] ... EuroFS format: IoError`).
+  The boot has a RAM root to fall back to and does not use it. Also: a root that fails to mount is formatted, not reported.
+- **Next:**     fall back to the RAM root when the format of the disk root fails (and think about whether a root that does not mount should be formatted at all).
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

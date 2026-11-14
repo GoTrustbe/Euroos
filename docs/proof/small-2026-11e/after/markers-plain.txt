@@ -1,0 +1,5 @@
+[q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-pc'=true user='anke'=true euroid-store=true → OK (bootable + provisioned installation from own media; boots standalone)
+[randid] dhcp xid: 16 draws, all different, none of the old constants ✓
+[randid] smb client challenge: 16 draws, all different, no RTC/EURO pattern ✓
+[wizard-targets] virtio disk 1 (2048 MiB) is read-only: selectable=false → OK (not offered) ✓
+[nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓

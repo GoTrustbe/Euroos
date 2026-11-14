@@ -1,0 +1,5 @@
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-pc'=false user='anke'=false euroid-store=false → FAILED
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: creating the EuroFS root failed: Corruption
+[ro-install] PASS: install reported
+[ro-install] PASS: nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false
+[ro-install] PASS: install verdict FAILED

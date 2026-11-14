@@ -1,0 +1,99 @@
+[gui-smoke] QEMU pid 3499011, booting (KVM, 4 cpu, 4G)...
+[gui-smoke] ok   boot: desktop after 3 s, screen 1920x1080, layout us
+[gui-smoke] ok   first-run tour: shown on the first desktop, Esc closes it
+[gui-smoke] ok   close every window the desktop boots with
+[gui-smoke] ok   files: dock tile opens a window
+[gui-smoke] ok   files: used (clicks, typing, keys): window at 119,69; screenshot app-00-files.png
+[gui-smoke] ok   files: window moves with a title-bar drag: 119,69 -> 189,119
+[gui-smoke] ok   files: close button closes the window
+[gui-smoke] ok   notes: dock tile opens a window
+[gui-smoke] ok   notes: used (clicks, typing, keys): window at 869,69; screenshot app-01-notes.png
+[gui-smoke] ok   notes: window moves with a title-bar drag: 869,69 -> 939,119
+[gui-smoke] ok   notes: close button closes the window
+[gui-smoke] ok   clock: dock tile opens a window
+[gui-smoke] ok   clock: used (clicks, typing, keys): window at 869,579; screenshot app-02-clock.png
+[gui-smoke] ok   clock: window moves with a title-bar drag: 869,579 -> 939,629
+[gui-smoke] ok   clock: close button closes the window
+[gui-smoke] ok   browser: dock tile opens a window
+[gui-smoke] ok   browser: used (clicks, typing, keys): window at 199,63; screenshot app-03-browser.png
+[gui-smoke] ok   browser: window moves with a title-bar drag: 199,63 -> 269,113
+[gui-smoke] ok   browser: close button closes the window
+[gui-smoke] ok   terminal: dock tile opens a window
+[gui-smoke] ok   terminal: typed command runs (keyboard -> shell -> serial)
+[gui-smoke] ok   terminal: used (clicks, typing, keys): window at 757,149; screenshot app-04-terminal.png
+[gui-smoke] ok   terminal: window moves with a title-bar drag: 757,149 -> 827,199
+[gui-smoke] ok   terminal: close button closes the window
+[gui-smoke] ok   settings: dock tile opens a window
+[gui-smoke] ok   settings: used (clicks, typing, keys): window at 289,119; screenshot app-05-settings.png
+[gui-smoke] ok   settings: window moves with a title-bar drag: 289,119 -> 359,169
+[gui-smoke] ok   settings: close button closes the window
+[gui-smoke] ok   store: dock tile opens a window
+[gui-smoke] ok   store: used (clicks, typing, keys): window at 249,119; screenshot app-06-store.png
+[gui-smoke] ok   store: window moves with a title-bar drag: 249,119 -> 319,169
+[gui-smoke] ok   store: close button closes the window
+[gui-smoke] ok   star: dock tile opens a window
+[gui-smoke] ok   star: used (clicks, typing, keys): window at 329,89; screenshot app-07-star.png
+[gui-smoke] ok   star: window moves with a title-bar drag: 329,89 -> 399,139
+[gui-smoke] ok   star: close button closes the window
+[gui-smoke] ok   text: dock tile opens a window
+[gui-smoke] ok   text: used (clicks, typing, keys): window at 149,89; screenshot app-08-text.png
+[gui-smoke] ok   text: window moves with a title-bar drag: 149,89 -> 219,139
+[gui-smoke] ok   text: close button closes the window
+[gui-smoke] ok   monitor: dock tile opens a window
+[gui-smoke] ok   monitor: used (clicks, typing, keys): window at 209,109; screenshot app-09-monitor.png
+[gui-smoke] ok   monitor: window moves with a title-bar drag: 209,109 -> 279,159
+[gui-smoke] ok   monitor: close button closes the window
+[gui-smoke] ok   log: dock tile opens a window
+[gui-smoke] ok   log: used (clicks, typing, keys): window at 869,109; screenshot app-10-log.png
+[gui-smoke] ok   log: window moves with a title-bar drag: 869,109 -> 939,159
+[gui-smoke] ok   log: close button closes the window
+[gui-smoke] ok   three apps open together: 2 title bars visible
+[gui-smoke] ok   Alt-Tab shows the switcher, releasing Alt closes it and raises a window: switcher panel shown=True, closed after Alt release=True
+[gui-smoke] ok   Alt-Tab with the text editor in front
+[gui-smoke] ok   workspace switch (Alt+2 empty, Alt+1 windows back): desktop 2: 0 windows, back on 1: 2
+[gui-smoke] ok   launcher opens and takes a search
+[gui-smoke] ok   launcher search 'term' + Enter opens a working terminal
+[gui-smoke] ok   right click opens a context menu
+[gui-smoke] ok   Esc closes the context menu (BUG-057)
+[gui-smoke] ok   notification list: a click on the status panel opens it
+[gui-smoke] ok   notification list open: the desktop repaints on change, not in every loop iteration (BUG-057): 1 full repaints in 296 loop iterations
+[gui-smoke] ok   notification list: Esc closes it (BUG-057)
+[gui-smoke] ok   notification list: a click beside it closes it (BUG-057)
+[gui-smoke] ok   AltGr: third-level characters on be-azerty, fr-azerty and de-qwertz (BUG-052)
+[gui-smoke] ok   AltGr+Tab and AltGr+2 in the Terminal: no switcher, no workspace change (BUG-052): 1 window(s) after AltGr+2
+[gui-smoke] ok   AltGr+Tab and AltGr+2 in EuroText: no switcher, no workspace change (BUG-052): 1 window(s) after AltGr+2
+[gui-smoke] ok   mouse wheel scrolls EuroBeheer down and back up
+[gui-smoke] ok   mouse wheel scrolls the Terminal back, a key returns to the prompt
+[gui-smoke] ok   Terminal: after a foreground program, commands that reach the process table and a userspace driver (BUG-063): hello: EuroOS userspace program (C, ring 3) — via syscall; ps: 3 line(s); no e1000e NIC in this run (--net e1000e adds the userspace driver)
+[gui-smoke] ok   desktop back to rest
+[gui-smoke] monkey soak: 20.0 min, seed 20261114
+[gui-smoke] monkey: 50 actions, 38 s, max console latency 50 ms
+[gui-smoke] monkey: 100 actions, 104 s, max console latency 50 ms
+[gui-smoke] monkey: 150 actions, 145 s, max console latency 50 ms
+[gui-smoke] monkey: 200 actions, 181 s, max console latency 50 ms
+[gui-smoke] ok   monkey: desktop still works after 200 actions (terminal runs a typed command)
+[gui-smoke] monkey: 250 actions, 233 s, max console latency 50 ms
+[gui-smoke] monkey: 300 actions, 276 s, max console latency 50 ms
+[gui-smoke] monkey: 350 actions, 316 s, max console latency 100 ms
+[gui-smoke] monkey: 400 actions, 355 s, max console latency 250 ms
+[gui-smoke] ok   monkey: desktop still works after 400 actions (terminal runs a typed command)
+[gui-smoke] monkey: 450 actions, 407 s, max console latency 250 ms
+[gui-smoke] monkey: 500 actions, 461 s, max console latency 250 ms
+[gui-smoke] monkey: 550 actions, 501 s, max console latency 250 ms
+[gui-smoke] monkey: 600 actions, 546 s, max console latency 250 ms
+[gui-smoke] ok   monkey: desktop still works after 600 actions (terminal runs a typed command)
+[gui-smoke] monkey: 650 actions, 604 s, max console latency 250 ms
+[gui-smoke] monkey: 700 actions, 675 s, max console latency 250 ms
+[gui-smoke] monkey: 750 actions, 730 s, max console latency 250 ms
+[gui-smoke] monkey: 800 actions, 771 s, max console latency 250 ms
+[gui-smoke] ok   monkey: desktop still works after 800 actions (terminal runs a typed command)
+[gui-smoke] monkey: 850 actions, 822 s, max console latency 250 ms
+[gui-smoke] monkey: 900 actions, 939 s, max console latency 250 ms
+[gui-smoke] monkey: 950 actions, 982 s, max console latency 250 ms
+[gui-smoke] monkey: 1000 actions, 1038 s, max console latency 250 ms
+[gui-smoke] ok   monkey: desktop still works after 1000 actions (terminal runs a typed command)
+[gui-smoke] monkey: 1050 actions, 1084 s, max console latency 250 ms
+[gui-smoke] monkey: 1100 actions, 1126 s, max console latency 250 ms
+[gui-smoke] monkey: 1150 actions, 1201 s, max console latency 250 ms
+[gui-smoke] ok   monkey soak 20.0 min, seed 20261114: 1150 actions (alt-tab 34, altgr 12, click 212, click-in-window 145, ctrl-alt-esc 6, dock 127, double-click 48, drag 51, key 115, launcher 28, move-window 87, right-click 42, status-panel 9, title-button 52, type 130, wheel 16, workspace 36); max console latency 250 ms
+[gui-smoke] PASS — 73/73 steps ok, report and screenshots in /srv/euroos/small-runs/gs/virtio-soak
