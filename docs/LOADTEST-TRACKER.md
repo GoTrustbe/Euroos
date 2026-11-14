@@ -2176,10 +2176,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   windows of the QEMU wav above the noise floor (RMS 1158), no media error; Opus alone the same; before: 0.0 s, RMS 0, error 3.
   H.264/AAC still fails: BUG-161 (the build has no such codecs).
 
-### BUG-161 — this Chromium build has no H.264/AAC ⬜ OPEN (build, not kernel)
-- **Actual:**   `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')` is empty, an `.mp4` fails with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (`error 4`). VP9/Opus/VP8 are supported.
+### BUG-161 — this Chromium build has no H.264/AAC ✅ DECISION: open codecs only (not a bug)
+- **Decision:** (2026-11-14, the owner) EuroOS plays **only open codecs: VP9, AV1, Opus, Vorbis** (plus VP8). **No H.264, AAC or HEVC**, because of
+  the patents and licence fees. The Chromium build stays without `proprietary_codecs`/`ffmpeg_branding=Chrome`; this is the wanted state, not a
+  defect, and nothing is to be fixed. Sites that only offer H.264/AAC do not play; that limit is documented in `CHROME-ON-EUROOS.md`
+  (Beperkingen). Video tests use the local VP9+Opus page (`chrome-mem-soak.py --local-video-dir`, `chrome-smoke.py --only localvideo`).
+- **Actual (what was observed):**   `canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')` is empty, an `.mp4` fails with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (`error 4`). VP9/Opus/VP8 are supported.
   YouTube serves VP9/AV1 + Opus to such a browser, so it does not block criterion 3; sites that only offer H.264 will not play.
-- **Next:**     decide whether `proprietary_codecs`/`ffmpeg_branding=Chrome` is wanted (licence); otherwise document it.
+- **Next:**     none (decided; documented).
 
 ### BUG-162 — a click on a page link is sometimes not followed ✅ NOT A EUROOS BUG (harness timing)
 - **Status:**   closed for the kernel · the harness change is described below
