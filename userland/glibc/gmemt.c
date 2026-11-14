@@ -3,6 +3,10 @@
  *   gmemt forkfail   a fork the kernel refuses must give back all it took
  *   gmemt forkmany   270 children one after the other, every second one ended by a signal:
  *                    the slots of ended processes are used again (the task table has 256)
+ *   gmemt forkidle   40 children that sit idle at the same time, as the utility processes of
+ *                    a browser do: the arena of a child costs what the child has in it, not
+ *                    its full size (BUG-156); a child sees the memory of its parent, zeros
+ *                    where nobody wrote, and the kernel can write into such a page
  *   gmemt madvise    madvise(MADV_DONTNEED) gives the frames back; the pages read as zeros
  *   gmemt memfd      a memory file is made of frames, not of kernel heap; one memory for
  *                    read/write and every mapping; ENOSPC at its limit, no kill
@@ -131,6 +135,117 @@ static int mode_forkmany(void)
     check(wrong == 0, "every child reported the way it ended (%ld did not)", wrong, 0, 0);
     long d1 = kacct("demand_free_kb "), p1 = kacct("procpool_free_kb ");
     check(d1 >= d0 - 64 && p1 >= p0 - 64, "pools afterwards: demand %ld kB free, process %ld kB free (demand %ld before)", d1, p1, d0);
+    return 0;
+}
+
+#include <poll.h>
+static char pat(long off)
+{
+    return (char)((off >> 12) | 1);
+}
+
+static int mode_forkidle(void)
+{
+    enum { MAXKIDS = 40 };
+    long p0 = kacct("procpool_free_kb ");
+    /* Arena memory (the brk heap): 1 MiB with something in every page, then
+     * 1 MiB nobody wrote. */
+    long len = 1 * MIB;
+    char *a = sbrk(2 * len);
+    if (a == (char *)-1)
+        return 1;
+    for (long j = 0; j < len; j += 4096)
+        a[j] = pat(j);
+    /* A machine with a small pool: as many as fit at 8 MiB each. */
+    int want = MAXKIDS;
+    if (p0 > 0 && p0 / 8192 < want)
+        want = p0 / 8192 < 4 ? 4 : p0 / 8192;
+    int pfd[2];
+    if (pipe(pfd))
+        return 1;
+    pid_t kids[MAXKIDS];
+    int made = 0, refused = 0, first_errno = 0;
+    for (int i = 0; i < want; i++) {
+        pid_t c = fork();
+        if (c == 0) {
+            char res = 'k';
+            close(pfd[0]);
+            for (long j = 0; j < len; j += 4096)
+                if (a[j] != pat(j))
+                    res = 'P';
+            for (long j = len; j < 2 * len; j += 4096)
+                if (a[j] != 0)
+                    res = 'Z';
+            /* A page of its own in both halves. */
+            a[i * 4096L] = 'c';
+            a[len + i * 4096L] = 'c';
+            /* The kernel writes into an arena page nobody touched yet. */
+            char *k = a + len + (i + 64) * 4096L + 100;
+            int fd = open("/proc/euroos/mem", O_RDONLY);
+            if (fd < 0 || read(fd, k, 512) <= 0 || k[0] == 0)
+                res = 'K';
+            if (fd >= 0)
+                close(fd);
+            if (write(pfd[1], &res, 1) != 1)
+                _exit(3);
+            for (;;)
+                pause();
+        }
+        if (c < 0) {
+            if (!refused)
+                first_errno = errno;
+            refused++;
+            continue;
+        }
+        kids[made++] = c;
+    }
+    int good = 0, bad = 0;
+    for (int i = 0; i < made; i++) {
+        struct pollfd pf = { pfd[0], POLLIN, 0 };
+        char r = 0;
+        if (poll(&pf, 1, 20000) != 1 || read(pfd[0], &r, 1) != 1)
+            break;
+        if (r == 'k')
+            good++;
+        else
+            bad++;
+    }
+    long p1 = kacct("procpool_free_kb ");
+    check(made == want && refused == 0, "%ld idle children at the same time: %ld made (first errno of a refused one %ld)", want, made, first_errno);
+    check(made > 0 && good == made && bad == 0,
+          "each sees the arena of its parent, zeros where nobody wrote, and the kernel wrote into a page it never touched (%ld of %ld, %ld wrong)",
+          good, made, bad);
+    long per = made ? (p0 - p1) / made : -1;
+    check(made > 0 && per <= 8192, "an idle child costs %ld kB of the process pool (at most 8192; %ld kB were free)", per, p0, 0);
+    int own = 1;
+    for (long j = 0; j < len; j += 4096)
+        own &= a[j] == pat(j);
+    for (long j = len; j < 2 * len; j += 4096)
+        own &= a[j] == 0;
+    check(own, "the memory of the parent is as it was", 0, 0, 0);
+    /* A child that forks hands on its own arena pages, not those of the first parent. */
+    pid_t c = fork();
+    if (c == 0) {
+        a[len] = 'g';
+        a[0] = 'h';
+        pid_t g = fork();
+        if (g == 0)
+            _exit(a[len] == 'g' && a[0] == 'h' && a[4096] == pat(4096) && a[len + 4096] == 0 ? 0 : 1);
+        int gs = 0;
+        if (g > 0)
+            waitpid(g, &gs, 0);
+        _exit(g > 0 && WIFEXITED(gs) && WEXITSTATUS(gs) == 0 ? 0 : 1);
+    }
+    int st = -1;
+    if (c > 0)
+        waitpid(c, &st, 0);
+    check(c > 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0, "a child that forks hands on its own arena (pid %ld, status 0x%lx)", c, st, 0);
+    for (int i = 0; i < made; i++) {
+        kill(kids[i], SIGKILL);
+        waitpid(kids[i], 0, 0);
+    }
+    long p2 = kacct("procpool_free_kb ");
+    check(p2 >= p0 - 64, "process pool after they ended: %ld kB free, %ld before", p2, p0, 0);
     return 0;
 }
 
@@ -301,6 +416,8 @@ int main(int argc, char **argv)
         r = mode_forkfail();
     else if (!strcmp(mode, "forkmany"))
         r = mode_forkmany();
+    else if (!strcmp(mode, "forkidle"))
+        r = mode_forkidle();
     else if (!strcmp(mode, "madvise"))
         r = mode_madvise();
     else if (!strcmp(mode, "memfd"))

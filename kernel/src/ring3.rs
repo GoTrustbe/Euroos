@@ -13636,7 +13636,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
     let prev_deadline = GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
         let kill = mode == "forkkill";
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
