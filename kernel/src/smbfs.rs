@@ -59,9 +59,9 @@ pub fn connect(server: Ipv4Addr, port: u16) -> Option<KernelTcp> {
 
 /// The 8-byte client challenge of the NTLMv2 session setup (BUG-087).
 pub fn client_challenge() -> [u8; 8] {
-    // Client challenge from the RTC (good enough; not secret).
-    let e = crate::rtc::epoch();
-    [(e >> 0) as u8, (e >> 8) as u8, (e >> 16) as u8, (e >> 24) as u8, 0x45, 0x55, 0x52, 0x4F]
+    // The client's contribution to the NTLMv2 response: unpredictable per session,
+    // from the CSPRNG (it was the RTC second and a fixed tail).
+    crate::entropy::draw_wait::<8>()
 }
 
 /// Connect + negotiate + authenticate + tree-connect to `\\<server>\<share>`.
