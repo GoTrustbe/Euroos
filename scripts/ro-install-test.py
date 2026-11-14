@@ -6,7 +6,12 @@ write, so nothing may read back: the check "after remount" must say hostname/use
 euroid-store = false and the install FAILED (BUG-200: it read the write-back cache and
 said true). The wizard target list must not offer the disk (BUG-201, [wizard-targets]).
 
-usage: ro-install-test.py IMAGE OUTDIR [CPUS]   (KVM, restrict=on, no network)
+MODE=inject (env): BUG-200 on its own. The disk is NOT read-only but QEMU's blkdebug fails every write to the first
+sector of the EuroFS root partition (sector 919552 of a 2 GiB disk: 2048 + 256 MiB ESP + two 96 MiB slots). The boot files
+and the root blocks reach the cache without error, the flush fails, and the check "after remount" must not be satisfied
+by cache lines: nothing of the root partition is on the medium, so hostname/user/euroid-store must read false.
+
+usage: [MODE=inject] ro-install-test.py IMAGE OUTDIR [CPUS]   (KVM, restrict=on, no network)
 """
 import os, re, subprocess, sys, time
 IMG, OUT = sys.argv[1], os.path.abspath(sys.argv[2])
@@ -14,9 +19,16 @@ CPUS = sys.argv[3] if len(sys.argv) > 3 else "24-27"
 os.makedirs(OUT, exist_ok=True)
 tgt = os.path.join(OUT, "ro-target.img"); log = os.path.join(OUT, "serial-ro.log")
 subprocess.run(["qemu-img", "create", "-f", "raw", tgt, "2G"], check=True, stdout=subprocess.DEVNULL)
+MODE = os.environ.get("MODE", "ro")
+if MODE == "inject":
+    conf = os.path.join(OUT, "blkdebug.conf")
+    open(conf, "w").write(chr(10).join(["[inject-error]", 'event = "write_aio"', 'errno = "5"', 'sector = "919552"', 'immediately = "on"', ""]))
+    drive = f"id=tgt,format=raw,file=blkdebug:{conf}:{tgt},if=none"
+else:
+    drive = f"id=tgt,format=raw,file={tgt},if=none,readonly=on"
 p = subprocess.Popen(["taskset", "-c", CPUS, "qemu-system-x86_64", "-machine", "q35", "-enable-kvm", "-cpu", "host", "-m", "2048M", "-smp", "2",
     "-bios", "/usr/share/ovmf/OVMF.fd", "-display", "none", "-serial", f"file:{log}", "-no-reboot", "-nic", "none",
-    "-drive", f"format=raw,file={IMG},snapshot=on", "-drive", f"id=tgt,format=raw,file={tgt},if=none,readonly=on",
+    "-drive", f"format=raw,file={IMG},snapshot=on", "-drive", drive,
     "-device", "virtio-blk-pci,drive=tgt,disable-modern=on"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 def txt():
     try: return open(log, errors="replace").read()
@@ -40,7 +52,8 @@ check("after remount nothing reads back (hostname/user/euroid-store = false)",
 check("install verdict FAILED", bool(line) and line.rstrip().endswith("FAILED"))
 w = [l for l in t.splitlines() if l.startswith("[wizard-targets]")]
 print("\n".join("[ro-install] " + l for l in w))
-check("wizard does not offer the read-only disk", bool(w) and all("FAILED" not in l for l in w))
+if MODE == "ro":
+    check("wizard does not offer the read-only disk", bool(w) and all("FAILED" not in l for l in w))
 for tag in ("[randid] dhcp xid", "[randid] smb client challenge", "[nmi-bound]"):
     l = [x for x in t.splitlines() if x.startswith(tag)]
     print(chr(10).join("[ro-install] " + x for x in l))
