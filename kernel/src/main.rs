@@ -6137,6 +6137,12 @@ fn main() -> Status {
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
         crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
+        // BUG-115: the first-run tour gets the first look at what was typed, again, right before
+        // the readers below take it (an Esc that arrived after the tour's look at the top of the
+        // loop went to the focused window and the tour stayed up). While the tour is up the
+        // readers below leave the ring alone: the tour takes its own keys or closes on the rest.
+        if onboarding::pump_keys() { need_full = true; }
+        let tour_keys = onboarding::keys_reserved();
 
         // A graphical app (the DOOM port) owns the keyboard while it runs: route
         // RAW scancodes (press/release + arrows/ctrl, which poll_key's char
@@ -6202,7 +6208,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
+        let editor_focused = !files::prompt_open() && (text_focused || notes_focused) && !tour_keys
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
         // The install wizard takes rich keys (Tab, arrows, Esc) while it is on top.
         let installer_focused = !files::prompt_open()
@@ -6217,7 +6223,7 @@ fn main() -> Status {
             }
         }
         // T2-hook: EuroBeheer takes rich keys (Tab, arrows, Page keys) while it is on top.
-        let settings_keys = settings_focused && !files::prompt_open() && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open(); // T2-hook
+        let settings_keys = settings_focused && !tour_keys && !files::prompt_open() && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open(); // T2-hook
         if settings_keys { let fi = focused.unwrap(); while let Some(k) = ps2::poll_key_ex() { settings_ui::key(ctx.fs, windows[fi].x, windows[fi].y, windows[fi].w, windows[fi].h, k); need_full = true; } } // T2-hook
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
@@ -6239,7 +6245,7 @@ fn main() -> Status {
         let xclient_keys = focused.map(|i| windows[i].app == suite_ui::SuiteApp::XClient).unwrap_or(false)
             && ring3::persistent_running()
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open() && !files::prompt_open();
-        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
+        while let Some(k) = if tour_keys || editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
