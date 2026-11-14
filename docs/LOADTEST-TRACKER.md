@@ -2554,12 +2554,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Test first:** `[nmi-bound]` with RSP 0x1e0 below a top: scan end 0x8000019620 (past the top) FAILED before, 0x8000019000 OK after. An NMI was not provoked on a loaded machine.
 - **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-220 — the self-test image panics at boot when the install on a read-only disk 0 failed (`EuroFS format: IoError`) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (the self-test image installs on a blank disk 0 by itself; a release image never writes at boot)
+### BUG-220 — the self-test image panics at boot when the install on a read-only disk 0 failed (`EuroFS format: IoError`) ✅ FIXED (`9028792`, test `8f36863`)
+- **Status:**   FIXED · **Severity:** LOW (the self-test image installs on a blank disk 0 by itself; a release image never writes at boot)
 - **Found:**    2026-11-14 · `scripts/ro-install-test.py` on the self-test image of `3ecde9e`, read-only blank virtio disk as disk 0 (`proof/small-2026-11e/`).
 - **Actual:**   after `[q1x3] ... installation FAILED: the disk refused 51256 write(s)` the boot goes on to use disk 0 as its root: no root partition mounts,
   `EuroFs::format(...).expect("EuroFS format")` at `main.rs` (the `Err(_)` arm of the root mount) fails with `IoError` and the kernel panics (`[PANIC] ... EuroFS format: IoError`).
   The boot has a RAM root to fall back to and does not use it. Also: a root that fails to mount is formatted, not reported.
 - **Next:**     fall back to the RAM root when the format of the disk root fails (and think about whether a root that does not mount should be formatted at all).
+- **Fix:**      a disk root that can be neither mounted nor formatted falls back to a RAM root: serial line `[euro] the install on disk 0 failed ... booting a RAM root`, the registered boot disk is the RAM one, and the desktop queues the notice "Disk not usable". `ro-install-test.py MODE=ro0`: before `KERNEL PANIC ... EuroFS format: IoError` (no desktop), after 5/5 and the desktop. Not changed: a root that does not mount is still formatted.
+- **Proof:**    `proof/small-2026-11e/bug220/`
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

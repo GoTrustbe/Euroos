@@ -1,0 +1,2 @@
+[euro] the install on disk 0 failed or the disk root cannot be formatted (IoError): booting a RAM root, nothing is saved on the disk
+[notify] Disk not usable: The disk could not be written: EuroOS runs from a RAM root, nothing is saved.

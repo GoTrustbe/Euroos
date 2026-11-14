@@ -57,7 +57,7 @@ BUG-087: the `[io5]` SMB mount self-test needs a server and was not run. BUG-086
 ## Decision and new bug
 
 BUG-161 is marked in the tracker and in `docs/CHROME-ON-EUROOS.md` as a decision: only open codecs (VP9, AV1, Opus, Vorbis), no H.264/AAC/HEVC because of patents.
-New: BUG-220 (the self-test image panics at boot after an install on a read-only disk 0 failed: `EuroFS format: IoError`).
+BUG-220 (the self-test image panics at boot after an install on a read-only disk 0 failed: `EuroFS format: IoError`) was found here and fixed afterwards (`8f36863`, `9028792`): RAM-root fallback with a serial line and an on-screen notice; proof in `bug220/` (gui-smoke public 67/67, wizard 15/15, KVM 2 GiB boot 0 worse against validate-2026-11d).
 
 ## Files
 

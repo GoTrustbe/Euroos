@@ -446,6 +446,9 @@ static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 ///
 /// The boot-phase run proved chrome CAN paint here; this is what makes it an app you
 /// open, next to the other windows, with the desktop routing input into it.
+/// BUG-220: the root disk could not be formatted; the boot runs from a RAM root.
+static ROOT_FALLBACK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// BUG-112: the live GTK demo of `--features live-demos` waits for the desktop loop to start it.
 static GTK_DEMO_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -1117,7 +1120,8 @@ fn main() -> Status {
     };
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
-    let on_disk = rootdev.is_disk();
+    let mut on_disk = rootdev.is_disk();
+    let mut rootdev = rootdev;
     rootdev.register_as_boot_disk(); // the A/B update path addresses this disk, on any bus
     // J1/3C-1: the live root FS runs THROUGH a write-through block cache (concurrent
     // read-lock hits, CLOCK eviction, dirty write-back). 256 × 4 KiB = 1 MiB.
@@ -1134,8 +1138,22 @@ fn main() -> Status {
             f
         }
         Err(_) => {
-            let mut f = EuroFs::format(BlockCache::new(rootdev, ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
-                .expect("EuroFS format");
+            // BUG-220: a disk root that can be neither mounted nor formatted (a read-only disk 0 after a
+            // failed install, a disk that refuses writes) is not a reason to panic: the boot goes on
+            // with a RAM root and says so, on the serial line and on the screen.
+            let mut f = match EuroFs::format(BlockCache::new(rootdev.clone(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch()) {
+                Ok(f) => f,
+                Err(e) if on_disk => {
+                    serial_println!("[euro] the install on disk 0 failed or the disk root cannot be formatted ({e:?}): booting a RAM root, nothing is saved on the disk");
+                    ROOT_FALLBACK.store(true, core::sync::atomic::Ordering::Relaxed);
+                    on_disk = false;
+                    rootdev = rootblk::RootBlk::ram(2048);
+                    rootdev.register_as_boot_disk();
+                    EuroFs::format(BlockCache::new(rootdev.clone(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
+                        .expect("EuroFS format (RAM root)")
+                }
+                Err(e) => panic!("EuroFS format: {e:?}"),
+            };
             populate_fs(&mut f);
             serial_println!(
                 "[euro] EuroFS formatted + populated{} (through 1 MiB block cache)",
@@ -5425,6 +5443,9 @@ fn main() -> Status {
     );
     // A first notification so the shade is not empty and the toast channel shows.
     notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
+    if ROOT_FALLBACK.load(core::sync::atomic::Ordering::Relaxed) {
+        notify::push("Disk not usable", "The disk could not be written: EuroOS runs from a RAM root, nothing is saved.", interrupts::ticks());
+    }
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
     watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)

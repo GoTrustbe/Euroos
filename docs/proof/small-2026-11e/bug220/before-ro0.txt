@@ -1,0 +1,4 @@
+before (final-selftest.img, no fix): the boot panics, the script never sees the desktop:
+========== KERNEL PANIC ==========
+[PANIC] panicked at kernel/src/main.rs:1138:18:
+EuroFS format: IoError

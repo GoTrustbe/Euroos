@@ -1,0 +1,10 @@
+# BUG-220 targeted regression, image of 9028792
+k-2g end=marker after 313s failed-lines=0 crash-lines=0
+== /srv/euroos/final-runs/kvm/k-2g.log  vs  kvm/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
