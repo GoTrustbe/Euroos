@@ -11126,6 +11126,17 @@ fn do_glibc_fork() -> u64 {
     // [memt]: the self-test asks for the next forks to be refused here, the
     // place where a fork has taken everything it takes.
     let injected = FORK_REFUSE_NEXT.load(Ordering::Relaxed) > 0 && FORK_REFUSE_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
+    // [memt] forkkill: the forking thread stops here, as if its copy never
+    // ended, until the launcher's deadline kills the run (BUG-180). Bounded,
+    // so a hook left set cannot hold a fork for ever.
+    if FORK_PARK_NEXT.load(Ordering::Relaxed) > 0 && FORK_PARK_NEXT.fetch_sub(1, Ordering::Relaxed) > 0 {
+        FORK_PARKED.fetch_add(1, Ordering::Relaxed);
+        let until = crate::interrupts::ticks() + 60_000;
+        while crate::interrupts::ticks() < until && syscall_yield_ok() {
+            crate::sched::sleep_ticks(10);
+            yield_reacquire();
+        }
+    }
     let (slot, kstack_top) = match if injected { None } else { alloc_thread_kstack() } {
         Some(s) => s,
         None => {
@@ -13529,6 +13540,10 @@ fn shared_frames_drop_all() {
 
 /// Forks to refuse from now on (the [memt] self-test).
 static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Forks that stop where a refused one would be refused, until their run is
+/// killed ([memt] forkkill), and how many did.
+static FORK_PARK_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FORK_PARKED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// [memt]: memory that comes back, and what happens when it runs out. Five
 /// runs of `gmemt` (userland/glibc/gmemt.c), each in a demand-paged process:
@@ -13541,7 +13556,14 @@ static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::Ato
 /// * memfd: a memory file is frames, one memory for read/write and every
 ///   mapping, with ENOSPC at a limit that follows the pool (BUG-154);
 /// * oom: the main process needs a page while a child holds the pool; the
-///   child is ended and the main process goes on (BUG-155).
+///   child is ended and the main process goes on (BUG-155);
+/// * forkkill: the run is killed by the launcher's deadline while it is inside
+///   a fork that has taken the child's arena, tables and demand pages; all of
+///   it comes back (BUG-180). The fork is held there by FORK_PARK_NEXT.
+///
+/// Every run gets a deadline of 360 s (forkkill: 30 s). forkmany copies a
+/// 96 MiB arena 270 times: about 120 s under TCG on the R630, which is the
+/// default deadline (BUG-180: one TCG boot was killed in its 263rd fork).
 pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
     let prev_demand = DEMAND_ENABLED.swap(true, Ordering::Relaxed);
@@ -13549,9 +13571,16 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut all = true;
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0)] {
+    let prev_deadline = GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
+        let kill = mode == "forkkill";
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
+        FORK_PARK_NEXT.store(kill as u32, Ordering::Relaxed);
+        FORK_PARKED.store(0, Ordering::Relaxed);
+        GLIBC_DEADLINE_TICKS.store(if kill { 3_000 } else { 36_000 }, Ordering::Relaxed);
+        // forkkill runs the forks of forkmany; its first one is held.
+        let arg: &[u8] = if kill { b"forkmany" } else { mode.as_bytes() };
         // The small arena for every mode: 270 forks copy it 270 times, and on a
         // 1 GiB machine the process pool (160 MiB) holds one child of 96 MiB and
         // none of 192 (the forks these tests need were refused there).
@@ -13559,8 +13588,10 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         GLIBC_ARENA_MIB.store(prev_arena.min(96), Ordering::Relaxed);
         let free0 = falloc.free_frames();
         let pp0 = crate::procpool::free_frames();
-        let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", mode.as_bytes()], &[b"PATH=/bin"], caps);
+        let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", arg], &[b"PATH=/bin"], caps);
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
+        FORK_PARK_NEXT.store(0, Ordering::Relaxed);
+        GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
         DEMAND_POOL_CAP_FRAMES.store(0, Ordering::Relaxed);
         GLIBC_ARENA_MIB.store(prev_arena, Ordering::Relaxed);
         if exit == u64::MAX {
@@ -13576,7 +13607,14 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         // After the run every frame is back where it came from.
         let (free1, pp1) = (falloc.free_frames(), crate::procpool::free_frames());
         let back = free1 + 16 >= free0 && pp1 + 16 >= pp0;
-        let ok = exit == 0 && sum.contains("PASS") && back;
+        let (ok, sum) = if kill {
+            // The run cannot pass: it is killed in its first fork. What counts is
+            // that the fork was held and everything it took came back.
+            let held = FORK_PARKED.load(Ordering::Relaxed);
+            (held == 1 && back, alloc::format!("killed by the deadline while its fork was held ({held} held)"))
+        } else {
+            (exit == 0 && sum.contains("PASS") && back, sum)
+        };
         all &= ok;
         crate::serial_println!("[memt] {mode}: {sum} (exit {}); frames after the run: {free1} free (was {free0}), process pool {pp1} (was {pp0}) → {}",
             exit as i64, if ok { "OK ✓" } else { "FAILED" });
