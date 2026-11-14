@@ -1,0 +1,32 @@
+# restore-reseed.py on the public image of 8c3b146 (after), KVM, -device vmgenid,guid=auto
+[restore-reseed] original: random: 0aaa08191049c8dbfe422f6a5f1c81ca230ce868fd08d54bb4503449229ad01c · reseeds 0, after a restore 0, VM generation ID watched
+[restore-reseed] original: random: a5331c8828a8ab8d70452cb5377afaa521035857384b5634cff82b603719a584 · reseeds 0, after a restore 0, VM generation ID watched
+[restore-reseed] original serial: [entropy] CSPRNG seeded: 510 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (382 bits) · 0.905 ms → OK
+[restore-reseed] original serial: [entropy] VM generation ID at 0x7fbfd028 (b513a2b2…): a restore or a clone reseeds the CSPRNG
+[restore-reseed] ok   the original boots and gives two different values
+[restore-reseed] savevm: {'return': ''}
+[restore-reseed] waiting 20 s before the restores
+[restore-reseed] restore 1: random: 5c05ffe947a289f3ba23719fffb6da2f5728a2d007282fa30040c20d5f3fab65 · reseeds 1, after a restore 1, VM generation ID watched
+[restore-reseed] restore 1 serial: [entropy] reseeded: the VM generation ID changed (restored from a snapshot, or a clone) · fresh noise: rdseed 8 words, rdrand 8 words, jitter 1 batch (109 bits), generation id and clocks mixed in · 0.666 ms → OK
+[restore-reseed] restore 2: random: 351c964ae6566e2c9788de4c47a95aa82e60ce891c6c26245ed221eccff73dc0 · reseeds 1, after a restore 1, VM generation ID watched
+[restore-reseed] restore 2 serial: [entropy] reseeded: the VM generation ID changed (restored from a snapshot, or a clone) · fresh noise: rdseed 8 words, rdrand 8 words, jitter 1 batch (112 bits), generation id and clocks mixed in · 0.666 ms → OK
+[restore-reseed] ok   every restore answered `random` (2/2)
+[restore-reseed] ok   the restores of one snapshot give different bytes — 5c05ffe947a289f3 vs 351c964ae6566e2c
+[restore-reseed] ok   no restore repeats a value the original gave before the snapshot
+[restore-reseed] 4/4 checks ok
+
+# same, WITHOUT vmgenid (--no-vmgenid): the clock check
+[restore-reseed] original: random: 3640d71641cc98bd11b3e45833d101555771978ab9d365ec037b0b4f9a42f2ed · reseeds 0, after a restore 0, VM generation ID none
+[restore-reseed] original: random: 516f16ea0762477a2292df19f8f411a78b8eef09cbc71c5526db5fcedd3d23ae · reseeds 0, after a restore 0, VM generation ID none
+[restore-reseed] original serial: [entropy] CSPRNG seeded: 498 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (370 bits) · 0.912 ms → OK
+[restore-reseed] ok   the original boots and gives two different values
+[restore-reseed] savevm: {'return': ''}
+[restore-reseed] waiting 20 s before the restores
+[restore-reseed] restore 1: random: 8fee5920be82b9a2c49efae1a73955d19c1a2e1963729a54a20dcfc9613f5e05 · reseeds 1, after a restore 1, VM generation ID none
+[restore-reseed] restore 1 serial: [entropy] reseeded: the wall clock jumped against the HPET (restored from a snapshot, or resumed) · fresh noise: rdseed 8 words, rdrand 8 words, jitter 1 batch (94 bits), generation id and clocks mixed in · 0.386 ms → OK
+[restore-reseed] restore 2: random: 1797ff8e4397625364ca32a0bd182a16d32082213a76db5de86172c504a00805 · reseeds 1, after a restore 1, VM generation ID none
+[restore-reseed] restore 2 serial: [entropy] reseeded: the wall clock jumped against the HPET (restored from a snapshot, or resumed) · fresh noise: rdseed 8 words, rdrand 8 words, jitter 1 batch (99 bits), generation id and clocks mixed in · 0.432 ms → OK
+[restore-reseed] ok   every restore answered `random` (2/2)
+[restore-reseed] ok   the restores of one snapshot give different bytes — 8fee5920be82b9a2 vs 1797ff8e43976253
+[restore-reseed] ok   no restore repeats a value the original gave before the snapshot
+[restore-reseed] 4/4 checks ok

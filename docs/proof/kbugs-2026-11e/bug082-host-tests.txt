@@ -1,0 +1,12 @@
+# crates/euroentropy/tests/bug082.rs against the crate of 3ecde9e (before) and of 2e5807c (after), host .16
+## before
+test the_words_of_a_stuck_rdrand_are_not_used ... FAILED
+test a_periodic_jitter_series_does_not_open_the_pool ... FAILED
+thread 'the_words_of_a_stuck_rdrand_are_not_used' (708208) panicked at crates/euroentropy/tests/bug082.rs:54:5:
+assertion `left == right` failed: all-ones words from RDRAND were mixed in and credited (128 CPU bits)
+thread 'a_periodic_jitter_series_does_not_open_the_pool' (708207) panicked at crates/euroentropy/tests/bug082.rs:46:5:
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+## after
+test the_words_of_a_stuck_rdrand_are_not_used ... ok
+test a_periodic_jitter_series_does_not_open_the_pool ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

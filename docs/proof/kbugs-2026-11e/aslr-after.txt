@@ -1,0 +1,37 @@
+# [aslr] on the final self-test image (ad38d73), KVM 1, 2, 4, 8 GiB
+## 1 GiB
+[aslr]   exe      first 0x00000be010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x00000c600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01002a138100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x000017cb4d34  varying bits  8  distinct 53/64
+[aslr]   brk      first 0x00000de56000  varying bits  8  distinct 58/64
+[aslr]   mmap     first 0x00000fe86000  varying bits  9  distinct 57/64
+[aslr]   mmapbig  first 0x01002a2ea000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+## 2 GiB
+[aslr]   exe      first 0x000013e010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000014600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01008be55100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x00002bc27d34  varying bits  8  distinct 59/64
+[aslr]   brk      first 0x000015e4c000  varying bits  8  distinct 55/64
+[aslr]   mmap     first 0x000017f25000  varying bits 16  distinct 61/64
+[aslr]   mmapbig  first 0x01008c007000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 16 (4 KiB 16, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+## 4 GiB
+[aslr]   exe      first 0x0001204010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000120c00000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x0100367d6100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x0001382ddd34  varying bits  8  distinct 59/64
+[aslr]   brk      first 0x0001224b3000  varying bits  8  distinct 57/64
+[aslr]   mmap     first 0x000124553000  varying bits 10  distinct 62/64
+[aslr]   mmapbig  first 0x010036988000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 10 (4 KiB 10, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+## 8 GiB
+[aslr]   exe      first 0x0001c82010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x0001c8a00000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x010021aa4100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x0001e0001d34  varying bits  8  distinct 58/64
+[aslr]   brk      first 0x0001ca20c000  varying bits  8  distinct 56/64
+[aslr]   mmap     first 0x0001cc30a000  varying bits 11  distinct 62/64
+[aslr]   mmapbig  first 0x010021c56000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 11 (4 KiB 11, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)

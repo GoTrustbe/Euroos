@@ -189,6 +189,7 @@ the code.
 | BUG-080, BUG-081 (`feature/linux-rand`): `getrandom`, `/dev/urandom`, `/dev/random`, `AT_RANDOM` and the kernel's own callers on the CSPRNG; one early seeding. Host tests, TCG matrix, CI q35 matrix, reproducible build, public image on the open network | 2026-11-12 | ✅ 0 markers worse, q35 13/13 | `proof/linux-rand-2026-11/` | 1 330 host tests; matrix 10/10, 0 worse and 0 changed against `integ-2026-11b`, `[lk]` 0 inversions, one `[entropy]` line in every leg (two in the `kernel` legs before); `[linux-rand]` OK in 10/10; q35 13/13; REPRODUCIBLE; ping, DNS, fetch, https on both NICs. Before the fix, the same probe: one `AT_RANDOM` for 8 of 8 processes of two boots, 32 of 32 `getrandom`/device results predicted from their first 8 bytes |
 | Same, R630 KVM: 104 short boots, before/after boots (also without RDRAND and RDSEED), `soak` 1 h + `churn proc 8` + 4 httpd clients, process start before/after, public image GUI smoke and boot time | 2026-11-12 | ✅ 104/104 boots seeded, soak 1 364/1 364 ok, gui-smoke 67/67 twice; 🟡 one configuration asks before the early seeding | `proof/linux-rand-2026-11/` | 104 boots: `[3d8]`, `[3d7]`, `[3d3]` FAILED in 0, unseeded 0, `[linux-rand]` OK in 104; 416 `AT_RANDOM` values, guards, `getrandom` results and device reads each, none twice. Soak: 1 366 commands per hour (previous 1 314), 1 423 glibc launches, 0 panics, httpd 440 088 answered / 0 failed. `churn proc 8` before/after, alternating: 4 994 against 5 044 ms median, inside the spread. Boot time 2.62 s base and 2.55 s final (median of 5), kernel entry to desktop 811 and 812 ms. With a blank virtio disk the install self-test asks for a salt before the early seeding (served by the same seeding, one status line; see the proof's Open) |
 | W23 on `feature/chrome-w23` (BUG-134/135/136, BUG-140 to 147): browser runs (R630 KVM), TCG matrix and repeated TCG boots, host tests, GUI smoke | 2026-11-13 | ✅ site matrix 3 rounds in one session, 0 aborts; 0 watchdog trips in 35 TCG boots; 0 markers worse under the same conditions; 🟡 key to screen 476 ms | `proof/chrome-w23/` | `[churn-forkthreads]` FAILED → OK; gui-smoke 67/67; cargo test 1 350/1 350; BUG-136 not reproduced (0 in 29 before) |
+| Kernel bugs BUG-111, 088, 089, 082 (`feature/kbugs-2026-11e`): host tests, KVM self-test boots 1/2/4/8 GiB, TCG matrix, GUI smoke, rename-persist, restore-reseed | 2026-11-15 | ✅ 0 markers worse; 🟡 BUG-088 partly | `proof/kbugs-2026-11e/` | rename-persist 24/24 (was 21/24); two restores of one snapshot give different bytes (were equal); health tests 0 failures in 14 boots; ASLR demand pool 11 -> 20 bits, PIE still 0 (BUG-088 open); BUG-210/211 new |
 
 > Fill `Last run` / `CSV` as runs land. A row stays ⬜ until a clean CSV exists — don't mark
 > it ✅ from "it should work".
@@ -1623,8 +1624,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   `tpm::init` and a pool with TPM bytes in it were not run. BUG-086 (the DHCP id was never one of
   `rand_u64`'s users; it is a constant).
 
-### BUG-082 — the jitter estimator credits a periodic series ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (an over-estimate; the source it over-estimated is no longer used)
+### BUG-082 — the jitter estimator credits a periodic series ✅ FIXED
+- **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM (an over-estimate; the source it over-estimated is no longer used)
 - **Found:**    2026-11-12 · the raw samples of the BUG-065 diagnosis.
 - **Actual:**   `estimate_jitter_bits` counts a sample when its difference from the previous one has low four bits
   other than 0 and 15, and credits a quarter bit per counted sample. The old two-instruction sample gave
@@ -1642,6 +1643,20 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   reach the threshold with it.
 - **2026-11-12:** not done in the BUG-080/081 round either; what it needs, in five steps, is section 6 of
   `proof/linux-rand-2026-11/README.md`. With BUG-089 the same tests have to run on every reseed.
+- **Fix:**      `crates/euroentropy`: the SP 800-90B repetition count test and adaptive proportion test on the raw
+  samples before anything is conditioned or credited. Jitter: cutoffs for H = 1 bit per sample (RCT 21, APT 311 of a
+  512-sample window; the host test recomputes 311 from the binomial), below the 2.4 bits the memory walk measured; a
+  failing batch is discarded (not mixed, not credited) and the next one is tested afresh. RDSEED and RDRAND: two equal
+  64-bit words in a row switch the generator off for the pool; TPM bytes: RCT with H = 4. The reseeds of BUG-089 go
+  through the same tests. On a failure the kernel prints `[entropy] health test FAILED on <source>: ...` and goes on
+  (no panic).
+- **Proof:**    `tests/bug082.rs` (a periodic series must not open the pool; a stuck RDRAND's words are not used):
+  2 FAILED on the crate of `3ecde9e`, 2 ok after; 11 host tests against models of a source (the measured walk and a
+  2-bit source: 0 failures in 20 000 batches each; a 1-bit source at the cutoff: at most 20, expected about 5; a
+  0.5-bit source caught in 713 of 1 000 batches); boot self-test `[entropy-health]` OK on 1, 2, 4, 8 GiB, and the boot
+  seeding had 0 health failures in every boot of the round.
+- **Not done:** the off-line min-entropy assessment with the SP 800-90B estimators on raw dumps (step 4 of section 6 of
+  `proof/linux-rand-2026-11/README.md`).
 
 ### BUG-083 — the `[altgr]` self-test left the AltGr latch set: typing on the self-test image gave third-level characters ✅ FIXED
 - **Status:**   FIXED (`6fcf24c`) · **Severity:** LOW (self-test image only; the public image runs no self-test)
@@ -1712,9 +1727,23 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   2 GiB of the demand pool. Where the executable and the interpreter are loaded was not looked at.
 - **Next:**     measure what a glibc process can take (the arena is the limit, not the generator); 28 bits for
   mmap and 22 for the stack are what Linux gives a 64-bit process.
+- **2026-11-15 (`8c3b146`, partly):** measured with the new boot self-test `[aslr]` (64 starts of the glibc PIE
+  `userland/glibc/gaslr`, demand paging on; varying bits = bits that differ between starts). Before: PIE base 0,
+  ld.so 0, stack 8, brk 4, mmap window 5, demand pool (1 MiB mapping, libc) 11. Every slide is now in 4 KiB steps over
+  the same ranges: brk 8, mmap window 9 to 16 (the arena's own place varies with the RAM size), demand pool and libc
+  20, stack 8, PIE base and ld.so 0. Linux on .16, the same probe: PIE 34, mmap 32, stack 30. `[aslr]` stays FAILED.
+- **Why not more:** the glibc arena (executable, ld.so, brk, mmap window, stack) is ONE identity-mapped span: its
+  virtual address is its physical address, so the PIE base and ld.so cannot move without moving the RAM, and the
+  in-arena slides are bounded by the arena (64 MiB to 1 GiB). The demand pool is one PML4 slot (480 GiB, of which
+  chrome reserves more than 256 GiB): a 28-bit page slide needs 1 TiB.
+- **Next:**     map the arena at a random virtual base (2 MiB-aligned anywhere in a free PML4 slot, plus a page offset
+  for the executable): fork children already run at a virtual arena that is not their physical one
+  (`build_address_space_remap`), so the main process is the case to convert; the places that read a process's memory
+  through the identity map (comments "identity-mapped" in `ring3.rs`, about 30) have to go through its page tables.
+  And spread the demand pool over several PML4 slots.
 
-### BUG-089 — the CSPRNG is seeded once per boot and never again ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
+### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
+- **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
 - **Found:**    2026-11-12 · by reading `entropy.rs` and `crates/euroentropy` (BUG-080).
 - **Actual:**   `seed_from` runs in `entropy::init` and, for a pool that is still closed, on a later request.
   Once the pool is open nothing is added to it: no periodic reseed, no reseed after resume, no
@@ -1724,6 +1753,18 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     reseed from RDSEED/RDRAND, the TPM and a jitter batch every N minutes or N requests
   (`EntropyPool::add` already reseeds an open pool; SP 800-90A allows 2^48 requests, so this is about
   recovery, not about the limit), on resume, and when the ACPI VM generation id changes.
+- **Fix:**      `kernel/src/entropy.rs`. (1) The ACPI VM generation ID (the DWORD `VGIA` in an SSDT, patched by the
+  firmware; the 16-byte ID is 40 bytes into the buffer it names; QEMU `-device vmgenid`, Hyper-V, VMware) is read
+  before every request; a change reseeds the pool from fresh noise (RDSEED, RDRAND, one jitter batch, health-tested)
+  plus the new ID, the TSC and the HPET before a byte is handed out. (2) The desktop loop compares the RTC with the
+  HPET once a second; a jump of more than 10 s (a restore: the HPET continues from the snapshot, the RTC is the
+  host's) marks the pool for a reseed at the next request. (3) Every 5 minutes a reseed as recovery. Each restore
+  reseed prints `[entropy] reseeded: <why> ... → OK`; the shell command `random` prints 32 bytes and the counts.
+- **Proof:**    `scripts/restore-reseed.py` (savevm, then two new QEMUs from the snapshot, `random` in each): on
+  `a49e6a1` both restores gave `513fdc3952ec1c66…` (FAIL); after: different bytes with `-device vmgenid` (reseed by
+  the generation ID) and without it (reseed by the clock jump), and on the final image. Boot self-test `[reseed]`.
+- **Open:**     without a generation ID the first request after a restore can still come before the desktop loop
+  has looked at the clock (at most about a second); a guest without an HPET has only the 5-minute reseed.
 
 ### BUG-090 — the X server left GetPointerMapping unanswered: the browser window stayed empty ✅ FIXED
 - **Status:**   FIXED (`f72cfdd`) · **Severity:** HIGH for the hosted browser (it did not start at all)
@@ -1857,8 +1898,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Open:**     such a file keeps its bytes until reboot (as a file unlinked while open does): nothing frees them when
   the last mapping goes.
 
-### BUG-111 — a rename or an unlink by a Linux-ABI program does not reach the file system on disk ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH for a Linux program that saves a document from the Terminal (the save is gone
+### BUG-111 — a rename or an unlink by a Linux-ABI program does not reach the file system on disk ✅ FIXED
+- **Status:**   FIXED (`1361dc2`) · **Severity:** HIGH for a Linux program that saves a document from the Terminal (the save is gone
   after a restart, and `cat` in the shell shows the old text in the same session) · not new: the same on `c6f033f`
 - **Found:**    2026-11-12 · `scripts/rename-persist.py` on an installed system (R630, KVM), validation of
   `feature/chrome-workplace-2`.
@@ -1875,6 +1916,17 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   those renames survive a restart and a power cut, and `scrub` is clean (same proof, same script).
 - **Next:**     `vfs_rename` carries the dirty mark to the new name; the write-back also removes what the program
   unlinked; a program's `open` falls through to EuroFS for a path the table does not know.
+- **Fix:**      `kernel/src/fsback.rs`. `vfs_rename` carries the dirty mark to the new name. While the Terminal runs a program
+  it lends the program its file system (`ring3::with_backing_fs`): a path the table does not know is looked up in EuroFS
+  on first use (open, stat, `O_CREAT`, unlink, the old name of a rename) and loaded; `unlink` and the old name of a
+  rename are recorded. `ring3::write_back` (the Terminal's write-back, now one function) removes the recorded names from
+  EuroFS unless the same name is written, then writes every dirty file. Outside such a run (boot self-tests, the
+  browser) nothing is looked up and no removal is recorded, as before.
+- **Proof:**    `rename-persist.py` 21/24 on the base (44 runs, validate-2026-11d) → **24/24 in 3 of 3 runs** on `a49e6a1`
+  and 24/24 on the final image; new boot self-test `[rename-disk]` (save 1, save 2, then `renprobe check` with a
+  table that does not know the directory): FAILED on `340f185`, OK on 1, 2, 4 and 8 GiB after
+  (`proof/kbugs-2026-11e/`).
+- **Open:**     a directory listing (`getdents`) still shows only what the table knows: BUG-210.
 
 ### BUG-112 — the GTK demo (feature `live-demos`) stops after its first frame, and often does not load ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (the demo is in no image that is built by default; there is no GTK test in the
@@ -2505,3 +2557,22 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   task whose RSP is within 2 KiB of its stack top.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->
+
+### BUG-210 — a Linux program does not see in a directory listing the files that are only on EuroFS ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (a file is found by its name since BUG-111; a file manager or `ls` run as a Linux
+  program misses it)
+- **Found:**    2026-11-15 · by reading `diropen`/`getdents` while fixing BUG-111 (not measured).
+- **Actual:**   since `1361dc2` a foreground program of the Terminal finds a file of an earlier boot by its path (open, stat,
+  unlink, rename); `getdents` still enumerates only the file table (`FILES`, `MKDIRS`), so the same file is missing from
+  a listing of its directory until the program has opened it.
+- **Next:**     in a run with a backing file system, `diropen` merges `list_dir` of EuroFS into the listing.
+
+### BUG-211 — the first write-back after a self-test boot puts the self-tests' files on EuroFS, two of them with names of one control character ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (self-test image only: the public image runs no self-test)
+- **Found:**    2026-11-15 · the write-back list of `[rename-disk]` (every boot of `kbugs-2026-11e`).
+- **Actual:**   the dirty list holds what the boot self-tests wrote: `/tmp/euro-glibc.txt`, `/tmp/gfdsem-*`,
+  `/tmp/gscm_payload`, and two files named `\u{1}` and `\u{4}` (0 bytes). The first write-back (until now the first
+  command in the Terminal; since this round `[rename-disk]` in the boot) writes them to EuroFS. Some self-test opens a
+  path with `O_CREAT` that is not a path.
+- **Next:**     find the self-test that creates `\x01` and `\x04`; let `vfs_open_create` refuse a name that does not start
+  with `/` (ENOENT); clear the dirty list at the end of the boot self-tests.
