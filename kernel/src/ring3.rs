@@ -428,6 +428,10 @@ mod fdspace;
 // One descriptor table per process on top of them (BUG-098).
 #[path = "fdtab.rs"]
 mod fdtab;
+// BUG-111: the file table and EuroFS on disk (write-back, lookup).
+#[path = "fsback.rs"]
+mod fsback;
+pub use fsback::{forget_for_test as fsback_forget_for_test, with_backing_fs, write_back};
 pub use fdtab::{census as fd_census, census_lines as fd_census_lines, peer_lines as fd_peer_lines};
 
 /// A spin-locked value that exists once per fd space: `lock()` takes the one
