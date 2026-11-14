@@ -1356,6 +1356,16 @@ pub fn thread_name_try(t: usize) -> String {
     }
 }
 
+/// Print ` name="..."` of task `t` when it has one and the table is free: no
+/// allocation, no waiting (the NMI probe, BUG-157).
+pub fn thread_name_print(t: usize) {
+    if let Some(n) = THREAD_NAMES.try_lock() {
+        if let Some((_, name)) = n.iter().find(|(x, _)| *x == t) {
+            crate::serial_print!(" name={:?}", name.as_str());
+        }
+    }
+}
+
 /// The name a task gave itself, or "?" if it never did.
 pub fn thread_name(t: usize) -> String {
     THREAD_NAMES.lock().iter().find(|(x, _)| *x == t).map(|(_, n)| n.clone())

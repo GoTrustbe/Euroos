@@ -400,9 +400,18 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     let rflags = frame.cpu_flags;
     // The probe's lines go straight to the port, after what the desktop loop
     // still had in its queue; deferring is on again when the probe ends.
-    let was = crate::serial::in_emergency();
+    // BUG-157: every processor gets the NMI. The first probe to finish switched
+    // the direct output off again, and the rest of a probe still printing went
+    // into the queue of a machine that no longer drains it. The direct output
+    // stays on until the last probe has ended.
+    static PROBES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    static WAS_EMERGENCY: AtomicBool = AtomicBool::new(false);
+    if PROBES.fetch_add(1, Ordering::AcqRel) == 0 {
+        WAS_EMERGENCY.store(crate::serial::in_emergency(), Ordering::Release);
+    }
     crate::serial::emergency();
     serial_println!("========== NMI PROBE (wedge RIP capture) ==========");
+    serial_println!("[nmi] cpu {}", crate::apic::lapic_id());
     serial_println!("[nmi] interrupted RIP={rip:#018x} CS={cs:#x} RSP={rsp:#018x} RFLAGS={:#x}", rflags.bits());
     serial_println!("[nmi] anchor kernel_base ~ nmi_handler @ {:#018x}", nmi_handler as usize as u64);
     serial_println!("[nmi] CR2 (address of the last page fault) = {:#018x}", x86_64::registers::control::Cr2::read_raw());
@@ -453,11 +462,19 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
         // Lock-free (BUG-136): the probe is sent to a machine that is wedged,
         // often on the scheduler lock; sched::current() waited for that lock
         // and the probe stopped before its stack scan and census.
+        // No allocation (the name was cloned into a String here: a probe
+        // that lands while the heap lock is held never came back).
         let cur = crate::sched::current_lockfree();
         let (sn, sa, sr) = crate::ring3::last_syscall(cur);
-        let name = crate::ring3::thread_name_try(cur);
-        serial_println!("[nmi] current task {cur} {:?} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
-            name, crate::ring3::globals_owner_now());
+        crate::serial_print!("[nmi] current task {cur} last-syscall={sn}(a1={sa:#x})->{sr:#x} globals-owner={}",
+            crate::ring3::globals_owner_now());
+        crate::ring3::thread_name_print(cur);
+        serial_println!();
+    }
+    // Every task, read without the scheduler lock (BUG-157). The scheduler
+    // belongs to the boot processor; one copy of the table is enough.
+    if crate::apic::lapic_id() == 0 {
+        crate::sched::census_nolock();
     }
     // Scan the interrupted stack for plausible kernel code return addresses (RBP
     // chains are unreliable in release). Kernel code lives high (>= 0x2000_0000).
@@ -478,9 +495,8 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     // describes the task the NMI happened to interrupt - usually the idle loop -
     // while the question is nearly always "what is task N doing". census_trylock
     // is built for interrupt context (try-locks, no allocation).
-    crate::sched::census_trylock();
     serial_println!("========== END NMI PROBE ==========");
-    if !was {
+    if PROBES.fetch_sub(1, Ordering::AcqRel) == 1 && !WAS_EMERGENCY.load(Ordering::Acquire) {
         crate::serial::resume();
     }
 }
