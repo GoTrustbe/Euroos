@@ -8444,6 +8444,9 @@ static GFDSEM_ELF: &[u8] = include_bytes!("../../userland/glibc/gfdsem");
 /// `gmemt` (userland/glibc/gmemt.c): memory that comes back and what happens
 /// when it runs out; the [memt] self-test runs its four modes.
 static GMEMT_ELF: &[u8] = include_bytes!("../../userland/glibc/gmemt");
+/// `gmem2` (userland/glibc/gmem2.c): the second round ([memt] cowfork, ...).
+/// Run by the self-test only, not a program in /bin.
+static GMEM2_ELF: &[u8] = include_bytes!("../../userland/glibc/gmem2");
 static MFDSEM_ELF: &[u8] = include_bytes!("../../userland/musl/mfdsem");
 static FDSEM_ELF: &[u8] = include_bytes!("../../userland/fdsem.elf");
 /// The [fdspace] self-test program (userland/pipehold.c): holds a pipe and a file open.
@@ -9265,6 +9268,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gscm3" => include_bytes!("../../userland/glibc/gscm3.sig"),
         "/bin/gfdsem" => include_bytes!("../../userland/glibc/gfdsem.sig"),
         "/bin/gmemt" => include_bytes!("../../userland/glibc/gmemt.sig"),
+        "/bin/gmem2" => include_bytes!("../../userland/glibc/gmem2.sig"),
         "/bin/mfdsem" => include_bytes!("../../userland/musl/mfdsem.sig"),
         "/bin/fdsem" => include_bytes!("../../userland/fdsem.elf.sig"),
         "/bin/gsdl" => include_bytes!("../../userland/glibc/gsdl.sig"),
@@ -13648,6 +13652,9 @@ static FORK_PARKED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 ///   mapping, with ENOSPC at a limit that follows the pool (BUG-154);
 /// * oom: the main process needs a page while a child holds the pool; the
 ///   child is ended and the main process goes on (BUG-155);
+/// * cowfork (gmem2): a fork of a 64 MiB process takes page tables, not a copy;
+///   parent, child and grandchild see the memory of the fork and never what
+///   another writes afterwards, also when the kernel writes (copy-on-write);
 /// * forkkill: the run is killed by the launcher's deadline while it is inside
 ///   a fork that has taken the child's arena, tables and demand pages; all of
 ///   it comes back (BUG-180). The fork is held there by FORK_PARK_NEXT.
@@ -13663,7 +13670,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
     let mut ran = 0;
     // (mode, demand pool cap in MiB or 0, forks to refuse)
     let prev_deadline = GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
-    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0)] {
+    for &(mode, cap_mib, refuse) in &[("forkfail", 0usize, 3u32), ("forkmany", 0, 0), ("forkidle", 0, 0), ("madvise", 0, 0), ("memfd", 96, 0), ("oom", 64, 0), ("forkkill", 0, 0), ("cowfork", 0, 0)] {
         let kill = mode == "forkkill";
         DEMAND_POOL_CAP_FRAMES.store(cap_mib * 256, Ordering::Relaxed);
         FORK_REFUSE_NEXT.store(refuse, Ordering::Relaxed);
@@ -13679,7 +13686,9 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         GLIBC_ARENA_MIB.store(prev_arena.min(96), Ordering::Relaxed);
         let free0 = falloc.free_frames();
         let pp0 = crate::procpool::free_frames();
-        let (out, exit) = run_glibc(falloc, GMEMT_ELF, ldlinux_bytes(), &[b"/bin/gmemt", arg], &[b"PATH=/bin"], caps);
+        // The modes of the second round are in gmem2.
+        let (elf, argv0): (&[u8], &[u8]) = if matches!(mode, "cowfork") { (GMEM2_ELF, b"/bin/gmem2") } else { (GMEMT_ELF, b"/bin/gmemt") };
+        let (out, exit) = run_glibc(falloc, elf, ldlinux_bytes(), &[argv0, arg], &[b"PATH=/bin"], caps);
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
         FORK_PARK_NEXT.store(0, Ordering::Relaxed);
         GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
@@ -13690,10 +13699,10 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
             continue;
         }
         ran += 1;
-        for l in out.lines().filter(|l| l.starts_with("FAIL")) {
+        for l in out.lines().filter(|l| l.starts_with("FAIL") || l.starts_with("info")) {
             crate::serial_println!("[memt]   {mode}: {}", l.trim_end());
         }
-        let sum = out.lines().rev().find(|l| l.starts_with("GMEMT")).map(|l| String::from(l.trim_end()))
+        let sum = out.lines().rev().find(|l| l.starts_with("GMEMT") || l.starts_with("GMEM2")).map(|l| String::from(l.trim_end()))
             .unwrap_or_else(|| String::from("(no result line)"));
         // After the run every frame is back where it came from.
         let (free1, pp1) = (falloc.free_frames(), crate::procpool::free_frames());
