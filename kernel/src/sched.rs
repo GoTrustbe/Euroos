@@ -898,6 +898,28 @@ pub fn resched_stub_addr() -> u64 {
 /// Reschedule IPIs taken.
 pub static RESCHED_IPIS: AtomicU64 = AtomicU64::new(0);
 
+/// S8: windows in which a tick or a reschedule IPI must not switch tasks (a
+/// system call with IF=0 that waits for a disk completion with interrupts on),
+/// and a reschedule IPI that came in such a window.
+static NO_PREEMPT: AtomicU64 = AtomicU64::new(0);
+static RESCHED_DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// Guard of a no-preemption window (BSP only, interrupts off when made).
+pub struct NoPreempt(());
+impl NoPreempt {
+    pub fn new() -> Self {
+        NO_PREEMPT.fetch_add(1, Ordering::Relaxed);
+        NoPreempt(())
+    }
+}
+impl Drop for NoPreempt {
+    fn drop(&mut self) {
+        if NO_PREEMPT.fetch_sub(1, Ordering::Relaxed) == 1 && RESCHED_DEFERRED.swap(false, Ordering::Relaxed) {
+            resched_ipi();
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "sysv64" fn resched_tick(rsp: u64) -> u64 {
     note_df(rsp);
@@ -1350,6 +1372,15 @@ pub fn in_kernel_image(a: u64) -> bool {
 /// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
 /// yield. Does NO EOI — the caller owns interrupt acknowledgement.
 fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
+    // S8: a system call that waits for the disk with interrupts on keeps the CPU
+    // (the timer still ran its prelude). A reschedule asked meanwhile is sent
+    // again when the window ends.
+    if !via_yield && NO_PREEMPT.load(Ordering::Relaxed) != 0 {
+        if !tick {
+            RESCHED_DEFERRED.store(true, Ordering::Relaxed);
+        }
+        return rsp;
+    }
     let mut s = match SCHED.try_lock() {
         Some(g) => g,
         None => {

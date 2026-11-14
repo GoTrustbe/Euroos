@@ -362,10 +362,6 @@ fn park_all() {
     }
 }
 
-fn counters(h: &[(usize, u64)]) -> u64 {
-    h.iter().map(|&(_, c)| crate::ring3::read_counter(c)).sum()
-}
-
 /// Let the other tasks run for `n` ticks (the desktop task sleeps meanwhile).
 fn wait_ticks(n: u64) {
     let end = crate::interrupts::ticks() + n;
