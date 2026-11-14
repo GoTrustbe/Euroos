@@ -16,6 +16,10 @@ const MAGIC: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
 /// Lease data extracted from an OFFER/ACK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DhcpInfo {
+    /// Transaction id of the reply (BUG-086: a reply to another one is not ours).
+    pub xid: u32,
+    /// Client hardware address (`chaddr`) the reply was sent to.
+    pub chaddr: [u8; 6],
     pub msg_type: u8,
     pub your_ip: Ipv4Addr,
     pub server_id: Ipv4Addr,
@@ -23,6 +27,14 @@ pub struct DhcpInfo {
     pub router: Option<Ipv4Addr>,
     pub dns: Option<Ipv4Addr>,
     pub lease_secs: u32,
+}
+
+impl DhcpInfo {
+    /// True when this reply belongs to the exchange we started: same transaction
+    /// id and our own hardware address. Anything else on the link is dropped.
+    pub fn answers(&self, xid: u32, mac: [u8; 6]) -> bool {
+        self.xid == xid && self.chaddr == mac
+    }
 }
 
 /// Build a DHCP message (BOOTP request) with the given options.
@@ -122,6 +134,8 @@ pub fn parse(buf: &[u8]) -> Option<DhcpInfo> {
         i += 2 + len;
     }
     Some(DhcpInfo {
+        xid: u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]),
+        chaddr: [buf[28], buf[29], buf[30], buf[31], buf[32], buf[33]],
         msg_type,
         your_ip,
         server_id: opt4(buf, 54).unwrap_or(Ipv4Addr([0; 4])),
@@ -158,5 +172,19 @@ mod tests {
         assert_eq!(info.msg_type, OFFER);
         assert_eq!(info.your_ip, Ipv4Addr([10, 0, 2, 15]));
         assert_eq!(info.server_id, Ipv4Addr([10, 0, 2, 2]));
+    }
+
+    /// BUG-086: the reply carries the transaction id and the client hardware
+    /// address, and `answers` accepts only a reply to our own transaction.
+    #[test]
+    fn reply_is_matched_on_xid_and_mac() {
+        let mac = [0x52, 0x54, 0, 0x12, 0x34, 0x56];
+        let b = build(OFFER, 0xDEAD_BEEF, mac, None, Some(Ipv4Addr([10, 0, 2, 2])));
+        let info = parse(&b).unwrap();
+        assert_eq!(info.xid, 0xDEAD_BEEF);
+        assert_eq!(info.chaddr, mac);
+        assert!(info.answers(0xDEAD_BEEF, mac));
+        assert!(!info.answers(0xDEAD_BEEE, mac), "another xid must be dropped");
+        assert!(!info.answers(0xDEAD_BEEF, [1, 2, 3, 4, 5, 6]), "another client must be dropped");
     }
 }

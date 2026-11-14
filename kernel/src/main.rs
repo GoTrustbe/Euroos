@@ -1417,6 +1417,8 @@ fn main() -> Status {
     // one seeding of a boot and it prints the one `[entropy]` status line.
     let tpm_up = tpm::init();
     entropy::init();
+    #[cfg(feature = "selftest")]
+    net::selftest_randid();
 
     // Login verification now runs via EuroID (Argon2id, memory-hard) instead of the old
     // iterated SHA-256 — proven by the [ae] self-test in `euroid::selftest()`.

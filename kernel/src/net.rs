@@ -1960,6 +1960,34 @@ pub fn rand_u64() -> u64 {
     u64::from_le_bytes(crate::entropy::draw_wait::<8>())
 }
 
+/// Transaction id of one DHCP exchange (BUG-086).
+pub fn dhcp_xid() -> u32 {
+    0x4E55_5021
+}
+
+/// **[randid]** (BUG-086, BUG-087): the DHCP transaction id and the SMB client
+/// challenge must be fresh per use. Sixteen draws of each: all different, and
+/// none the constant or the RTC-derived pattern the senders used before.
+#[cfg(feature = "selftest")]
+pub fn selftest_randid() {
+    const OLD_XIDS: [u32; 5] = [0x4505_5201, 0x4E55_5021, 0x4C41_5445, 0x4555_0001, 0x4555_0002];
+    let xids: alloc::vec::Vec<u32> = (0..16).map(|_| dhcp_xid()).collect();
+    let chs: alloc::vec::Vec<[u8; 8]> = (0..16).map(|_| crate::smbfs::client_challenge()).collect();
+    let distinct = |n: usize, f: &dyn Fn(usize, usize) -> bool| (0..n).all(|i| (i + 1..n).all(|j| !f(i, j)));
+    let xid_ok = distinct(16, &|i, j| xids[i] == xids[j]) && xids.iter().all(|x| !OLD_XIDS.contains(x));
+    let ch_ok = distinct(16, &|i, j| chs[i] == chs[j]) && chs.iter().all(|c| c[4..] != *b"EURO".as_slice());
+    if xid_ok {
+        crate::serial_println!("[randid] dhcp xid: 16 draws, all different, none of the old constants ✓");
+    } else {
+        crate::serial_println!("[randid] dhcp xid: FAILED (draws repeat or equal an old constant: {:08x} {:08x})", xids[0], xids[1]);
+    }
+    if ch_ok {
+        crate::serial_println!("[randid] smb client challenge: 16 draws, all different, no RTC/EURO pattern ✓");
+    } else {
+        crate::serial_println!("[randid] smb client challenge: FAILED (draws repeat or carry the fixed tail: {:02x?} {:02x?})", chs[0], chs[1]);
+    }
+}
+
 /// 32 random bytes for a TLS key/nonce. `domain` separates
 /// independent draws within one handshake.
 ///

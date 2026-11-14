@@ -57,14 +57,19 @@ pub fn connect(server: Ipv4Addr, port: u16) -> Option<KernelTcp> {
     Some(KernelTcp { conn, buf: Vec::new() })
 }
 
+/// The 8-byte client challenge of the NTLMv2 session setup (BUG-087).
+pub fn client_challenge() -> [u8; 8] {
+    // Client challenge from the RTC (good enough; not secret).
+    let e = crate::rtc::epoch();
+    [(e >> 0) as u8, (e >> 8) as u8, (e >> 16) as u8, (e >> 24) as u8, 0x45, 0x55, 0x52, 0x4F]
+}
+
 /// Connect + negotiate + authenticate + tree-connect to `\\<server>\<share>`.
 fn open_share(server: Ipv4Addr, share: &str, user: &str, pass: &str) -> Result<SmbClient<KernelTcp>, SmbError> {
     let kt = connect(server, 445).ok_or(SmbError::Transport)?;
     let mut c = SmbClient::new(kt);
     c.negotiate()?;
-    // Client challenge from the RTC (good enough; not secret).
-    let e = crate::rtc::epoch();
-    let cc = [(e >> 0) as u8, (e >> 8) as u8, (e >> 16) as u8, (e >> 24) as u8, 0x45, 0x55, 0x52, 0x4F];
+    let cc = client_challenge();
     c.session_setup(user, "WORKGROUP", pass, &cc, 0)?;
     let s = server.0;
     c.tree_connect(&format!("\\\\{}.{}.{}.{}\\{share}", s[0], s[1], s[2], s[3]))?;
