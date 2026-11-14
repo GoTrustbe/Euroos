@@ -171,11 +171,11 @@ pub fn census_trylock() {
 static SCHED_PEEK: AtomicU64 = AtomicU64::new(0);
 
 pub fn census_nolock() {
-    // SAFETY: see above; plain integers, bounds checked below.
     let peek = SCHED_PEEK.load(Ordering::Relaxed);
     if peek == 0 {
         return;
     }
+    // SAFETY: see above; plain integers, bounds checked below.
     let s: &Scheduler = unsafe { &*(peek as *const Scheduler) };
     let count = s.count.min(MAX_TASKS);
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
@@ -185,17 +185,25 @@ pub fn census_nolock() {
         if SCHED.is_locked() { "HELD" } else { "free" }, s.min_vr,
         T0_WANTS.load(Ordering::Relaxed), T0_IDLE.load(Ordering::Relaxed),
         T0_TURN_TICK.load(Ordering::Relaxed), SCHED_SKIPS.load(Ordering::Relaxed));
-    let (mut ready, mut sleeping, mut blocked, mut zombie, mut dead) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    // A line each for the tasks that could run: the current one, the Ready
+    // ones, the sleepers whose time has come (24 lines at most: the probe is
+    // also sent to a machine that runs, and a second of printing in an NMI
+    // was a second without the timer).
+    let (mut ready, mut sleeping, mut blocked, mut zombie, mut dead, mut lines) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for i in 0..count {
         let t = &s.tasks[i];
         let st = t.state;
-        match st {
-            State::Ready => ready += 1,
-            State::Sleeping(_) => sleeping += 1,
-            State::Blocked(_) => blocked += 1,
-            State::Zombie(_) => zombie += 1,
-            State::Dead => { dead += 1; continue; }
+        let runnable = match st {
+            State::Ready => { ready += 1; true }
+            State::Sleeping(w) => { sleeping += 1; w <= now }
+            State::Blocked(_) => { blocked += 1; false }
+            State::Zombie(_) => { zombie += 1; false }
+            State::Dead => { dead += 1; false }
+        };
+        if !(runnable || (i == s.current && st != State::Dead)) || lines >= 24 {
+            continue;
         }
+        lines += 1;
         let (sn, sa, sr) = crate::ring3::last_syscall(i);
         // The frame a task that is not running resumes from: 15 registers,
         // then rip, cs, rflags (schedule_tick). Only for a pointer into the
@@ -209,18 +217,40 @@ pub fn census_nolock() {
         crate::serial_print!("[nmi-tasks] t{i} ");
         match st {
             State::Ready => crate::serial_print!("Ready"),
-            State::Sleeping(w) => crate::serial_print!("Sleeping(until {w}, {})", if w <= now { "DUE" } else { "later" }),
+            State::Sleeping(w) => crate::serial_print!("Sleeping(due since {w})"),
             State::Blocked(c) => crate::serial_print!("Blocked({c:#x})"),
             State::Zombie(c) => crate::serial_print!("Zombie({c})"),
             State::Dead => {}
         }
-        crate::serial_print!(" pid={} cr3={:#x} vr={} sys={} cpu={} last={sn}(a1={sa:#x})->{sr:#x} in-syscall-rip={:#x}",
-            t.pid, t.cr3, t.vruntime, sysn(i), cpun(i), t.sc_user_rip);
+        crate::serial_print!(" pid={} cr3={:#x} vr={} sys={} cpu={} last={sn}(a1={sa:#x})->{sr:#x}",
+            t.pid, t.cr3, t.vruntime, sysn(i), cpun(i));
         match frame {
             Some((rip, cs, fl)) => crate::serial_print!(" resumes rip={rip:#x} cs={cs:#x} IF={}", (fl >> 9) & 1),
             None => crate::serial_print!(" {}", if i == s.current { "RUNNING" } else { "(no frame)" }),
         }
         crate::ring3::thread_name_print(i);
+        crate::serial_println!();
+    }
+    // The others in short: tN:B (blocked), tN:S (sleeping), tN:Z (zombie).
+    let mut col = 0;
+    for i in 0..count {
+        let c = match s.tasks[i].state {
+            State::Blocked(_) => "B",
+            State::Sleeping(w) if w > now => "S",
+            State::Zombie(_) => "Z",
+            _ => continue,
+        };
+        if col == 0 {
+            crate::serial_print!("[nmi-tasks]");
+        }
+        crate::serial_print!(" t{i}:{c}");
+        col += 1;
+        if col == 20 {
+            crate::serial_println!();
+            col = 0;
+        }
+    }
+    if col != 0 {
         crate::serial_println!();
     }
     crate::serial_println!("[nmi-tasks] {ready} Ready, {sleeping} Sleeping, {blocked} Blocked, {zombie} Zombie, {dead} Dead");
