@@ -12517,6 +12517,14 @@ pub fn persistent_running() -> bool {
     GLIBC_MAIN_TASK.load(Ordering::Relaxed) != usize::MAX && PERSIST_PML4.load(Ordering::Relaxed) != 0
 }
 
+/// BUG-114: the persistent app's main task has ended by itself (exit / exit_group: its task is Dead)
+/// but nobody closed it. Until the frame was closed by hand its arena, address space and the
+/// "already running" state stayed, and the next start of a hosted app was refused.
+pub fn persistent_ended() -> bool {
+    let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
+    main != usize::MAX && PERSIST_PML4.load(Ordering::Relaxed) != 0 && crate::sched::is_dead(main)
+}
+
 /// Spawn a disk-served glibc program (a 485 MB chrome, demand-paged from a EuroPack)
 /// as a PERSISTENT process and return WITHOUT waiting: the desktop keeps running, the
 /// app's X window is composited as a framed desktop window, and the desktop loop pumps

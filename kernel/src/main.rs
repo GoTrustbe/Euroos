@@ -7369,6 +7369,21 @@ fn main() -> Status {
 
         sched::deskwatch::step("demos and the rest");
         sched::deskwatch::mark(4);
+        // BUG-114: a hosted app that ended by itself is closed like the close button does it:
+        // its last words to the log, memory back, frame gone. Without this the frame stayed with the
+        // last picture and `app run` answered "already running" until it was closed by hand.
+        if ring3::persistent_ended() {
+            for l in ring3::take_output().lines() {
+                serial_println!("[hosted] {l}");
+            }
+            let free_before = ctx.mem.free_bytes();
+            ring3::kill_persistent_glibc(ctx.mem);
+            windows[gtk_idx].visible = false;
+            order.retain(|&x| x != gtk_idx);
+            need_full = true;
+            serial_println!("[hosted] the app ended by itself: frame closed, free RAM {} -> {} MiB",
+                free_before / (1 << 20), ctx.mem.free_bytes() / (1 << 20));
+        }
         // A hosted app's own words, on the serial log. It never exits, so this is the
         // only place its stdout/stderr can appear at all. Alongside it: how much of the
         // machine the DESKTOP is using while the app runs. A browser that crawls when
