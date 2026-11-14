@@ -5345,6 +5345,20 @@ fn main() -> Status {
     // does not hold the loop.
     boottime::phase("first-frame");
     serial_println!("[desktop] interactive loop started — input + shell live");
+    // BUG-190: the window that the keyboard goes to on the first frame. Keys go to
+    // the topmost visible window (see `focused` in the loop); a desktop that starts
+    // with anything but the shell (or, on a live install medium, the install wizard)
+    // in front types into nothing until somebody clicks the Terminal.
+    {
+        let first = order.iter().rev().copied().find(|&i| windows[i].visible);
+        let want = windows.iter().position(|w| w.visible && w.app == suite_ui::SuiteApp::Installer).unwrap_or(term_idx);
+        serial_println!(
+            "[keyfocus] first desktop frame: the keyboard goes to {:?} (want {:?}) → {}",
+            first.map(|i| windows[i].title.as_str()),
+            windows[want].title.as_str(),
+            if first == Some(want) { "OK ✓" } else { "FAILED ✗" }
+        );
+    }
     // From here the console is quiet: per-event diagnostics stay in the kernel
     // log (BUG-126), unless the boot option asks for all of it.
     if !bootopt::serial_chatter() {
