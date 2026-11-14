@@ -5085,6 +5085,7 @@ fn futex_purge_task(t: usize) {
 /// Idempotent: a second call finds no stack, no futex and no registry entry.
 fn retire_task(t: usize) {
     crate::sched::mark_dead(t);
+    fork_in_flight_reclaim(t); // BUG-180
     futex_purge_task(t);
     free_thread_kstack(t);
     crate::net::forget_rx_waiter(t);
@@ -11052,6 +11053,48 @@ unsafe fn arena_fill(dst: u64, src: Option<u64>, bytes: usize) {
     }
 }
 
+/// BUG-180: forks in progress. A fork takes the child's arena, then its page
+/// tables and a copy of the demand pages, and yields between the pieces of the
+/// copy (BUG-128). If the forking task is ended meanwhile (the launcher's
+/// deadline, kill(2) of a fork child that was forking itself, the end of the
+/// run), it never comes back to finish or undo it, and all of that belonged to
+/// nobody: 96 MiB of process pool per killed fork in [memt]. Entry: (forking
+/// task, child arena, its frames, child pml4 or 0 while the tables are not
+/// linked yet).
+static FORK_IN_FLIGHT: Mutex<alloc::vec::Vec<(usize, u64, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+fn fork_in_flight_set(task: usize, arena: u64, frames: usize, pml4: u64) {
+    let _g = crate::sched::IfOffGuard::new();
+    let mut v = FORK_IN_FLIGHT.lock();
+    v.retain(|e| e.0 != task);
+    v.push((task, arena, frames, pml4));
+}
+
+fn fork_in_flight_done(task: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    FORK_IN_FLIGHT.lock().retain(|e| e.0 != task);
+}
+
+/// `task` has ended for good: give back a fork it was in the middle of.
+fn fork_in_flight_reclaim(task: usize) {
+    let hit = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut v = FORK_IN_FLIGHT.lock();
+        let i = v.iter().position(|e| e.0 == task);
+        i.map(|i| v.swap_remove(i))
+    };
+    let Some((_, arena, frames, pml4)) = hit else { return };
+    let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
+    if pml4 != 0 {
+        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        crate::paging::free_fork_tables(pml4);
+        crate::procpool::free(pml4);
+    }
+    crate::procpool::free_range(arena, frames);
+    crate::serial_println!("[fork] task {task} ended inside a fork: {} MiB of demand pages and {} MiB of arena and tables given back (BUG-180)",
+        (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
+}
+
 fn do_glibc_fork() -> u64 {
     static FORKLOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     let fork_log = FORKLOG.fetch_add(1, Ordering::Relaxed) < 4;
@@ -11077,6 +11120,8 @@ fn do_glibc_fork() -> u64 {
             return (-12i64) as u64; // -ENOMEM
         }
     };
+    let me = crate::sched::current();
+    fork_in_flight_set(me, child_arena, arena_frames, 0);
     // Copy the parent arena (ld.so/libc/heap/stack) into the child's frames, in
     // pieces with a window for the timer (BUG-128). The forking thread stands in
     // this syscall; its own stack and what it alone writes are copied whole.
@@ -11093,6 +11138,7 @@ fn do_glibc_fork() -> u64 {
                 crate::procpool::free(f);
             }
             crate::procpool::free_range(child_arena, arena_frames);
+            fork_in_flight_done(me);
             crate::serial_println!("[fork] page-table alloc FAILED");
             return (-12i64) as u64;
         }
@@ -11104,6 +11150,7 @@ fn do_glibc_fork() -> u64 {
     // all of that still allocated and owned by nobody: 128 MiB of arena and
     // ~105 MiB of demand pages per refused fork of the browser, which retries.
     let undo_fork = |why: &str| {
+        fork_in_flight_done(me);
         let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
         crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
         crate::paging::free_fork_tables(pml4);
@@ -11113,6 +11160,8 @@ fn do_glibc_fork() -> u64 {
             (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
     };
     crate::paging::fill_remap_tables_multiblock(pml4, pdpt, pd, arena, child_arena, nblocks);
+    // The tables are linked under the pml4 now (free_fork_tables finds them).
+    fork_in_flight_set(me, child_arena, arena_frames, pml4);
     // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
     if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
         crate::serial_println!("[fork] clone_demand_region OOM");
@@ -11161,6 +11210,8 @@ fn do_glibc_fork() -> u64 {
     register_thread_kstack(child, slot);
     let pid = NEXT_FORK_PID.fetch_add(1, Ordering::Relaxed);
     GLIBC_FORK_CHILDREN.lock().push((pid, child, pml4, child_arena, arena_frames));
+    // From here the child's teardown owns what the fork took.
+    fork_in_flight_done(me);
     inherit_profile(crate::sched::current(), child);
     proc_state_inherit(crate::sched::current(), child);
     child_mem_snapshot(child); // the child inherits the parent's demand-state
@@ -13095,6 +13146,9 @@ fn kill_glibc_group(main_task: usize) {
             crate::sched::mark_dead(t);
             killed += 1;
         }
+        // BUG-180: killed inside a fork: what that fork took comes back now,
+        // while the run's demand pool still exists.
+        fork_in_flight_reclaim(t);
     }
     crate::serial_println!("[glibc] timed-out program killed: main t{main_task} + {} thread(s) ({killed} were still alive)", threads.len());
 }
