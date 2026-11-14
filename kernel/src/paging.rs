@@ -383,9 +383,22 @@ pub fn map_user_arena(
                 pdptp.add(i3).write_volatile(pd | PRESENT | WRITABLE | USER);
                 pd
             };
-            (pd as *mut u64)
-                .add(i2)
-                .write_volatile((phys_arena + b * MIB2) | PRESENT | WRITABLE | HUGE | USER);
+            // 4 KiB pages from the start (SPLIT_PT): a fork shares the pages
+            // copy-on-write, and single pages are write-protected for that.
+            // The table comes from the same allocator as the directories and
+            // goes with the address space; without one, a 2 MiB page as
+            // before (the first fork splits it, from the process pool).
+            let phys = phys_arena + b * MIB2;
+            match get_pd() {
+                Some(pt) => {
+                    let ptp = pt as *mut u64;
+                    for i in 0..512u64 {
+                        ptp.add(i as usize).write_volatile((phys + i * 4096) | PRESENT | WRITABLE | USER);
+                    }
+                    (pd as *mut u64).add(i2).write_volatile(pt | PRESENT | WRITABLE | USER | SPLIT_PT);
+                }
+                None => (pd as *mut u64).add(i2).write_volatile(phys | PRESENT | WRITABLE | HUGE | USER),
+            }
         }
     }
     true
@@ -807,7 +820,8 @@ pub fn user_writable_in(pml4: u64, virt: u64) -> bool {
             table = e & ADDR_MASK;
         }
         let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
-        e & (PRESENT | USER | WRITABLE) == (PRESENT | USER | WRITABLE)
+        // A copy-on-write page is writable: the write faults and gets its copy.
+        e & (PRESENT | USER) == (PRESENT | USER) && e & (WRITABLE | COW) != 0
     }
 }
 
@@ -1137,6 +1151,336 @@ pub fn lazy_arena_fault(pml4: u64, addr: u64, reserve: usize) -> Option<bool> {
     Some(true)
 }
 
+// -- Copy-on-write fork (euromm::cow) ------------------------------------------
+// A fork shares the pages of the parent with the child instead of copying them:
+// both entries become read-only and carry COW, and the first write of either
+// side faults and gives the writer a copy (or the frame itself, when it is the
+// last holder). `euromm::cow::Refs` counts the holders of every frame of RAM.
+// The arena of the launched process is identity mapped with 2 MiB pages: at its
+// first fork the blocks are split into page tables (SPLIT_PT, frames of the
+// process pool) so that single pages can be write-protected. Its frames never
+// move (the kernel reaches that arena by address): when it writes a page a
+// child still shares, the child gets the copy (`arena_cow_fault`, Evict).
+pub use euromm::cow::COW;
+/// In a PD entry of the launched process: the arena block is a page table
+/// (4 KiB pages: from the launch, or split at the first fork).
+const SPLIT_PT: u64 = 1 << 10;
+/// In a PTE of such a table: the page was all zeros at a fork, and its dirty
+/// bit was cleared then; while the dirty bit stays clear it is still zeros
+/// and the next fork need not read it.
+const KNOWN_ZERO: u64 = 1 << 9;
+const DIRTY: u64 = 1 << 6;
+
+static COW_TABLE: core::sync::atomic::AtomicPtr<core::sync::atomic::AtomicU16> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static COW_TABLE_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The count table: `entries` u16 at the identity-mapped frames from `base`
+/// (zeroed here), one per frame of RAM below `entries * 4096`.
+pub fn cow_init(base: u64, entries: usize) {
+    // SAFETY: frames taken from the frame allocator for good, identity mapped.
+    unsafe { core::ptr::write_bytes(base as *mut u8, 0, entries * 2) };
+    COW_TABLE_LEN.store(entries, core::sync::atomic::Ordering::Relaxed);
+    COW_TABLE.store(base as *mut core::sync::atomic::AtomicU16, core::sync::atomic::Ordering::Release);
+}
+
+/// The holders of every frame (an empty table before `cow_init`: nothing is
+/// shared then, a fork copies as it did).
+pub fn cow_refs() -> euromm::cow::Refs<'static> {
+    let p = COW_TABLE.load(core::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        return euromm::cow::Refs::new(&[]);
+    }
+    // SAFETY: set once by cow_init over frames that are never freed.
+    euromm::cow::Refs::new(unsafe { core::slice::from_raw_parts(p, COW_TABLE_LEN.load(core::sync::atomic::Ordering::Relaxed)) })
+}
+
+/// The address spaces of fork children (their PML4s), for the launched
+/// process that writes a page they share: they get the copies.
+static COW_SPACES: spin::Mutex<alloc::vec::Vec<u64>> = spin::Mutex::new(alloc::vec::Vec::new());
+
+pub fn cow_space_register(pml4: u64) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut v = COW_SPACES.lock();
+        if v.try_reserve(1).is_err() {
+            return false;
+        }
+        v.push(pml4);
+        true
+    })
+}
+
+pub fn cow_space_unregister(pml4: u64) {
+    x86_64::instructions::interrupts::without_interrupts(|| COW_SPACES.lock().retain(|&p| p != pml4));
+}
+
+/// Copy-on-write faults served so far: pages made writable in place, pages
+/// copied, pages a child got because the launched process wrote them.
+pub static COW_REUSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static COW_COPIED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static COW_EVICTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Copy the user page at `src` (mapped in the current address space) into
+/// the frame `dst` (identity mapped for the kernel). From the page-fault
+/// handler: SMAP is on and the handler runs with AC clear, so the read of a
+/// user page is bracketed by STAC/CLAC (the IRETQ restores the AC of whoever
+/// faulted).
+unsafe fn copy_user_page(src: u64, dst: u64) {
+    core::arch::asm!("stac", options(nostack));
+    core::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, 4096);
+    core::arch::asm!("clac", options(nostack));
+}
+
+unsafe fn invlpg(va: u64) {
+    core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+}
+
+/// The arena page-table entry of `virt` under `pml4` (a lazy table of a
+/// child or a split table of the launched process) and its PD entry.
+unsafe fn arena_pte_ptr(pml4: u64, virt: u64) -> Option<(*mut u64, u64)> {
+    if virt >> 39 != 0 {
+        return None;
+    }
+    let e4 = (pml4 as *const u64).read_volatile();
+    if e4 & PRESENT == 0 {
+        return None;
+    }
+    let e3 = ((e4 & ADDR_MASK) as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
+    if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+        return None;
+    }
+    let e2 = ((e3 & ADDR_MASK) as *const u64).add(((virt >> 21) & 0x1FF) as usize).read_volatile();
+    if e2 & PRESENT == 0 || e2 & HUGE != 0 || e2 & (LAZY_PT | SPLIT_PT) == 0 {
+        return None;
+    }
+    Some((((e2 & ADDR_MASK) as *mut u64).add(((virt >> 12) & 0x1FF) as usize), e2))
+}
+
+/// fork(): share the arena of the running process (`parent`, the current
+/// CR3) with the lazy arena of `child`. A page of the parent that holds
+/// something becomes copy-on-write on both sides; a page of the launched
+/// process that is all zeros is left out (the child reads zeros and gets a
+/// frame at its first touch). The 2 MiB blocks of the launched process are
+/// split into page tables the first time. A frame that cannot be shared (its
+/// count is full, or there is no table) is copied as before. `between` runs
+/// after every 2 MiB. Returns (pages shared, zero pages left out, pages
+/// copied), or None when the pool has no frame for a table or a copy (the
+/// caller undoes the fork).
+pub fn share_arena_cow(parent: u64, child: u64, virt_arena: u64, nblocks: u64, reserve: usize,
+                       between: &mut dyn FnMut()) -> Option<(usize, usize, usize)> {
+    let refs = cow_refs();
+    let (mut shared, mut zero, mut copied) = (0usize, 0usize, 0usize);
+    // The timer gets a window after about 4096 entries or 16 MiB read
+    // (BUG-128), not after every 2 MiB: sharing an entry costs little.
+    let mut work = 0usize;
+    for b in 0..nblocks {
+        let base = virt_arena + b * MIB2;
+        // SAFETY: identity-mapped tables of the running process and of the
+        // child (not running). The parent's pages are read through the
+        // current address space; a fresh pool frame through the identity map.
+        unsafe {
+            let e4 = (parent as *const u64).read_volatile();
+            if e4 & PRESENT == 0 { break; }
+            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((base >> 21) & 0x1FF) as usize);
+            let mut e2 = e2p.read_volatile();
+            if e2 & PRESENT == 0 || e2 & USER == 0 { continue; }
+            if e2 & HUGE != 0 {
+                // The launched process: this block becomes a page table.
+                if crate::procpool::free_frames() <= reserve { return None; }
+                let pt = crate::procpool::alloc()?;
+                let phys = e2 & 0x000F_FFFF_FFE0_0000;
+                let leaf = e2 & (PRESENT | WRITABLE | USER | NX);
+                for i in 0..512u64 {
+                    (pt as *mut u64).add(i as usize).write_volatile((phys + i * 4096) | leaf);
+                }
+                e2 = pt | PRESENT | WRITABLE | USER | SPLIT_PT | (e2 & NX);
+                e2p.write_volatile(e2);
+                invlpg(base);
+            }
+            let pinned = e2 & SPLIT_PT != 0;
+            let ppt = (e2 & ADDR_MASK) as *mut u64;
+            for i in 0..512u64 {
+                let va = base + i * 4096;
+                let pe = ppt.add(i as usize).read_volatile();
+                if pe & PRESENT == 0 || pe & USER == 0 { continue; }
+                let Some(ctep) = lazy_pte_ptr(child, va) else { return None };
+                work += 1;
+                if pinned && pe & COW == 0 {
+                    if pe & KNOWN_ZERO != 0 && pe & DIRTY == 0 {
+                        zero += 1; // zeros at the last fork, not written since
+                        continue;
+                    }
+                    work += 8;
+                    if page_is_zero(va) {
+                        ppt.add(i as usize).write_volatile((pe | KNOWN_ZERO) & !DIRTY);
+                        zero += 1;
+                        continue;
+                    }
+                }
+                let pe = if pinned { pe & !KNOWN_ZERO } else { pe };
+                match euromm::cow::share(pe, &refs) {
+                    Some(n) => {
+                        ppt.add(i as usize).write_volatile(n);
+                        ctep.write_volatile(n);
+                        shared += 1;
+                    }
+                    None => {
+                        if crate::procpool::free_frames() <= reserve { return None; }
+                        let f = crate::procpool::alloc()?;
+                        core::ptr::copy_nonoverlapping(va as *const u8, f as *mut u8, 4096);
+                        ctep.write_volatile(f | PRESENT | WRITABLE | USER | OWNED);
+                        copied += 1;
+                    }
+                }
+            }
+        }
+        // The parent's translations of this block are looked up again before
+        // any task of it runs (ring 3 runs on this core only); a cleared
+        // dirty bit is set again by the next write.
+        flush_tlb_all();
+        if work >= 4096 {
+            work = 0;
+            between();
+        }
+    }
+    Some((shared, zero, copied))
+}
+
+/// A write to a present arena page that faulted: when the entry at `addr`
+/// under `pml4` (the current CR3) is copy-on-write, the writer gets its copy,
+/// or the frame itself when nobody else holds it; when the writer is the
+/// launched process, the children that share the frame get the copies. From
+/// ring 3 and from a system call that writes into its caller alike. None: not
+/// a copy-on-write page. Some(false): no frame in the process pool (it has
+/// `reserve` frames or fewer).
+pub fn arena_cow_fault(pml4: u64, addr: u64, reserve: usize) -> Option<bool> {
+    let refs = cow_refs();
+    let page = addr & !0xFFF;
+    // SAFETY: identity-mapped tables; the page is read through the current
+    // address space (present, readable) and a fresh frame through the
+    // identity map; ring 3 runs on this core only, so no other core holds a
+    // translation of these entries.
+    unsafe {
+        let (ptep, e2) = arena_pte_ptr(pml4, page)?;
+        let pe = ptep.read_volatile();
+        match euromm::cow::on_write(pe, &refs, e2 & SPLIT_PT != 0) {
+            euromm::cow::Write::NotCow => None,
+            euromm::cow::Write::Reuse(n) => {
+                ptep.write_volatile(n);
+                invlpg(page);
+                COW_REUSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Some(true)
+            }
+            euromm::cow::Write::Copy { old, flags } => {
+                if crate::procpool::free_frames() <= reserve { return Some(false); }
+                let Some(f) = crate::procpool::alloc() else { return Some(false) };
+                copy_user_page(page, f);
+                ptep.write_volatile(f | flags | OWNED);
+                invlpg(page);
+                if refs.release(old) && pe & OWNED != 0 {
+                    crate::procpool::free(old);
+                }
+                COW_COPIED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Some(true)
+            }
+            euromm::cow::Write::Evict => {
+                let frame = pe & ADDR_MASK;
+                let spaces = COW_SPACES.lock();
+                for &cp in spaces.iter() {
+                    let Some(ctep) = lazy_pte_ptr(cp, page) else { continue };
+                    let ce = ctep.read_volatile();
+                    if ce & PRESENT == 0 || ce & ADDR_MASK != frame { continue; }
+                    let Some(f) = crate::procpool::alloc() else { return Some(false) };
+                    copy_user_page(page, f);
+                    ctep.write_volatile(f | PRESENT | WRITABLE | USER | OWNED | (ce & NX));
+                    refs.release(frame);
+                    COW_EVICTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                }
+                drop(spaces);
+                if refs.extra(frame) != 0 {
+                    // A holder that is in no registered address space: the
+                    // count is wrong. Say so; the page is the parent's.
+                    static SAID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                    if SAID.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 4 {
+                        crate::serial_println!("[cow] frame {frame:#x} at {page:#x}: {} holders found in no child", refs.extra(frame));
+                    }
+                    refs.reset(frame);
+                }
+                ptep.write_volatile((pe | WRITABLE) & !COW);
+                invlpg(page);
+                Some(true)
+            }
+        }
+    }
+}
+
+/// An arena entry of a child goes away (execve, exit, a refused fork):
+/// release its frame, and free it when it was the last holder of a frame of
+/// the process pool.
+fn arena_entry_release(e: u64, refs: &euromm::cow::Refs) -> bool {
+    if e & PRESENT == 0 || e & (OWNED | COW) == 0 {
+        return false;
+    }
+    if euromm::cow::on_unmap(e, refs) && e & OWNED != 0 {
+        crate::procpool::free(e & ADDR_MASK);
+        return true;
+    }
+    false
+}
+
+/// A write to a present page of the demand region that faulted: the
+/// copy-on-write break, as `arena_cow_fault` for the demand pool. None: not a
+/// copy-on-write page. Some(false): the demand pool has no frame.
+pub fn demand_cow_fault(pml4: u64, addr: u64) -> Option<bool> {
+    let refs = cow_refs();
+    let page = addr & !0xFFF;
+    // SAFETY: identity-mapped table chain of the current address space.
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((page >> shift) & 0x1FF) as usize).read_volatile();
+            if e & PRESENT == 0 || e & HUGE != 0 { return None; }
+            table = e & ADDR_MASK;
+        }
+        let ptep = (table as *mut u64).add(((page >> 12) & 0x1FF) as usize);
+        let pe = ptep.read_volatile();
+        match euromm::cow::on_write(pe, &refs, false) {
+            euromm::cow::Write::NotCow | euromm::cow::Write::Evict => None,
+            euromm::cow::Write::Reuse(n) => {
+                ptep.write_volatile(n);
+                invlpg(page);
+                COW_REUSED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Some(true)
+            }
+            euromm::cow::Write::Copy { old, flags } => {
+                let Some(f) = crate::procpool::demand_alloc() else { return Some(false) };
+                core::ptr::copy_nonoverlapping(old as *const u8, f as *mut u8, 4096);
+                ptep.write_volatile(f | flags);
+                invlpg(page);
+                if refs.release(old) {
+                    crate::procpool::demand_free(old);
+                }
+                COW_COPIED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Some(true)
+            }
+        }
+    }
+}
+
+/// map_demand_4k with the whole entry given (a copy-on-write page of fork).
+pub fn map_demand_4k_pte(pml4: u64, virt: u64, pte: u64) -> bool {
+    // SAFETY: as map_demand_4k.
+    unsafe {
+        let pdpt = match ensure_table((pml4 as *mut u64).add(((virt >> 39) & 0x1FF) as usize)) { Some(p) => p, None => return false };
+        let pd = match ensure_table((pdpt as *mut u64).add(((virt >> 30) & 0x1FF) as usize)) { Some(p) => p, None => return false };
+        let pt = match ensure_table((pd as *mut u64).add(((virt >> 21) & 0x1FF) as usize)) { Some(p) => p, None => return false };
+        (pt as *mut u64).add(((virt >> 12) & 0x1FF) as usize).write_volatile(pte);
+    }
+    true
+}
+
 fn page_is_zero(va: u64) -> bool {
     // SAFETY: the caller checked that the page is mapped under the current CR3.
     unsafe {
@@ -1204,6 +1548,7 @@ pub fn clone_arena_lazy(parent: u64, child: u64, virt_arena: u64, nblocks: u64, 
 /// `pml4`; the TLB is flushed here.
 pub fn lazy_arena_discard(pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
     let mut freed = 0;
+    let refs = cow_refs();
     // SAFETY: identity-mapped tables of the running process; the caller is its
     // only task (execve) and touches no arena page between here and the flush.
     unsafe {
@@ -1211,10 +1556,9 @@ pub fn lazy_arena_discard(pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
             let Some(pt) = lazy_pte_ptr(pml4, virt_arena + b * MIB2) else { continue };
             for i in 0..512usize {
                 let e = pt.add(i).read_volatile();
-                if e & PRESENT != 0 && e & OWNED != 0 {
+                if e & PRESENT != 0 && e & (OWNED | COW) != 0 {
                     pt.add(i).write_volatile(0);
-                    crate::procpool::free(e & ADDR_MASK);
-                    freed += 1;
+                    freed += arena_entry_release(e, &refs) as usize;
                 }
             }
         }
@@ -1228,6 +1572,7 @@ pub fn lazy_arena_discard(pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
 /// Frames a process holds in lazy arena pages (the census).
 pub fn lazy_arena_frames(pml4: u64) -> usize {
     let mut n = 0;
+    let refs = cow_refs();
     // SAFETY: identity-mapped tables, read only.
     unsafe {
         let e4 = (pml4 as *const u64).read_volatile();
@@ -1243,12 +1588,16 @@ pub fn lazy_arena_frames(pml4: u64) -> usize {
                 let pt = (e2 & ADDR_MASK) as *const u64;
                 for k in 0..512usize {
                     let e = pt.add(k).read_volatile();
-                    if e & PRESENT != 0 && e & OWNED != 0 { n += 1; }
+                    // A frame shared with other children counts for its
+                    // part; a frame of the launched process is its own.
+                    if e & PRESENT != 0 && e & OWNED != 0 {
+                        n += 1024 / (refs.extra(e & ADDR_MASK) as usize + 1);
+                    }
                 }
             }
         }
     }
-    n
+    n / 1024
 }
 
 /// fork(): copy every COMMITTED page of the demand region PML4[`idx`] from `parent`
@@ -1256,7 +1605,9 @@ pub fn lazy_arena_frames(pml4: u64) -> usize {
 /// exe/lib pages could be re-faulted from disk, but the child must observe the
 /// parent's RUNTIME writes (heap, initialized data, chrome globals), so we copy every
 /// committed page. Returns false on pool exhaustion (caller tears the child down).
-pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dyn FnMut()) -> bool {
+pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dyn FnMut(),
+                           private: &dyn Fn(u64) -> bool) -> bool {
+    let refs = cow_refs();
     // SAFETY: identity-mapped table chains for both address spaces. Frame copies
     // read the parent's phys (identity) and write fresh pool frames (identity),
     // both reachable with the current CR3. `between` runs after every page
@@ -1282,6 +1633,9 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dy
                 }
                 let pt = e2 & ADDR_MASK;
                 if i2 & 3 == 3 {
+                    // Entries of the parent were made read-only: its
+                    // translations are looked up again before it runs.
+                    flush_tlb_all();
                     between();
                 }
                 for i1 in 0..512usize {
@@ -1300,11 +1654,23 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dy
                     // page cache: copying the parent's whole RO-mapped text set
                     // (hundreds of MB) exhausted the pool and later cache-hit
                     // mappings failed silently (run 16 ifetch terminations).
-                    if e1 & WRITABLE == 0 {
+                    if e1 & (WRITABLE | COW) == 0 {
                         if !map_demand_4k_ro(child, va, src) {
                             return false;
                         }
                         continue;
+                    }
+                    // A private page (not a window of a MAP_SHARED file) is
+                    // shared copy-on-write: no copy, the first write copies.
+                    if private(va) {
+                        if let Some(n) = euromm::cow::share(e1, &refs) {
+                            (pt as *mut u64).add(i1).write_volatile(n);
+                            if !map_demand_4k_pte(child, va, n) {
+                                refs.release(src);
+                                return false;
+                            }
+                            continue;
+                        }
                     }
                     let dst = match crate::procpool::demand_alloc() {
                         Some(f) => f,
@@ -1319,6 +1685,7 @@ pub fn clone_demand_region(parent: u64, child: u64, idx: usize, between: &mut dy
             }
         }
     }
+    flush_tlb_all();
     true
 }
 
@@ -1333,6 +1700,7 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
                           free_if: &mut dyn FnMut(u64, bool) -> bool) -> (usize, usize) {
     let mut unmapped = 0usize;
     let mut freed = 0usize;
+    let refs = cow_refs();
     let mut va = start & !0xFFF;
     // SAFETY: identity-mapped table chain; single-threaded (IF=0 syscall).
     unsafe {
@@ -1357,7 +1725,9 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
                     slot.write_volatile(0);
                     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
                     unmapped += 1;
-                    if free_if(va, e1 & WRITABLE != 0) {
+                    // A copy-on-write page is private: its holder count says
+                    // whether the frame goes.
+                    if free_if(va, e1 & (WRITABLE | COW) != 0) && euromm::cow::on_unmap(e1, &refs) {
                         crate::procpool::demand_free(e1 & ADDR_MASK);
                         freed += 1;
                     }
@@ -1403,7 +1773,8 @@ pub fn scan_demand_ro(pml4: u64, idx: usize, age: bool, f: &mut dyn FnMut(u64, b
                 for i1 in 0..512usize {
                     let slot = (pt as *mut u64).add(i1);
                     let e1 = slot.read_volatile();
-                    if e1 & PRESENT == 0 || e1 & WRITABLE != 0 {
+                    // Copy-on-write pages are private memory, not the cache.
+                    if e1 & PRESENT == 0 || e1 & (WRITABLE | COW) != 0 {
                         continue;
                     }
                     if f(e1 & ADDR_MASK, e1 & ACCESSED != 0) {
@@ -1436,6 +1807,7 @@ pub fn flush_tlb_all() {
 /// the call promises. Returns the frames freed.
 pub fn discard_demand_range(pml4: u64, start: u64, end: u64, owned: &mut dyn FnMut(u64, bool) -> bool) -> usize {
     let mut freed = 0usize;
+    let refs = cow_refs();
     let mut va = start & !0xFFF;
     // SAFETY: identity-mapped table chain of the calling process (IF=0 syscall).
     unsafe {
@@ -1455,10 +1827,13 @@ pub fn discard_demand_range(pml4: u64, start: u64, end: u64, owned: &mut dyn FnM
                 let slot = (pt as *mut u64).add(((va >> 12) & 0x1FF) as usize);
                 let e1 = slot.read_volatile();
                 if e1 & PRESENT != 0 {
-                    if owned(va, e1 & WRITABLE != 0) {
+                    if owned(va, e1 & (WRITABLE | COW) != 0) {
                         slot.write_volatile(0);
                         core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
-                        crate::procpool::demand_free(e1 & ADDR_MASK);
+                        // Shared copy-on-write: the others keep the frame.
+                        if euromm::cow::on_unmap(e1, &refs) {
+                            crate::procpool::demand_free(e1 & ADDR_MASK);
+                        }
                         freed += 1;
                     }
                 } else if e1 & SWAPPED_PTE != 0 && owned(va, true) {
@@ -1557,6 +1932,7 @@ pub fn walk_demand_region(pml4: u64, idx: usize, f: &mut dyn FnMut(u64, u64)) ->
 }
 
 pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
+    let refs = cow_refs();
     // SAFETY: identity-mapped table chain; called single-threaded at teardown.
     unsafe {
         let e4 = (pml4 as *const u64).add(idx).read_volatile();
@@ -1583,7 +1959,12 @@ pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
                     }
                     if e1 & PRESENT != 0 {
                         let phys = e1 & ADDR_MASK;
-                        if keep.binary_search(&phys).is_err() {
+                        if e1 & COW != 0 {
+                            // Shared copy-on-write: freed by its last holder.
+                            if refs.release(phys) {
+                                crate::procpool::demand_free(phys);
+                            }
+                        } else if keep.binary_search(&phys).is_err() {
                             crate::procpool::demand_free(phys); // committed data page
                         }
                     }
@@ -1598,6 +1979,7 @@ pub fn free_demand_region_except(pml4: u64, idx: usize, keep: &[u64]) {
 }
 
 pub fn free_demand_region(pml4: u64, idx: usize) {
+    let refs = cow_refs();
     // SAFETY: identity-mapped table chain; called single-threaded at process teardown.
     unsafe {
         let e4 = (pml4 as *const u64).add(idx).read_volatile();
@@ -1620,7 +2002,9 @@ pub fn free_demand_region(pml4: u64, idx: usize) {
                 for i1 in 0..512usize {
                     let e1 = (pt as *const u64).add(i1).read_volatile();
                     if e1 & PRESENT != 0 {
-                        crate::procpool::demand_free(e1 & ADDR_MASK); // committed data page
+                        if euromm::cow::on_unmap(e1, &refs) {
+                            crate::procpool::demand_free(e1 & ADDR_MASK); // committed data page
+                        }
                     } else if e1 & SWAPPED_PTE != 0 {
                         crate::swapmgr::free_slot(((e1 >> 12) & 0xFFFFF) as usize); // its swap slot
                     }
@@ -1658,7 +2042,13 @@ pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {
             for i in 0..512usize {
                 let e = pdp.add(i).read_volatile();
                 if e & PRESENT != 0 && e & HUGE == 0 {
-                    let _ = falloc.free(e & ADDR_MASK);
+                    if e & SPLIT_PT != 0 && crate::procpool::owns(e & ADDR_MASK) {
+                        // An arena block split at a fork (copy-on-write):
+                        // its table came from the process pool.
+                        crate::procpool::free(e & ADDR_MASK);
+                    } else {
+                        let _ = falloc.free(e & ADDR_MASK);
+                    }
                 }
             }
             let _ = falloc.free(pd);
@@ -1682,6 +2072,10 @@ pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {
 /// exit path switches away: single core, no allocation in between.
 pub fn free_fork_tables(pml4: u64) -> usize {
     let mut freed = 0;
+    // From here the launched process does not look for copy-on-write pages
+    // of this child any more (`arena_cow_fault`).
+    cow_space_unregister(pml4);
+    let refs = cow_refs();
     // SAFETY: identity-mapped tables; read-only walk, frames only marked free.
     unsafe {
         let e4 = (pml4 as *const u64).read_volatile();
@@ -1700,9 +2094,7 @@ pub fn free_fork_tables(pml4: u64) -> usize {
                         let pt = (e2 & ADDR_MASK) as *const u64;
                         for k in 0..512usize {
                             let e = pt.add(k).read_volatile();
-                            if e & PRESENT != 0 && e & OWNED != 0 {
-                                crate::procpool::free(e & ADDR_MASK); freed += 1;
-                            }
+                            freed += arena_entry_release(e, &refs) as usize;
                         }
                     }
                     crate::procpool::free(e2 & ADDR_MASK); freed += 1;

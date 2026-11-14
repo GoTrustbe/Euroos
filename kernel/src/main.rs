@@ -900,6 +900,19 @@ fn main() -> Status {
                     }
                 }
                 procpool::install_regions(&regions);
+                // Copy-on-write fork: one holder count per frame of RAM, in
+                // frames of its own (not the kernel heap).
+                {
+                    let entries = allocator.total_frames();
+                    let frames = (entries * 2).div_ceil(4096);
+                    match allocator.allocate_contiguous(frames) {
+                        Ok(t) => {
+                            paging::cow_init(t, entries);
+                            serial_println!("[cow] holder counts for {} MiB of RAM: {} KiB", entries / 256, frames * 4);
+                        }
+                        Err(_) => serial_println!("[cow] no room for the holder counts: fork copies"),
+                    }
+                }
                 let mut line = alloc::format!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
                 for &(b, f) in regions.iter().skip(1) {
                     line.push_str(&alloc::format!(" + {} MiB @ {b:#x}", f / 256));

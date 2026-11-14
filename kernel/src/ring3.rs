@@ -10799,6 +10799,19 @@ fn reap_orphan_fork_children() -> usize {
         fork_child_teardown(pid, ctask, pml4, arena, frames, None);
         crate::sched::reclaim_task(ctask);
     }
+    // Every child is gone: no page of the arena of the launched process is
+    // shared any more. A count left over is a fault of the copy-on-write
+    // model; it is said and cleared, so the next run does not inherit it.
+    {
+        let arena = ARENA_BASE.load(Ordering::Relaxed);
+        let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+        if arena != 0 && span != 0 {
+            let left = crate::paging::cow_refs().clear_range(arena, arena + span);
+            if left > 0 {
+                crate::serial_println!("[cow] {left} arena frames of the launched process still counted as shared after its children ended: cleared");
+            }
+        }
+    }
     // Whatever happened, the next run starts with its own state in the globals.
     let owner = GLOBALS_OWNER.load(Ordering::Relaxed);
     if owner != 0 {
@@ -11174,6 +11187,14 @@ fn do_glibc_fork() -> u64 {
             span >> 20, crate::procpool::free_frames() / 256);
         return (-12i64) as u64;
     }
+    // The launched process looks in this address space for the children
+    // that share a page it writes (copy-on-write); undone by free_fork_tables.
+    if !crate::paging::cow_space_register(pml4) {
+        let n = crate::paging::free_fork_tables(pml4);
+        crate::procpool::free(pml4);
+        crate::serial_println!("[fork] no memory to register the child ({n} frames given back)");
+        return (-12i64) as u64;
+    }
     // From here the tables are linked under the pml4: a fork that is refused
     // or whose task is ended (BUG-180) gives everything back through it.
     fork_in_flight_set(me, child_arena, arena_frames, pml4);
@@ -11193,18 +11214,25 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] refused ({why}): {} MiB of demand pages and {} MiB of arena and tables given back",
             (crate::procpool::demand_free_frames() - d0) / 256, (crate::procpool::free_frames() - p0) / 256);
     };
-    // Copy the pages of the parent arena that hold something (ld.so, libc,
-    // heap, stacks), 2 MiB at a time with a window for the timer (BUG-128).
-    // The forking thread stands in this syscall.
-    let Some((arena_copied, arena_zero)) = crate::paging::clone_arena_lazy(parent_pml4, pml4, arena, nblocks, FORK_POOL_RESERVE, &mut irq_window) else {
+    // Share the pages of the parent arena that hold something (ld.so, libc,
+    // heap, stacks) copy-on-write, 2 MiB at a time with a window for the
+    // timer (BUG-128). The forking thread stands in this syscall.
+    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, arena, nblocks, FORK_POOL_RESERVE, &mut irq_window) else {
         crate::serial_println!("[fork] arena alloc FAILED ({} MiB arena, pool has {} MiB)",
             span >> 20, crate::procpool::free_frames() / 256);
         undo_fork("no memory for the copy of the arena");
         return (-12i64) as u64; // -ENOMEM
     };
     let t_arena = unsafe { core::arch::x86_64::_rdtsc() };
-    // Copy every committed demand page (exe data/bss, heap-in-demand) into the child.
-    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window) {
+    // Every committed demand page (exe data/bss, heap-in-demand): shared
+    // copy-on-write; the windows of MAP_SHARED files are copied as before.
+    let windows: alloc::vec::Vec<(u64, u64)> = {
+        let mut v: alloc::vec::Vec<(u64, u64)> = SHARED_MAPS.lock().iter().map(|&(_, b, l)| (b, b + l as u64)).collect();
+        v.extend(SHARED_ALIASES.lock().iter().map(|&(b, l, _)| (b, b + l)));
+        v
+    };
+    let private = |va: u64| !windows.iter().any(|&(b, e)| va >= b && va < e);
+    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window, &private) {
         crate::serial_println!("[fork] clone_demand_region OOM");
         undo_fork("no memory for the copy of the demand pages");
         return (-12i64) as u64;
@@ -11265,8 +11293,8 @@ fn do_glibc_fork() -> u64 {
         crate::serial_println!("[fork] pid {pid}: no memory for the child's descriptor table (it starts with the standard streams only)");
     }
     crate::serial_println!(
-        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena of {} MiB: {} KiB copied, {} KiB of zero pages left out; the parent uses {} MiB of it up to its mmap window top and {} KiB of brk; arena copy {} ms, demand pages {} ms, rest {} ms)",
-        span >> 20, arena_copied * 4, arena_zero * 4, HEAP_BREAK.load(Ordering::Relaxed).saturating_sub(arena) >> 20,
+        "[fork] pid {pid} -> child task {child} (own pml4={pml4:#x} arena of {} MiB: {} KiB shared copy-on-write, {} KiB copied, {} KiB of zero pages left out; the parent uses {} MiB of it up to its mmap window top and {} KiB of brk; arena {} ms, demand pages {} ms, rest {} ms)",
+        span >> 20, arena_shared * 4, arena_copied * 4, arena_zero * 4, HEAP_BREAK.load(Ordering::Relaxed).saturating_sub(arena) >> 20,
         BRK_CUR.load(Ordering::Relaxed).saturating_sub(arena + 0x0200_0000) / 1024,
         tsc_ms(t_start, t_arena), tsc_ms(t_arena, t_demand),
         tsc_ms(t_demand, unsafe { core::arch::x86_64::_rdtsc() })
@@ -11557,6 +11585,27 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
             }
         } else {
             RUN.store(0, Ordering::Relaxed);
+        }
+    }
+    // Copy-on-write (fork): a write to a page shared with another process.
+    // Needs no demand state and no lock but the pool's, so it comes first: a
+    // system call that copies into its caller may hold any other lock.
+    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+        let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        match crate::paging::demand_cow_fault(pml4, addr) {
+            Some(true) => return true,
+            Some(false) => {
+                if FAULT_CODE.load(Ordering::Relaxed) & 4 != 0 {
+                    ensure_globals_for_current();
+                    memory_pressure();
+                    if crate::paging::demand_cow_fault(pml4, addr) == Some(true) {
+                        return true;
+                    }
+                }
+                crate::serial_println!("[oom] no frame in the demand pool for the copy of a shared page at {addr:#x}: the write fails");
+                return false;
+            }
+            None => {}
         }
     }
     // Per-process isolation: the fault runs against the faulting task's own
@@ -15603,9 +15652,15 @@ pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
             .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
         let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
             (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+        let refs = crate::paging::cow_refs();
+        let mut cow_units = 0usize;
         m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
             if pte & 1 == 0 {
                 sw += 1;
+            } else if pte & crate::paging::COW != 0 {
+                // Shared copy-on-write: each holder counts its part, so
+                // the frame is counted once over the processes.
+                cow_units += 65536 / (refs.extra(pte & 0x000F_FFFF_FFFF_F000) as usize + 1);
             } else if pte & 2 == 0 {
                 mc += 1;
             } else if shared.contains(va) {
@@ -15628,7 +15683,7 @@ pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
                 }
             }
         });
-        m.anon = anon;
+        m.anon = anon + (cow_units + 32768) / 65536;
         m.anon_noaccess = anon_na;
         m.sampled = sampled;
         m.sampled_zero = zero;

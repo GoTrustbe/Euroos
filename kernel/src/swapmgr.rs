@@ -273,7 +273,9 @@ pub fn evict_demand(pml4: u64, base: u64, end: u64) -> Option<u64> {
             continue;
         };
         let e = unsafe { *pte };
-        if e & PRESENT != 0 && e & USER != 0 {
+        // A copy-on-write page (bit 11) may be mapped by other processes
+        // too: it is not this process's to swap out.
+        if e & PRESENT != 0 && e & USER != 0 && e & (1 << 11) == 0 {
             seen_present += 1;
             if e & ACCESSED != 0 {
                 cleared += 1;
