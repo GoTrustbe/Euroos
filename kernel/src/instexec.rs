@@ -29,9 +29,6 @@ pub struct InstallMedia {
 
 static MEDIA: Mutex<Option<InstallMedia>> = Mutex::new(None);
 
-/// BUG-191 diagnostics: boot-disk writes of an install that the device refused.
-static WRITE_FAILS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
 /// Read `\EFI\BOOT\{BOOTX64.EFI, eurokernel-A.efi, eurokernel-B.efi}` from the
 /// boot volume via UEFI Simple File System. **Must run before ExitBootServices.**
 /// The kernel was started by the loader from a memory buffer (no device handle
@@ -209,11 +206,9 @@ pub fn install_to_ahci(idx: usize, cfg: &Config, progress: &dyn Fn(&str)) -> boo
         total,
         &alloc::format!("AHCI disk {idx}"),
         progress,
-        |lba, bytes| {
-            crate::ahci::write_sectors(idx, lba, bytes);
-        },
+        |lba, bytes| crate::ahci::write_sectors(idx, lba, bytes),
         |lba, buf| crate::ahci::read_sectors(idx, lba, buf),
-        || {}, // AHCI writes are polled DMA → durable on completion
+        || true, // AHCI writes are polled DMA → durable on completion
         |first, blocks| crate::rootblk::RootBlk::ahci(idx, first, blocks),
     )
 }
@@ -237,20 +232,9 @@ pub fn install_to_disk(dev: usize, cfg: &Config, progress: &dyn Fn(&str)) -> boo
         total,
         &alloc::format!("virtio disk {dev}"),
         progress,
-        |lba, bytes| {
-            if !crate::virtio_blk::write_io_dev(dev, lba, bytes) {
-                let n = WRITE_FAILS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                if n < 8 {
-                    crate::serial_println!("[q1x3-diag] write of {} B at sector {lba} on virtio disk {dev} FAILED", bytes.len());
-                }
-            }
-        },
+        |lba, bytes| crate::virtio_blk::write_io_dev(dev, lba, bytes),
         |lba, buf| crate::virtio_blk::read_io_dev(dev, lba, buf),
-        || {
-            if !crate::virtio_blk::flush_dev(dev) {
-                crate::serial_println!("[q1x3-diag] flush of virtio disk {dev} FAILED");
-            }
-        },
+        || crate::virtio_blk::flush_dev(dev),
         |first, blocks| crate::rootblk::RootBlk::disk_on(dev, first, blocks),
     )
 }
@@ -272,11 +256,9 @@ pub fn install_to_nvme(cfg: &Config, progress: &dyn Fn(&str)) -> bool {
         total,
         "NVMe disk",
         progress,
-        |lba, bytes| {
-            crate::nvme::write_sectors(lba, bytes);
-        },
+        |lba, bytes| crate::nvme::write_sectors(lba, bytes),
         |lba, buf| crate::nvme::read_sectors(lba, buf),
-        || {}, // NVMe writes are synchronous (polled completion) → already durable
+        || true, // NVMe writes are synchronous (polled completion) → already durable
         |first, blocks| crate::rootblk::RootBlk::nvme(first, blocks),
     )
 }
@@ -290,9 +272,9 @@ fn install_to_target(
     total: u64,
     label: &str,
     progress: &dyn Fn(&str),
-    write: impl Fn(u64, &[u8]),
+    write: impl Fn(u64, &[u8]) -> bool,
     read: impl Fn(u64, &mut [u8]) -> bool,
-    flush: impl Fn(),
+    flush: impl Fn() -> bool,
     make_root: impl Fn(u64, u64) -> crate::rootblk::RootBlk,
 ) -> bool {
     // Take the media OUT of the global (no clones, no lock held during the install)
@@ -333,8 +315,17 @@ fn install_to_target(
     // its verified partition path from the very first boot.
     let slot_a_header = if sig_a.len() == 64 { crate::update::slot_header(kernel_a, sig_a).to_vec() } else { Vec::new() };
     progress("Writing the partition table and the boot files (ESP, A/B kernel slots)");
+    // Every write is checked: a write the disk refused used to be dropped without a
+    // word, and the install went on to report a vague failure (or none) later (BUG-191).
+    let refused = core::cell::Cell::new(0u32);
+    let first_refused = core::cell::Cell::new(None::<u64>);
     let Some(layout) = eurofat::write_boot_disk(total, vid, loader, kernel_a, kernel_b, sig_a, sig_b, &slot_a_header, &slot_a, |lba, bytes| {
-        write(lba, bytes);
+        if !write(lba, bytes) {
+            refused.set(refused.get() + 1);
+            if first_refused.get().is_none() {
+                first_refused.set(Some(lba));
+            }
+        }
     }) else {
         crate::serial_println!("[q1x3] target {label}: boot files do not fit the ESP — installation ABORTED");
         return false;
@@ -346,22 +337,28 @@ fn install_to_target(
     let blocks = layout.eurofs_sectors / 8; // 8 sectors per 4 KiB block
     let pdev = make_root(layout.eurofs_first, blocks);
     let steps = plan(cfg).unwrap_or_default();
-    crate::serial_println!("[q1x3-diag] before format: {} failed writes; blk timeouts {} bad-status {} overlaps {}",
-        WRITE_FAILS.load(core::sync::atomic::Ordering::Relaxed),
-        crate::virtio_blk::BLK_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed),
-        crate::virtio_blk::BLK_BAD_STATUS.load(core::sync::atomic::Ordering::Relaxed),
-        crate::virtio_blk::BLK_OVERLAP.load(core::sync::atomic::Ordering::Relaxed));
-    let provisioned = match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
-        Ok(mut fs) => provision(&mut fs, &steps, &users_db),
-        Err(e) => {
-            crate::serial_println!("[q1x3-diag] EuroFs::format on {label} failed: {e:?}; blk timeouts {} bad-status {} overlaps {}",
-                crate::virtio_blk::BLK_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed),
-                crate::virtio_blk::BLK_BAD_STATUS.load(core::sync::atomic::Ordering::Relaxed),
-                crate::virtio_blk::BLK_OVERLAP.load(core::sync::atomic::Ordering::Relaxed));
-            0
+    // The first reason the install failed, in words for the wizard and the log.
+    let mut reason: Option<String> = None;
+    if refused.get() > 0 {
+        reason = Some(alloc::format!(
+            "the disk refused {} write(s) of the boot files (first at sector {})",
+            refused.get(), first_refused.get().unwrap_or(0)
+        ));
+    }
+    let provisioned = if reason.is_some() {
+        0
+    } else {
+        match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
+            Ok(mut fs) => provision(&mut fs, &steps, &users_db),
+            Err(e) => {
+                reason = Some(alloc::format!("creating the EuroFS root failed: {e:?}"));
+                0
+            }
         }
     };
-    flush();
+    if !flush() && reason.is_none() {
+        reason = Some(String::from("the disk did not confirm the final flush"));
+    }
     progress("Verifying the installation (re-reading GPT, ESP and the root)");
 
     // ── Verification: re-read GPT + ESP boot sector + remount the EuroFS partition ──
@@ -380,13 +377,28 @@ fn install_to_target(
         ),
         Err(_) => (false, false, false),
     };
-    let ok = gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok && id_ok;
+    let ok = reason.is_none() && gpt_ok && esp_ok && provisioned >= 4 && host_ok && user_ok && id_ok;
+    if !ok && reason.is_none() {
+        reason = Some(String::from(if !gpt_ok || !esp_ok {
+            "the partition table or the ESP did not read back"
+        } else if provisioned < 4 {
+            "the first account and settings were not written"
+        } else {
+            "the installed system did not read back after a remount"
+        }));
+    }
+    if let Some(r) = &reason {
+        crate::serial_println!("[q1x3] target {label}: installation FAILED: {r}");
+    }
     crate::serial_println!(
         "[q1x3] EuroInstall → {label} ({} MiB): GPT={gpt_ok} ESP-FAT32={esp_ok}; EuroFS root formatted + {provisioned} steps provisioned, after remount hostname='{}'={host_ok} user='{}'={user_ok} euroid-store={id_ok} → {}",
         total * 512 / 1024 / 1024, cfg.hostname, cfg.username,
         if ok { "OK (bootable + provisioned installation from own media; boots standalone)" } else { "FAILED" }
     );
-    progress(if ok { "Installation complete" } else { "Installation FAILED (see the serial log)" });
+    match &reason {
+        None => progress("Installation complete"),
+        Some(r) => progress(&alloc::format!("Installation FAILED: {r}")),
+    }
     ok
 }
 

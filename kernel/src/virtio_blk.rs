@@ -187,32 +187,69 @@ unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
     r
 }
 
-/// BUG-191 diagnostics: requests that did not complete in the spin budget, that
-/// completed with a status other than OK, and requests entered while another one
-/// on the same disk was still in flight.
+/// How long one request may take before the disk counts as not answering. A
+/// flush (VIRTIO_BLK_T_FLUSH) makes QEMU fsync the image file, and on a host that
+/// is writing for other guests that takes seconds. The old limit was a count of
+/// 40 M spins, about one second under KVM: the flush at the end of an install
+/// timed out, the format reported an I/O error, and the request stayed in the
+/// device while the next one reused its descriptors and buffers (BUG-191).
+const REQ_TIMEOUT_S: u64 = 60;
+/// Requests slower than this are logged (the first few), with what they were.
+const REQ_SLOW_MS: u64 = 2_000;
+
+/// Requests that took longer than [`REQ_TIMEOUT_S`] / [`REQ_SLOW_MS`], and requests
+/// the device completed with a status other than OK (`blkstat` style counters).
 pub static BLK_TIMEOUTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static BLK_SLOW: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub static BLK_BAD_STATUS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-pub static BLK_OVERLAP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-static BLK_BUSY: [core::sync::atomic::AtomicBool; MAX_BLK] = [const { core::sync::atomic::AtomicBool::new(false) }; MAX_BLK];
 
-fn diag_ms(t0: u64) -> u64 {
-    let per = crate::apic::TSC_PER_TICK.load(core::sync::atomic::Ordering::Relaxed).max(1);
-    unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0) * 10 / per
-}
-
-/// Enter and leave a request on disk dev (BUG-191 diagnostics: is the queue shared).
-fn diag_enter(dev: usize, what: &str, sector: u64) {
-    if dev < MAX_BLK && BLK_BUSY[dev].swap(true, core::sync::atomic::Ordering::AcqRel) {
-        let n = BLK_OVERLAP.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if n < 8 {
-            crate::serial_println!("[blk-diag] disk {dev}: {what} at {sector} entered while another request is in flight (cpu {}, task {})",
-                crate::sched::this_cpu(), crate::sched::current());
-        }
+/// TSC cycles per second (the scheduler tick is 10 ms). Before the timer is
+/// calibrated (the root mount at boot) assume 3 GHz: the limit only gets longer
+/// on a slower CPU, never shorter than intended on a faster one by more than that.
+fn cycles_per_s() -> u64 {
+    match crate::apic::TSC_PER_TICK.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => 3_000_000_000,
+        t => t * 100,
     }
 }
-fn diag_leave(dev: usize) {
-    if dev < MAX_BLK {
-        BLK_BUSY[dev].store(false, core::sync::atomic::Ordering::Release);
+
+fn ms_since(t0: u64) -> u64 {
+    unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0) * 1000 / cycles_per_s()
+}
+
+fn req_name(t: u32) -> &'static str {
+    match t {
+        VIRTIO_BLK_T_IN => "read",
+        VIRTIO_BLK_T_OUT => "write",
+        VIRTIO_BLK_T_FLUSH => "flush",
+        VIRTIO_BLK_T_DISCARD => "discard",
+        _ => "request",
+    }
+}
+
+/// The queue holds one request at a time (descriptors 0..2, one header, one data
+/// and one status buffer). A request that ran past [`REQ_TIMEOUT_S`] is still in
+/// the device: wait for it before anything of it is reused. False if it still
+/// has not completed, and then nothing is submitted.
+unsafe fn quiesce(blk: &mut VirtioBlk) -> bool {
+    let avail = blk.vq.avail_idx_ptr().read_volatile();
+    if blk.vq.last_used == avail {
+        return true;
+    }
+    let t0 = core::arch::x86_64::_rdtsc();
+    let limit = REQ_TIMEOUT_S * cycles_per_s();
+    loop {
+        let used = blk.vq.used_idx();
+        if used == avail {
+            blk.vq.last_used = used;
+            crate::serial_println!("[blk] the request that had timed out completed {} ms later; the queue is usable again", ms_since(t0));
+            return true;
+        }
+        if core::arch::x86_64::_rdtsc().wrapping_sub(t0) > limit {
+            crate::serial_println!("[blk] a request that timed out is still in the device after another {REQ_TIMEOUT_S} s: request refused");
+            return false;
+        }
+        core::hint::spin_loop();
     }
 }
 
@@ -225,29 +262,30 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
     compiler_fence(Ordering::SeqCst);
     blk.tp.notify(&blk.vq);
 
-    for _ in 0..40_000_000 {
+    let limit = REQ_TIMEOUT_S * cycles_per_s();
+    let kind = (blk.hdr as *const u32).read_volatile();
+    let sector = ((blk.hdr + 8) as *const u64).read_volatile();
+    loop {
         if blk.vq.used_idx() != blk.vq.last_used {
-            let late = blk.vq.used_idx().wrapping_sub(blk.vq.last_used);
             blk.vq.last_used = blk.vq.used_idx();
             let st = (blk.status as *const u8).read_volatile();
-            if st != 0 || late != 1 {
-                let n = BLK_BAD_STATUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                if n < 16 {
-                    crate::serial_println!("[blk-diag] request type {} sector {} completed with status {st} ({late} used entries at once, avail {}) after {} ms",
-                        (blk.hdr as *const u32).read_volatile(), ((blk.hdr + 8) as *const u64).read_volatile(), idx.wrapping_add(1), diag_ms(t0));
-                }
+            let ms = ms_since(t0);
+            if ms >= REQ_SLOW_MS && BLK_SLOW.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 8 {
+                crate::serial_println!("[blk] slow {} at sector {sector}: {ms} ms (status {st})", req_name(kind));
+            }
+            if st != 0 && BLK_BAD_STATUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 8 {
+                crate::serial_println!("[blk] {} at sector {sector} failed: device status {st}", req_name(kind));
             }
             return st == 0;
         }
+        if core::arch::x86_64::_rdtsc().wrapping_sub(t0) > limit {
+            if BLK_TIMEOUTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 8 {
+                crate::serial_println!("[blk] {} at sector {sector} did not complete in {REQ_TIMEOUT_S} s: reported as failed, the queue waits for it before the next request", req_name(kind));
+            }
+            return false;
+        }
         core::hint::spin_loop();
     }
-    let n = BLK_TIMEOUTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    if n < 16 {
-        crate::serial_println!("[blk-diag] request type {} sector {} TIMED OUT after {} ms (used {} last_used {} avail {} status {:#x})",
-            (blk.hdr as *const u32).read_volatile(), ((blk.hdr + 8) as *const u64).read_volatile(), diag_ms(t0),
-            blk.vq.used_idx(), blk.vq.last_used, idx.wrapping_add(1), (blk.status as *const u8).read_volatile());
-    }
-    false
 }
 
 /// Send a VIRTIO_BLK_T_FLUSH: the device persists its write-back cache to
@@ -289,10 +327,10 @@ pub fn flush_dev(dev: usize) -> bool {
         if !blk.flush_ok {
             return true; // no negotiated FLUSH feature → nothing to do
         }
-        diag_enter(dev, "flush", 0);
-        let r = submit_flush(blk);
-        diag_leave(dev);
-        r
+        if !quiesce(blk) {
+            return false;
+        }
+        submit_flush(blk)
     }
 }
 
@@ -345,6 +383,9 @@ pub fn discard_dev(dev: usize, sector: u64, count: u32) -> bool {
         if sector.saturating_add(count as u64) > blk.capacity_sectors {
             return false; // out of range (mirror the read/write bounds checks)
         }
+        if !quiesce(blk) {
+            return false;
+        }
         submit_discard(blk, sector, count)
     }
 }
@@ -362,13 +403,10 @@ pub fn read_io_dev(dev: usize, sector: u64, buf: &mut [u8]) -> bool {
         if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors {
             return false;
         }
-        diag_enter(dev, "read", sector);
-        if !submit(blk, false, sector, n) {
-            diag_leave(dev);
+        if !quiesce(blk) || !submit(blk, false, sector, n) {
             return false;
         }
         core::ptr::copy_nonoverlapping(blk.data as *const u8, buf.as_mut_ptr(), n);
-        diag_leave(dev);
         true
     }
 }
@@ -385,16 +423,17 @@ pub fn write_io_dev(dev: usize, sector: u64, buf: &[u8]) -> bool {
         if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors || blk.read_only {
             return false;
         }
-        diag_enter(dev, "write", sector);
+        // The data buffer is the device's until the request before has completed.
+        if !quiesce(blk) {
+            return false;
+        }
         core::ptr::copy_nonoverlapping(buf.as_ptr(), blk.data as *mut u8, n);
         // Zero-fill the rest of the last sector.
         let dlen = (n + 511) / 512 * 512;
         if dlen > n {
             core::ptr::write_bytes((blk.data + n as u64) as *mut u8, 0, dlen - n);
         }
-        let r = submit(blk, true, sector, n);
-        diag_leave(dev);
-        r
+        submit(blk, true, sector, n)
     }
 }
 

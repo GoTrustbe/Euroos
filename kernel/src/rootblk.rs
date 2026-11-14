@@ -92,16 +92,22 @@ fn cache_write(sector: u64, data: &[u8]) -> bool {
     true
 }
 
-/// Write all dirty blocks to disk (on EuroFS checkpoint / shutdown).
-pub fn cache_flush() {
+/// Write all dirty blocks to disk (on EuroFS checkpoint / shutdown). False if the
+/// disk refused one: those blocks stay dirty, and a checkpoint that counted on
+/// them must not be reported as on disk (BUG-191).
+pub fn cache_flush() -> bool {
     let mut c = CACHE.write();
+    let mut all = true;
     for slot in c.iter_mut() {
         if slot.valid && slot.dirty {
             if crate::virtio_blk::write_io(slot.sector, &slot.data) {
                 slot.dirty = false;
+            } else {
+                all = false;
             }
         }
     }
+    all
 }
 
 /// Which storage carries the root partition (Metal M2-3: NVMe/AHCI in addition
@@ -226,11 +232,11 @@ impl BlockDevice for RootBlk {
         if self.on_disk {
             let ok = match self.backend {
                 Backend::Virtio(0) => {
-                    cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
+                    let written = cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
                     // Then force the disk's OWN write-back cache to the persistent
                     // medium (VIRTIO_BLK_T_FLUSH) — makes the A/B-superblock barrier a hard
                     // I/O barrier. No-op if the device has no volatile cache.
-                    crate::virtio_blk::flush()
+                    crate::virtio_blk::flush() && written
                 }
                 Backend::Virtio(dev) => crate::virtio_blk::flush_dev(dev),
                 // NVMe writes here are synchronous (we poll for completion) and
