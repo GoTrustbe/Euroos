@@ -98,10 +98,42 @@ struct Task {
 /// kernel stack; if it changes, the stack has overflowed.
 const STACK_CANARY: u64 = 0x5350_524F_5547_4421; // "SPROUGD!" — recognizable in dumps
 
-/// vruntime step per turn, weighted on nice (-20..19 -> 64..2560). Equal nice =
-/// equal step = fair round-robin (behavior-preserving relative to the old scheduler).
-fn vstep(nice: i8) -> u64 {
-    ((nice as i64) + 21) as u64 * 64
+/// Load weight per nice level (-20..19), the table of Linux: 1024 at nice 0,
+/// about x1.25 per step. A task's vruntime grows by its run time x 1024 / weight
+/// (S1 of docs/design/SMP-SCHEDULER.md: time, not turns).
+const WEIGHTS: [u64; 40] = [
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15,
+];
+
+fn weight(nice: i8) -> u64 {
+    WEIGHTS[(nice.clamp(-20, 19) + 20) as usize]
+}
+
+/// The desktop loop (task 0) runs at the weight of nice -10: against five busy
+/// nice-0 tasks it is entitled to 65 % of the CPU (BUG-192: it got 2.5 %).
+pub const DESKTOP_NICE: i8 = -10;
+
+/// vruntime is in weighted nanoseconds. A task that waited gets ahead of the
+/// pack by half a slice at most: `max(vruntime, min_vr - WAKE_FLOOR)`.
+const WAKE_FLOOR: u64 = 5_000_000;
+
+/// TSC cycles of run time at `nice` as weighted nanoseconds of vruntime.
+fn vr_charge(cycles: u64, nice: i8) -> u64 {
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1) as u128;
+    // 10 ms per tick: ns = cycles * 10^7 / per.
+    let ns = cycles as u128 * 10_000_000 / per;
+    (ns * 1024 / weight(nice) as u128).min(u64::MAX as u128 / 4) as u64
+}
+
+/// Place a task that waited: never more than WAKE_FLOOR ahead of the pack.
+fn place_woken(s: &mut Scheduler, idx: usize) {
+    let floor = s.min_vr.saturating_sub(WAKE_FLOOR);
+    if s.tasks[idx].vruntime < floor {
+        s.tasks[idx].vruntime = floor;
+    }
 }
 
 /// Block the CURRENT task on the generic futex wait channel (FUTEX_WAIT).
@@ -379,8 +411,7 @@ pub fn unblock(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
         woken(&s, idx);
     }
 }
@@ -392,8 +423,7 @@ pub fn unblock_any(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
         woken(&s, idx);
     }
 }
@@ -405,8 +435,7 @@ pub fn try_unblock_any(idx: usize) -> bool {
     let Some(mut s) = SCHED.try_lock() else { return false };
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
     }
     true
 }
@@ -472,6 +501,7 @@ pub fn wake(chan: u64, n: usize) -> usize {
         }
         if s.tasks[i].state == State::Blocked(chan) {
             s.tasks[i].state = State::Ready;
+            place_woken(&mut s, i);
             woken += 1;
             WOKEN_AT[i].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
         }
@@ -934,6 +964,9 @@ static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 /// The desktop loop (task 0) left the CPU while it still had something to poll
 /// (a yield, or preempted at work), not halted in an idle machine.
 static T0_WANTS: AtomicBool = AtomicBool::new(false);
+/// The desktop loop yielded in this tick: no second pass before the next tick
+/// (unless the hosted window drew, DESK_KICK).
+static T0_YIELDED: AtomicBool = AtomicBool::new(false);
 /// The desktop loop is in its idle halt (set right before the hlt, cleared
 /// after it). A tick that finds it so was not work (see idle_tick).
 static T0_IDLE: AtomicBool = AtomicBool::new(false);
@@ -1306,8 +1339,7 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         if let State::Sleeping(w) = s.tasks[i].state {
             if now >= w {
                 s.tasks[i].state = State::Ready;
-                let floor = s.min_vr.saturating_sub(64);
-                if s.tasks[i].vruntime < floor { s.tasks[i].vruntime = floor; }
+                place_woken(&mut s, i);
             }
         }
     }
@@ -1330,18 +1362,22 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     // - BUG-136: the read touched whatever the frame said (a frame of another
     //   layout, a user rip), with SCHED held; a page fault there asks the
     //   scheduler who runs and waits for its own lock.
-    let idle_tick = cur == 0 && !via_yield && T0_IDLE.load(Ordering::Relaxed);
-    if cur == 0 && via_yield {
-        // The desktop loop hands the CPU on after one pass of polling: that is
-        // not a turn's worth of work. It stays at the pack (never behind it:
-        // tasks it starts inherit its vruntime).
-        if s.tasks[0].vruntime < s.min_vr { s.tasks[0].vruntime = s.min_vr; }
-    } else if s.tasks[cur].state == State::Ready && !idle_tick {
-        let step = vstep(s.tasks[cur].nice);
-        s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(step);
-    }
+    // S1: every turn is charged by its length on the TSC (`ran_tsc` above, task
+    // 0's idle halt already taken off), weighted on nice, whether the task stays
+    // Ready, blocks, sleeps or yields: a thread that yields after 50 us pays 50 us,
+    // not a turn. The desktop loop never banks idle time: when it leaves the CPU
+    // it is placed like a task that waited (at most half a slice ahead).
+    let charge = vr_charge(ran_tsc, s.tasks[cur].nice);
+    s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(charge);
     if cur == 0 {
-        T0_WANTS.store(!idle_tick, Ordering::Relaxed);
+        place_woken(&mut s, 0);
+        if via_yield {
+            T0_YIELDED.store(true, Ordering::Relaxed);
+        }
+    }
+    if !via_yield {
+        // A new tick: the desktop loop may have a pass again.
+        T0_YIELDED.store(false, Ordering::Relaxed);
     }
     if !via_yield {
         deskwatch::tick_sample(cur, rsp, s.tasks[0].state);
@@ -1365,26 +1401,20 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     let mut best = cur;
     let mut bestv = u64::MAX;
     let mut found = false;
-    let t0_had_turn = T0_TURN_TICK.load(Ordering::Relaxed) == now;
-    if !via_yield && cur != 0 && s.tasks[0].state == State::Ready && T0_WANTS.load(Ordering::Relaxed) {
-        best = 0;
-        found = true;
-        T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
-    } else {
-        for k in 1..=s.count {
-            let i = (cur + k) % s.count;
-            if i == 0 && ((cur != 0 && via_yield && t0_had_turn) || (cur == 0 && via_yield)) {
-                continue;
-            }
-            if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
-                bestv = s.tasks[i].vruntime;
-                best = i;
-                found = true;
-            }
+    let t0_out = T0_YIELDED.load(Ordering::Relaxed);
+    for k in 1..=s.count {
+        let i = (cur + k) % s.count;
+        if i == 0 && t0_out {
+            continue;
         }
-        if found {
-            s.min_vr = bestv;
+        if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
+            bestv = s.tasks[i].vruntime;
+            best = i;
+            found = true;
         }
+    }
+    if found && bestv > s.min_vr {
+        s.min_vr = bestv;
     }
     // The hosted window drew (want_desktop): at the next yield of any task the
     // desktop loop puts it on the screen, not after the next tick.
@@ -1394,6 +1424,9 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     }
     if best == 0 && cur != 0 {
         T0_TURN_TICK.store(now, Ordering::Relaxed);
+        if !via_yield {
+            T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
+        }
     }
     if !found {
         best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
@@ -1516,6 +1549,7 @@ pub fn init() {
     // Where the table lives, for the census that takes no lock (BUG-157).
     SCHED_PEEK.store(&*SCHED.lock() as *const Scheduler as u64, Ordering::Relaxed);
     let mut s = SCHED.lock();
+    s.tasks[0].nice = DESKTOP_NICE;
     // The kernel demo tasks (S2 priority a/b/c, the S2 sleeper, the G1 guarded-stack
     // overflow) are dev self-tests: they prove the mini-CFS priority ordering and
     // kernel-stack-overflow recovery. task_a/b/c busy-spin (until they park ~2.5 s in)
@@ -1740,8 +1774,7 @@ pub fn start_parked(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && s.tasks[idx].state == State::Blocked(PARKED) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
     }
 }
 
