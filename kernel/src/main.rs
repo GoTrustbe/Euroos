@@ -3657,6 +3657,24 @@ fn main() -> Status {
             serial_println!("[glibc] gsdl (SDL2): exit={esdl}");
             for l in osdl.lines() { serial_println!("[glibc]   {l}"); }
         }
+        // The X demos above stage keys and mouse clicks for their clients (gxlive's
+        // three keys and two clicks). What no client read stays in the rings and
+        // reached the desktop: a click at the screen centre that raised whatever
+        // window was there, a few letters for the Terminal. Whether gsdl's wait loop
+        // ate them depended on timing (BUG-190). Drop the rest here.
+        {
+            let mut keys = 0u32;
+            while ps2::poll_scancode().is_some() {
+                keys += 1;
+            }
+            let click = mouse::take_press().is_some();
+            let _ = mouse::take_right_press();
+            let mut edges = 0u32;
+            while mouse::take_button_event().is_some() {
+                edges += 1;
+            }
+            serial_println!("[glibc] staged demo input no client read: {keys} scancode(s), left click {click}, {edges} button edge(s) → dropped");
+        }
 
         // ggtk LAST: a REAL GTK3 app (gtk_init + a window whose GtkDrawingArea draws
         // with cairo, + a GMainLoop over the eventfd + X fd). The X server RENDERS it
@@ -4748,9 +4766,12 @@ fn main() -> Status {
             active: false, accent: Color::BLUE,
             sec: eds::SecState::new(true, false, false),
             app: suite_ui::SuiteApp::XClient,
-            // Only the self-test image starts the GTK demo that draws here; the
-            // release image would show an empty frame (it opens from the launcher).
-            visible: SELFTEST,
+            // Open at boot only when the live GTK demo that draws here is started
+            // (`--features live-demos`, self-test image). Without it the frame is
+            // empty AND on top of the Terminal in the z-order, so it took the
+            // keyboard: typed text went nowhere until a stray click raised the
+            // Terminal (BUG-190). Chromium opens it from the launcher or the shell.
+            visible: SELFTEST && cfg!(feature = "live-demos"),
             restore: None,
         },
         // Sprint WP6: a NATIVE EuroOS app hosted as a framed window; its body is
