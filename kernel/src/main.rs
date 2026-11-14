@@ -4184,6 +4184,8 @@ fn main() -> Status {
 
         // EuroInstall (Q1): prove the installer planner at boot.
         installer::selftest();
+        installer::selftest_targets();
+        interrupts::selftest_nmi_bound();
     }
 
     // EuroCA (O3): sovereign local certificate authority (TPM-seeded root).

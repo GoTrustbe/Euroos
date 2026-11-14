@@ -932,6 +932,22 @@ pub fn selftest() {
     );
 }
 
+/// **[wizard-targets]** (BUG-201): a disk that refuses writes is never selectable.
+#[cfg(feature = "selftest")]
+pub fn selftest_targets() {
+    for t in scan_targets() {
+        if let Bus::Virtio(d) = t.bus {
+            if crate::virtio_blk::is_read_only_dev(d) {
+                let sel = t.selectable();
+                crate::serial_println!(
+                    "[wizard-targets] {} ({} MiB) is read-only: selectable={sel} → {}",
+                    t.name, t.mib, if sel { "FAILED (a disk that refuses writes is offered)" } else { "OK (not offered) ✓" }
+                );
+            }
+        }
+    }
+}
+
 pub fn shell(line: &str) -> Vec<String> {
     let toks: Vec<&str> = line.split_whitespace().collect();
     let args: Vec<&str> = if toks.first() == Some(&"euroinstall") { toks[1..].to_vec() } else { toks };

@@ -462,6 +462,11 @@ pub fn present_dev(dev: usize) -> bool {
     unsafe { dev < MAX_BLK && (*core::ptr::addr_of!(BLKS))[dev].is_some() }
 }
 
+/// Does disk `dev` refuse writes (VIRTIO_BLK_F_RO)?
+pub fn is_read_only_dev(dev: usize) -> bool {
+    unsafe { dev < MAX_BLK && (*core::ptr::addr_of!(BLKS))[dev].as_ref().map(|b| b.read_only).unwrap_or(false) }
+}
+
 /// Number of initialized virtio-blk disks.
 pub fn device_count() -> usize {
     unsafe { (*core::ptr::addr_of!(BLKS)).iter().filter(|b| b.is_some()).count() }
