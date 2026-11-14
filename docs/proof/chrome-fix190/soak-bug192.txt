@@ -1,0 +1,41 @@
+# loadtest soak of the self-test image of a38230d, 16 GiB, 4 vCPU, e1000e restrict, hammer 4, procs 32, --soak-churn-proc 8, 3300 s
+  [  900/?] ✓ ok           384ms t= 1878.5s  spawn worker 32
+  [  925/?] ✓ ok            30ms t= 1938.5s  rm /home/euro/lt-soak/big2
+  [  950/?] ✓ ok            20ms t= 2016.9s  ltstat
+  [  975/?] ✓ ok            19ms t= 2082.7s  cat /home/euro/lt-soak/f43
+  [ 1000/?] ✓ ok          1911ms t= 2121.5s  wget 10.0.2.101 /home/euro/lt-soak/dl.bin
+  [ 1025/?] ✓ ok            48ms t= 2193.9s  write /home/euro/lt-soak/f48 round-98
+  [ 1050/?] ✓ ok           162ms t= 2240.0s  fetch 10.0.2.100
+  [ 1075/?] ✓ ok          4545ms t= 2317.9s  churn proc 8
+  [ 1100/?] ✓ ok           348ms t= 2383.8s  truncate -s 8388608 /home/euro/lt-soak/big1
+  [ 1125/?] ✓ ok         41359ms t= 2461.7s  churn proc 8
+  [ 1150/?] ✓ ok            40ms t= 2493.2s  cat /home/euro/lt-soak/f10
+  [ 1175/?] ✓ ok           461ms t= 2541.1s  sha256sum /home/euro/lt-soak/big0
+  [ 1200/?] ✓ ok            21ms t= 2599.5s  ltstat
+  [ 1225/?] ✓ ok           358ms t= 2645.7s  truncate -s 8388608 /home/euro/lt-soak/big1
+  [ 1250/?] ✓ ok           111ms t= 2705.1s  churn net 1
+  [ 1275/?] ✓ ok           360ms t= 2735.6s  spawn worker 32
+  [ 1300/?] ✓ ok            19ms t= 2778.9s  rm /home/euro/lt-soak/big2
+  [ 1325/?] ✓ ok            22ms t= 2836.3s  ltstat
+  [ 1350/?] ✓ ok           461ms t= 2883.6s  sha256sum /home/euro/lt-soak/big1
+  [ 1375/?] ✓ ok           292ms t= 2915.9s  fetch 10.0.2.100
+  [ 1400/?] ✓ ok            35ms t= 2975.7s  write /home/euro/lt-soak/f34 round-134
+  [ 1425/?] ✓ ok            19ms t= 3017.8s  rm /home/euro/lt-soak/big2
+  [ 1450/?] ✓ ok           495ms t= 3076.0s  spawn worker 32
+  [ 1475/?] ✓ ok            19ms t= 3122.6s  cat /home/euro/lt-soak/f41
+  [ 1500/?] ✓ ok         28119ms t= 3181.7s  churn proc 8
+  [ 1525/?] ✓ ok            44ms t= 3213.8s  write /home/euro/lt-soak/f46 round-146
+  [ 1550/?] ✓ ok           261ms t= 3255.6s  fetch 10.0.2.100
+[loadtest] completed clean · results → /srv/euroos/fix190-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/fix190-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 377827, "err": 0, "p50_ms": 5.4, "p99_ms": 154.2, "max_ms": 7638.1, "busy_windows": 189, "busy_s": 2712, "busy": {"ok": 321072, "err": 0, "p50_ms":
+[loadtest] host HTTP server served 180 request(s)
+
+== desktop-loop gaps over 10 s
+[desk] #10 the desktop loop was away 12169 ms: its pass took 12165 ms (network and DevTools 0, devices and windows 12120, menus 0, keys and drawing 38, hosted window and console 5), then 4 ms without the CPU (8 other tasks were ready); longest step: drawing 20 ms; ticks of the loop at rip 0x70322ebc x39, 0x7032221e x1; ticks of other tasks: t23 x108, t11 x173, t22 x45, t7 x173, t8 x173, t9 x172; the loop meanwhile: Ready x1076, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x74002000 0x700e933b 0x6ffd569a 0x77d52d68 0x703c29ed 0x70004954 0x6ffd4e43 0x700b1e8d 0x7009bf73 0x77d52d68
+[desk] #16 the desktop loop was away 10139 ms: its pass took 10132 ms (network and DevTools 0, devices and windows 10104, menus 0, keys and drawing 24, hosted window and console 3), then 6 ms without the CPU (8 other tasks were ready); longest step: drawing 20 ms; ticks of the loop at rip 0x70059492 x25, 0x70059435 x8, 0x7002133a x21, 0x7002133e x40, 0x70020f2b x90, 0x70020d7f x30; ticks of other tasks: t8 x73, t9 x73, t10 x73, t11 x73, t23 x65, t7 x72; the loop meanwhile: Ready x457, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x7794a340 0x740aa5c8 0x7005994b 0x70180624 0x7018167f 0x70181779 0x70021374
+[desk] #20 the desktop loop was away 34038 ms: its pass took 34028 ms (network and DevTools 0, devices and windows 33199, menus 0, keys and drawing 828, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: scrub 785 ms; ticks of the loop at rip 0x70322ebc x67, 0x70059492 x20, 0x70322e68 x2, 0x70059481 x11, 0x70059479 x2, 0x70059474 x3; ticks of other tasks: t11 x518, t23 x429, t7 x517, t8 x517, t9 x517, t10 x517; the loop meanwhile: Ready x3195, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x74002000 0x700e933b 0x6ffd569a 0x77d52d68 0x703c29ed 0x70004954 0x6ffd4e43 0x700b1e8d 0x7009bf73 0x7009004d
+[desk] #31 the desktop loop was away 12469 ms: its pass took 12464 ms (network and DevTools 0, devices and windows 12402, menus 0, keys and drawing 56, hosted window and console 5), then 4 ms without the CPU (8 other tasks were ready); longest step: drawing 37 ms; ticks of the loop at rip 0x70020ede x71, 0x70020d78 x47, 0x70020d7c x33, 0x70020d7f x37, 0x70020f2b x97, 0x7001fc66 x1; ticks of other tasks: t22 x14, t7 x92, t8 x92, t9 x92, t10 x92, t11 x92; the loop meanwhile: Ready x574, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x70180572
+[desk] #37 the desktop loop was away 38017 ms: its pass took 38007 ms (network and DevTools 0, devices and windows 37480, menus 0, keys and drawing 527, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: scrub 487 ms; ticks of the loop at rip 0x70322ebc x57, 0x70059492 x10, 0x70059435 x2, 0x70059481 x8, 0x70059490 x1, 0x7018122c x1; ticks of other tasks: t11 x588, t4 x74, t23 x497, t7 x588, t8 x588, t9 x587; the loop meanwhile: Ready x3618, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x74002000 0x700e933b 0x6ffd569a 0x77d52d68 0x703c29ed 0x70004954 0x6ffd4e43 0x700b1e8d 0x7009bf73 0x703c29f8
+[desk] #50 the desktop loop was away 12679 ms: its pass took 12675 ms (network and DevTools 0, devices and windows 12627, menus 0, keys and drawing 42, hosted window and console 5), then 3 ms without the CPU (8 other tasks were ready); longest step: drawing 38 ms; ticks of the loop at rip 0x7002133a x43, 0x70021341 x41, 0x70059474 x5, 0x70322ebc x8, 0x70020d7c x37, 0x70020ede x66; ticks of other tasks: t7 x94, t8 x94, t9 x94, t10 x93, t11 x93, t4 x24; the loop meanwhile: Ready x584, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack:
+[desk] #55 the desktop loop was away 41967 ms: its pass took 41957 ms (network and DevTools 0, devices and windows 41199, menus 0, keys and drawing 758, hosted window and console 0), then 9 ms without the CPU (7 other tasks were ready); longest step: scrub 719 ms; ticks of the loop at rip 0x70322ebc x81, 0x70059492 x20, 0x70059435 x3, 0x70059481 x6, 0x70059479 x1, 0x70059490 x1; ticks of other tasks: t22 x87, t7 x648, t8 x647, t9 x647, t10 x647, t11 x647; the loop meanwhile: Ready x3979, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x74002000 0x700e933b 0x6ffd569a 0x77d52d68 0x703c29ed 0x70004954 0x6ffd4e43 0x700b1e8d 0x7009bf73 0x703c29f8
+[desk] #550 the desktop loop was away 40467 ms: its pass took 40457 ms (network and DevTools 0, devices and windows 39889, menus 0, keys and drawing 567, hosted window and console 0), then 9 ms without the CPU (8 other tasks were ready); longest step: scrub 481 ms; ticks of the loop at rip 0x70322ebc x56, 0x70322e6b x1, 0x70059492 x6, 0x70059479 x1, 0x70059481 x4, 0x70059435 x3; ticks of other tasks: t11 x629, t22 x85, t7 x629, t8 x629, t9 x629, t10 x629; the loop meanwhile: Ready x3862, Sleeping x0, Blocked x0 (chan 0x0); anchor deskwatch::mark @ 0x701523e3; loop stack: 0x74002000 0x700e933b 0x6ffd569a 0x77d52d68 0x703c29ed 0x70004954 0x6ffd4e43 0x700b1e8d 0x7009bf73 0x77d52d68

@@ -1,0 +1,63 @@
+# inst.py: phase 0 of rename-persist.py alone (public image installs itself on a blank 4 GiB virtio disk, KVM 2 vCPU, 2 GiB)
+# ten side by side on eight host CPUs; d1 = public image with the logging of e909c2d (no fix), f1 = a38230d (pub-fix1), fin = a38230d (final public image)
+== d1
+      4 [inst] FAILED up=True done=True install 10s :: [q1x3] EuroIn
+      5 [inst] FAILED up=True done=True install 11s :: [q1x3] EuroIn
+      1 [inst] FAILED up=True done=True install 12s :: [q1x3] EuroIn
+== f1
+      1 [inst] OK up=True done=True install 10s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 11s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 23s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 28s :: [q1x3] EuroInstal
+      4 [inst] OK up=True done=True install 29s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 7s :: [q1x3] EuroInstall
+      1 [inst] OK up=True done=True install 9s :: [q1x3] EuroInstall
+== fin
+      1 [inst] OK up=True done=True install 12s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 20s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 21s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 23s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 26s :: [q1x3] EuroInstal
+      1 [inst] OK up=True done=True install 27s :: [q1x3] EuroInstal
+      4 [inst] OK up=True done=True install 28s :: [q1x3] EuroInstal
+
+== d1, the logged error (all ten)
+     10 [blk-diag] request type 4 sector 0 TIMED OUT after N ms (used 40879 last_used 40879 avail 40880 status 0xff)
+     10 [blk-diag] request type 4 sector 0 TIMED OUT after N ms (used 40879 last_used 40879 avail 40881 status 0xff)
+     10 [q1x3-diag] before format: 0 failed writes; blk timeouts 0 bad-status 0 overlaps 0
+     10 [q1x3-diag] EuroFs::format on virtio disk 0 failed: IoError; blk timeouts 1 bad-status 0 overlaps 0
+     10 [q1x3-diag] flush of virtio disk 0 FAILED
+-- the times:
+TIMED OUT after 1554 ms TIMED OUT after 964 ms TIMED OUT after 1259 ms TIMED OUT after 931 ms TIMED OUT after 1244 ms TIMED OUT after 1216 ms TIMED OUT after 1697 ms TIMED OUT after 1015 ms TIMED OUT after 1177 ms TIMED OUT after 777 ms TIMED OUT after 1140 ms TIMED OUT after 1200 ms TIMED OUT after 1480 ms TIMED OUT after 1056 ms TIMED OUT after 1123 ms TIMED OUT after 910 ms TIMED OUT after 1092 ms TIMED OUT after 938 ms TIMED OUT after 1375 ms TIMED OUT after 925 ms 
+
+== f1 and fin: slow requests (the flush that timed out before)
+[blk] slow flush at sector 0: 3198 ms (status 0)
+[blk] slow flush at sector 0: 11305 ms (status 0)
+[blk] slow flush at sector 0: 11163 ms (status 0)
+[blk] slow flush at sector 0: 11502 ms (status 0)
+[blk] slow flush at sector 0: 11633 ms (status 0)
+[blk] slow flush at sector 0: 9684 ms (status 0)
+[blk] slow flush at sector 0: 2999 ms (status 0)
+[blk] slow flush at sector 0: 9078 ms (status 0)
+[blk] slow flush at sector 0: 8377 ms (status 0)
+[blk] slow flush at sector 0: 7436 ms (status 0)
+[blk] slow flush at sector 0: 6788 ms (status 0)
+[blk] slow flush at sector 0: 6949 ms (status 0)
+[blk] slow flush at sector 0: 8533 ms (status 0)
+
+== a read-only blank target (RO=1): the final merge of validate-2026-11d (plain.img) and a38230d
+-- ro-final
+[wizard] Target: virtio disk 0
+[wizard] Writing the partition table and the boot files (ESP, A/B kernel slots)
+[wizard] Creating the EuroFS root and the first account
+[wizard] Verifying the installation (re-reading GPT, ESP and the root)
+[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-test'=true user='tester'=true euroid-store=true → FAILED
+[wizard] Installation FAILED (see the serial log)
+-- ro-fix
+[wizard] Target: virtio disk 0
+[wizard] Writing the partition table and the boot files (ESP, A/B kernel slots)
+[wizard] Creating the EuroFS root and the first account
+[wizard] Verifying the installation (re-reading GPT, ESP and the root)
+[q1x3] target virtio disk 0: installation FAILED: the disk refused 40867 write(s) of the boot files (first at sector 0)
+[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-test'=false user='tester'=false euroid-store=false → FAILED
+[wizard] Installation FAILED: the disk refused 40867 write(s) of the boot files (first at sector 0)

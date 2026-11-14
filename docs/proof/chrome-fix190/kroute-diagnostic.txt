@@ -1,0 +1,15 @@
+# [kroute] diagnostic build: the first lines of a failing (diag1-0-1) and a passing (diag1-2-1) boot
+== diag1-0-1
+[kroute] sc 0x23 taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] char 'h' in the desktop loop: focus Some("EuroOS GTK  -  ggtk") term_focused=false launcher=false filedialog=false symbolpicker=false
+[kroute] sc 0xa3 taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] sc 0x2c taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] char 'w' in the desktop loop: focus Some("EuroOS GTK  -  ggtk") term_focused=false launcher=false filedialog=false symbolpicker=false
+[kroute] sc 0xac taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+== diag1-2-1
+[kroute] sc 0x23 taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] char 'h' in the desktop loop: focus Some("Terminal  -  /bin/sh") term_focused=true launcher=false filedialog=false symbolpicker=false
+[kroute] sc 0xa3 taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] sc 0x2c taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)
+[kroute] char 'w' in the desktop loop: focus Some("Terminal  -  /bin/sh") term_focused=true launcher=false filedialog=false symbolpicker=false
+[kroute] sc 0xac taken by kernel/src/main.rs:6205 (shift=false altgr=false alt=false ctrl=false ext=false)

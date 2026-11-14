@@ -1,0 +1,44 @@
+# CI q35 matrix, KVM, every NIC restrict=on (EK_RESTRICT=1 EK_ACCEL=kvm), 13 legs, self-test image of a38230d
+[matrix] image=/srv/euroos/fix190-runs/q35m/st.raw legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbnet,usbaudio,scan,printer,power,hwprobe work=/srv/euroos/fix190-runs/q35m/ek-matrix-viqhsyh6
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: printer
+  [printer] PASS ✓
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] PASS ✓
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbnet   PASS
+  usbaudio PASS
+  scan     PASS
+  printer  PASS
+  power    PASS
+  hwprobe  PASS
+[matrix] ALL LEGS PASS ✓

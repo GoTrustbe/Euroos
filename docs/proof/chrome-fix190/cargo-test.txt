@@ -1,0 +1,3 @@
+# cargo test, worktree /opt/euroos/wt-fix190 at a38230d, host .16
+187 test binaries, 1363 passed, 0 failed, 1 ignored
+rc=0

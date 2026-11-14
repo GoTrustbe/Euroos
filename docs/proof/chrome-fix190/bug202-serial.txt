@@ -1,0 +1,33 @@
+# sites3-a, the failed step: serial lines around the kernel stack overflow (BUG-202)
+ desktop loop was away 736 ms: its pass took 0 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 0, hosted window and console 0), then 736 ms without the CPU (9 other tasks were ready)
+[tick-late] #56 +188 ticks (4166 Mcycles) rip=0x71cb2e87 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=145151 (17129 Mcycles) lost-total=597
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] cpu 0
+[nmi] interrupted RIP=0x0000000071b2fb67 CS=0x8 RSP=0x0000008000018e20 RFLAGS=0x10012
+[nmi] anchor kernel_base ~ nmi_handler @ 0x0000000071b6a928
+[nmi] CR2 (address of the last page fault) = 0x00000100064d22b0
+[nmi] code rip-16..: [39, ff, 49, 0f, 43, ff, 66, ba, f8, 03, 48, 89, f9, 4c, 89, de]
+[nmi] code rip..   : [f3, 6e, 49, 01, fb, 49, 29, ff, 75, d6, 4d, 39, c6, 73, 3d, bf]
+[nmi] current task 4 last-syscall=0(a1=0x0)->0x0 globals-owner=87
+[nmi-tasks] 99 slots, current=4 (mirror 4), SCHED free, ticks=3750, min_vr=1786560, t0 wants=true idle=false last-turn-tick=3561, sched-skips=0
+[nmi-tasks] 16 Ready, 73 Sleeping, 10 Blocked, 0 Zombie, 0 Dead
+[nmi] stack scan (return addresses):
+[nmi]   0x0000000074ebc630
+[nmi]   0x0000000071b2fc91
+[nmi]   0x0000000074eaf3d8
+[nmi]   0x0000000074eaf180
+[nmi]   0x0000000071c1351e
+[nmi]   0x0000000071c13582
+[nmi]   0x0000000071c13571
+[nmi]   0x0000000071c13562
+[g1] KERNEL STACK OVERFLOW: task 4 hit guard page 0x8000019000 @ 0x71b6b507 → task TERMINATED, kernel keeps running ✓
+[tick-late] #57 +887 ticks (19571 Mcycles) rip=0x71b6d06c cs=0x8 task 4 last-syscall=0(a1=0x0) faults-total=145151 (17129 Mcycles) lost-total=1484
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] cpu 0
+[nmi] interrupted RIP=0x0000000071cb2e87 CS=0x8 RSP=0x000000007fe78040 RFLAGS=0x202
+[nmi] anchor kernel_base ~ nmi_handler @ 0x0000000071b6a928
+[nmi] CR2 (address of the last page fault) = 0x0000008000019000
+[nmi] code rip-16..: [03, ec, 89, c6, c6, 05, a6, 97, 20, 03, 00, fb, 40, 0f, b6, c6]
+[nmi] code rip..   : [83, f8, 0c, 7f, 0c, 83, f8, 08, 74, 11, 83, f8, 0a, 75, 4c, eb]
+[nmi] current task 0 last-syscall=231(a1=0x0)->0x0 globals-owner=0
+[nmi-tasks] 99 slots, current=0 (mirror 0), SCHED free, ticks=4638, min_vr=1786560, t0 wants=true idle=false last-turn-tick=4638, sched-skips=0

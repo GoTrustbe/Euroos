@@ -1,0 +1,7 @@
+# markers-compare.py: validate-2026-11d/pub-final.markers (public image of the final merge, gui-smoke boot) -> pub-fix190.markers
+== ../validate-2026-11d/pub-final.markers  vs  pub-fix190.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1

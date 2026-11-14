@@ -1,0 +1,9 @@
+# TCG reruns of the two configurations whose bgnet-cap failed in the first matrix, a38230d (tcg/r) beside ac36955 (tcg/rb)
+storage-smp1-iommu-1g done 16:44:40 after 677s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 16:44:50 after 687s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 16:44:30 after 667s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 16:48:45 after 922s desktop=1 wd=0 nmi=0
+tcg/r/combined-smp1-iommu-1g.log:[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   targ
+tcg/r/storage-smp1-iommu-1g.log:[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   targe
+tcg/rb/combined-smp1-iommu-1g.log:[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   tar
+tcg/rb/storage-smp1-iommu-1g.log:[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   targ

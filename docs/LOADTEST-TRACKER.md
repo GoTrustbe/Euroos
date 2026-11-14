@@ -2418,33 +2418,48 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - The `sched.rs:755` panic and the TCG self-test stops that the net-async work noted here are
   BUG-032 and BUG-033 now.
 
-### BUG-190 — in the self-test image, text typed after the desktop does not reach the Terminal in some boots (q35 `hwprobe` leg) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (seen in the self-test image only; the public image types fine: `gui-smoke` 67/67, 67/67, 78/78 and 59 of 60 browser starts typed a URL)
-- **Actual:**   `scripts/run-metal-matrix.py --legs hwprobe` types `hwprobe` ten seconds after `[desktop] interactive loop started`.
-  In the failing boots the xHCI reports of all eight key codes arrive (`[krep]` lines) but the Terminal shows nothing: no
-  `[e2e] $ hwprobe`, and four commands typed 10, 42, 74 and 106 s later (`uname`, `hwprobe`, `uname`, `hwprobe`) never appear on the
-  screen either (screendumps in `proof/validate-2026-11d/`). The desktop clock goes on, the loop is alive.
-- **Rate:**     the leg alone, KVM, restrict=on, self-test image, pass/fail: `40f853a` 5/0 (and 13/13 in the harness team's own matrix),
-  `7d6d073` (merge of w23) 4/2, `3990f17` (+ mem) 2/4, `fd72e2c` (chrome-integ) 3/2, `7405ea0` (mem2) 0/1, `fee4cdb` (audio) 0/1,
-  final merge 1/7 (0 of 4 while other guests loaded the machine, 1 of 3 when little else ran; and 0 of 4 with a changed typing table,
-  a boot option, or longer waits). So it starts with the w23 merge and gets more frequent with the mem merge; load alone does not explain it.
-- **Reading:**  not found. Not the keyboard layout (the same with an unmapped US table), not the time of typing (four attempts over
-  106 s), not the NIC. A guess to test first: the self-test image has the hosted GTK demo window (`EuroOS GTK - ggtk`, which takes no
-  input, BUG-112); if that window ends up with the keyboard focus in the failing boots the keys go to the X server and are dropped.
-  W23 changed the timing of the desktop loop (`desktop_idle_hlt`, the starved loop of BUG-143), which would move that race.
-- **Next:**     W23/Fable owners: serial line for the focus change; check which window has the focus at the first key.
+### BUG-190 — in the self-test image, text typed after the desktop does not reach the Terminal in some boots (q35 `hwprobe` leg) ✅ FIXED
+- **Status:**   FIXED (`f178250`, test `946989b`) · **Severity:** MEDIUM (self-test image only; the public image does not open the frame)
+- **Actual:**   see the validation of `feature/chrome-final` (`proof/validate-2026-11d/`): `run-metal-matrix.py --legs hwprobe` types
+  `hwprobe`, the xHCI reports arrive, the Terminal shows nothing. Pass/fail 5/0 on `40f853a`, 1/7 on the final merge.
+- **Cause:**    the keyboard goes to the topmost visible window. In the self-test image the hosted X frame (window 2, title
+  `EuroOS GTK  -  ggtk`) was visible from the first frame and above the Terminal in the z-order (`order = [0, 1, 2, 3]`),
+  but the live GTK demo that draws in it only starts with `--features live-demos`. The frame is an `XClient` window without
+  a client, so the character loop took every key and dropped it (`!term_focused`). Boots passed only by accident: the
+  `gxlive` self-test stages three keys and two left clicks for its client; when no client read them, the click (at the
+  screen centre, inside the Terminal) reached the desktop later and raised the Terminal. When the `gsdl` run_glibc wait loop
+  ate that input first (its window wanted keys in time; the `[sc]` lines), nothing raised the Terminal. W23 and the mem merge
+  changed that timing. Not the ggtk demo of BUG-112: that demo does not run in this image.
+- **Measured:** a diagnostic build (`[kroute]`: which code took each scancode, and the focus of each character in the desktop
+  loop): failing boots `char h in the desktop loop: focus Some("EuroOS GTK  -  ggtk") term_focused=false`, passing boots
+  `focus Some("Terminal  -  /bin/sh")`. 20 boots (12 of `ac36955`, 8 of the diagnostic build): the 11 with `[sc]` lines
+  from gsdl all failed, the 9 without all passed.
+- **Test:**     `[keyfocus] first desktop frame: the keyboard goes to ... (want ...)`, FAILED when it is not the Terminal (or
+  the install wizard on a live medium). `946989b` alone: FAILED in 4 of 4 boots, hwprobe 0/4.
+- **Fix:**      the frame opens at boot only together with the demo (`SELFTEST && live-demos`); Chromium still opens it from
+  the launcher or the shell. The staged demo input that no client read is dropped after the X demos, with a line
+  (`[glibc] staged demo input no client read: ...`), so no stray click or letters reach the desktop.
+- **After:**    hwprobe leg 24/24 (fix commit, 17 of them with the gsdl `[sc]` lines that failed every time before) and
+  20/20 on the final image, `[keyfocus] OK` in all 44; q35 matrix 13/13 (`proof/chrome-fix190/`).
 
-### BUG-191 — the install wizard sometimes ends with "Installation FAILED": `EuroFs::format` returns an error and no step is provisioned ⬜ OPEN (not new)
-- **Status:**   OPEN, found by the validation of `feature/chrome-final`; present in the download 2026.11.13 as well · **Severity:** MEDIUM
-- **Actual:**   `rename-persist.py` phase 0 (the public image installs itself on a blank 4 GiB virtio disk, KVM, 2 vCPU):
-  `[q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 0 steps provisioned, after
-  remount hostname='euro-test'=false user='tester'=false euroid-store=false → FAILED` (a good run: `+ 5 steps provisioned … → OK`).
-  The keyboard is not the cause (147 keyboard IRQs in both). The line in `instexec.rs` that gives 0 is `Err(_) => 0` of
-  `EuroFs::format(...)`: the error is thrown away, nothing says why.
-- **Rate:**     phase 0 of `rename-persist.py`, installs failed / made: ten at once on the R630: download 2026.11.13 6 of 10, final 2 of 10;
-  nine at once: final 2 of 9, download 0 of 3; seven final installs with little else running: 0 of 7, download 0 of 3, public image
-  of `40f853a` 0 of 3, chrome-integ 0 of 6, chrome-mem2 0 of 3 (and the very first final run, 1 of 1 failed). It follows the load of the host, not the branch.
-- **Next:**     print the error of `EuroFs::format` (and of the block writes under it); find what a loaded host changes (a write that times out?).
+### BUG-191 — the install wizard sometimes ends with "Installation FAILED": `EuroFs::format` returns an error and no step is provisioned ✅ FIXED
+- **Status:**   FIXED (`a38230d`, logging `e909c2d`) · **Severity:** MEDIUM (in the download 2026.11.13 too)
+- **Actual:**   `rename-persist.py` phase 0 failed under host load (download 6 of 10 installs at once, final merge 2 of 10).
+- **Cause:**    logged first (`e909c2d`): ten installs side by side on eight host CPUs failed 10 of 10, every time
+  `[blk-diag] request type 4 sector 0 TIMED OUT after 777..1697 ms`, `EuroFs::format ... failed: IoError`, then the next flush
+  timed out too (`avail` one ahead of `used`). Type 4 is VIRTIO_BLK_T_FLUSH: QEMU fsyncs the image file, and with nine other
+  guests writing that took 3.2 to 11.6 s (measured after the fix). `kick_and_wait` gave a request 40 M spins (about a
+  second), returned false, and left the request in the device while the next request reused its descriptors and buffers.
+  `instexec` threw the error away (`Err(_) => 0`) and ignored the result of every boot-disk write and of the flush.
+- **Fix:**      virtio_blk: 60 s per request on the TSC (not a spin count), slow requests over 2 s and failed statuses logged,
+  and a request that did time out is waited for before anything of it is reused (`quiesce`); if it never completes the
+  disk refuses further requests instead of mixing two up. instexec: every write and the flush are checked, and the install
+  fails with the first reason in words, in the wizard (the Failed page lists the log) and on the serial line. rootblk:
+  `cache_flush` reports a refused write.
+- **After:**    ten installs side by side on eight CPUs: 10/10 and 10/10 (two batches); `wizard-install-test.py` 15/15.
+  Error path, a read-only blank target: before `Installation FAILED (see the serial log)` (and the remount check read
+  hostname, user and EuroID back from the write-back cache: true), after `Installation FAILED: the disk refused 40867
+  write(s) of the boot files (first at sector 0)`.
 
 ### BUG-192 — in the soak, `churn proc 8` takes 32 to 44 s about every 27 minutes ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (the soak finished clean: 3 513 commands ok, no fault, heap +0.23 kB/min)
@@ -2454,5 +2469,39 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   "devices and windows" (`[desk] #21 … away 32187 ms`), the loop itself gets 58 of ~3 200 ticks, no tick is lost (`[tick-late]` shows no
   jump), the other commands of the round are normal. 4 of 450 rounds; `spawn worker`, `churn fs` and `fetch` are faster than in 11c (0.4 s against 1.85 s, 9.7 s against 34 s, 0.25 s against 0.5 s).
 - **Next:**     find what the eight processes wait for in those rounds (a lock, the reaper, the lazy arena of BUG-156).
+
+- **Analysis (fix190 team, not fixed):** reproduced in a 55 min soak of the fix190 self-test image (same options): gaps of
+  34, 38 and 42 s in the first half hour already, besides the usual 10 to 12 s ones. Symbolized with the link map of that
+  image: in the 42 s round the desktop loop was `Ready` for 3 979 ticks and ran about 100; when it ran it was in `memset`
+  (the gtiny arena) and `virtio_blk::kick_and_wait`, stack `proc_churn_n` -> `run_glibc`. In the same window five tasks
+  (t7 to t11: the EuroMonitor daemon, bg-musl processes, the spawned workers) took 647 ticks each. So the eight processes
+  do not wait for a lock: the task that runs them gets about 2 % of its CPU while five runnable tasks share it.
+  Next: where t7 to t11 run (all on the BSP?) and why the scheduler gives the desktop task no larger share; the 27-minute
+  period was not seen in this shorter run.
+
+### BUG-200 — the install check "after remount" on virtio disk 0 reads the write-back cache, not the disk ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (since BUG-191 a refused write or flush fails the install before this check)
+- **Actual:**   install onto a read-only blank virtio target with the final merge: `after remount hostname=true user=true
+  euroid-store=true` although nothing reached the disk. `RootBlk::disk_on(0, ..)` goes through the global root block cache
+  (`Backend::Virtio(0)`), so the remount reads the blocks the format just wrote into that cache.
+- **Next:**     verify an install through uncached reads (or drop the cache entries of the target first).
+
+### BUG-201 — the install wizard offers a read-only disk as target ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Actual:**   a blank virtio disk with `readonly=on` (the driver logs `READ-ONLY`) is selectable; the install then fails
+  (since BUG-191 with the reason `the disk refused ... write(s)`). It should not be offered.
+
+### BUG-202 — the NMI probe reads past the top of a small kernel stack and the task it interrupted is ended as a stack overflow ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (only when an NMI probe lands on a kernel task near its stack top; here the serial TX task)
+- **Actual:**   `chrome-smoke --only sites --rounds 3`, public image of `feature/chrome-fix190`, R630 under load: the harness saw a
+  13 s console answer and sent an NMI; the probe interrupted task 4 (`serial::tx_task`, in `Uart::write_direct`) with RSP
+  0x8000018e20, printed eight addresses of its stack scan, then `[g1] KERNEL STACK OVERFLOW: task 4 hit guard page
+  0x8000019000 @ nmi_handler+0xbdf → task TERMINATED`. The step (site euro-os) failed on that line; 35/36
+  (`proof/chrome-fix190/bug202-serial.txt`).
+- **Cause (read from the code):** `nmi_handler` scans a fixed 2 KiB above the interrupted RSP (`end = rsp + 0x800`); 0x8000018e20
+  + 0x800 is past the top of that stack, so the scan reads the guard page and the page-fault handler takes the read for an
+  overflow of task 4. Not related to the fix190 changes (BUG-157 probe of `feature/chrome-mem2`).
+- **Next:**     bound the scan by the top of the interrupted task stack (or the end of its page), with a test that probes a
+  task whose RSP is within 2 KiB of its stack top.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->
