@@ -7,9 +7,9 @@ MODE=plain (default): disk 0 is a normal blank disk, disk 1 a blank READ-ONLY di
   - the install on disk 0 must verify OK;
   - the wizard target list ([wizard-targets], BUG-201) must not offer disk 1 (read-only);
   - the late markers [randid] (BUG-086/087) and [nmi-bound] (BUG-202) must be OK.
-MODE=inject: BUG-200 on its own. Disk 0 is NOT read-only, but QEMU's blkdebug fails every write to the blocks 2..65
+MODE=inject: BUG-200 on its own. Disk 0 is NOT read-only, but QEMU's blkdebug fails every write to the blocks 16..143
   of the EuroFS root (sector 919552 + 8*block; 919552 = 2048 + 256 MiB ESP + two 96 MiB slots; the boot-file writer
-  only zeroes the first blocks). The root blocks reach the cache without error, the flush fails, and "after remount"
+  zeroes the first 16 blocks itself, with raw writes). The root blocks reach the cache without error, the flush fails, and "after remount"
   must not be satisfied by cache lines: that block is not on the medium, so the mount cannot succeed and
   hostname/user/euroid-store must read false.
 
@@ -27,7 +27,7 @@ drives = []
 if MODE == "inject":
     conf = os.path.join(OUT, "blkdebug.conf")
     rules = []
-    for blk in range(2, 66):   # the root blocks 2..65 (sectors 919552 + 8*blk): a flush of any of them fails
+    for blk in range(16, 144):   # the root blocks 16..143 (sectors 919552 + 8*blk): a flush of any of them fails
         rules += ["[inject-error]", 'event = "write_aio"', 'errno = "5"', f'sector = "{919552 + 8 * blk}"', 'immediately = "on"', ""]
     open(conf, "w").write(chr(10).join(rules))
     drives += ["-drive", f"id=t0,format=raw,file=blkdebug:{conf}:{tgt},if=none", "-device", "virtio-blk-pci,drive=t0,disable-modern=on"]
