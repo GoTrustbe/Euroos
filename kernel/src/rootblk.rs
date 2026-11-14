@@ -110,6 +110,16 @@ pub fn cache_flush() -> bool {
     all
 }
 
+/// Forget every cached block that is not dirty (the next read goes to the disk).
+fn cache_drop_clean() {
+    let mut c = CACHE.write();
+    for slot in c.iter_mut() {
+        if slot.valid && !slot.dirty {
+            slot.valid = false;
+        }
+    }
+}
+
 /// Which storage carries the root partition (Metal M2-3: NVMe/AHCI in addition
 /// to virtio-blk). Virtio keeps its `dev` index (device 0 uses the write-back
 /// cache above); NVMe/AHCI do uncached direct I/O like the extra virtio disks.
@@ -127,11 +137,14 @@ pub struct RootBlk {
     on_disk: bool,
     blocks: u64,
     backend: Backend,
+    /// Virtio disk 0 without the write-back cache: every read and write goes to the device
+    /// (the installer, BUG-200).
+    direct: bool,
 }
 
 impl RootBlk {
     pub fn ram(blocks: u64) -> Self {
-        Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, backend: Backend::Virtio(0) }
+        Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, backend: Backend::Virtio(0), direct: false }
     }
     pub fn disk(part_start: u64, blocks: u64) -> Self {
         Self::disk_on(0, part_start, blocks)
@@ -139,15 +152,26 @@ impl RootBlk {
     /// Disk mode on a specific virtio-blk device (B3 multi-disk). Device 0
     /// goes through the block cache; further devices do uncached direct I/O.
     pub fn disk_on(dev: usize, part_start: u64, blocks: u64) -> Self {
-        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Virtio(dev) }
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Virtio(dev), direct: false }
+    }
+    /// Like [`disk_on`], but device 0 is not read or written through the block cache either:
+    /// the installer formats, provisions and verifies a target that way, so a block that was
+    /// never written to the medium cannot be read back from a cache line (BUG-200), and a
+    /// refused write fails where it is made. The clean cache lines of the old content are
+    /// dropped first.
+    pub fn disk_on_direct(dev: usize, part_start: u64, blocks: u64) -> Self {
+        if dev == 0 {
+            cache_drop_clean();
+        }
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Virtio(dev), direct: true }
     }
     /// Disk mode on the NVMe controller (Metal M2-3). Direct, uncached I/O.
     pub fn nvme(part_start: u64, blocks: u64) -> Self {
-        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Nvme }
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Nvme, direct: false }
     }
     /// Disk mode on an AHCI/SATA disk (Metal M2-3). Direct, uncached I/O.
     pub fn ahci(idx: usize, part_start: u64, blocks: u64) -> Self {
-        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Ahci(idx) }
+        Self { data: Vec::new(), part_start, on_disk: true, blocks, backend: Backend::Ahci(idx), direct: false }
     }
     pub fn is_disk(&self) -> bool {
         self.on_disk
@@ -162,7 +186,7 @@ impl RootBlk {
     /// Read one 4 KiB block starting at 512-byte sector `base` from the backend.
     fn backend_read(&self, base: u64, out: &mut [u8]) -> bool {
         match self.backend {
-            Backend::Virtio(0) => cache_read(base, out),
+            Backend::Virtio(0) if !self.direct => cache_read(base, out),
             Backend::Virtio(dev) => crate::virtio_blk::read_io_dev(dev, base, out),
             Backend::Nvme => crate::nvme::read_sectors(base, out),
             Backend::Ahci(idx) => crate::ahci::read_sectors(idx, base, out),
@@ -172,7 +196,7 @@ impl RootBlk {
     /// Write one 4 KiB block starting at 512-byte sector `base` to the backend.
     fn backend_write(&self, base: u64, data: &[u8]) -> bool {
         match self.backend {
-            Backend::Virtio(0) => cache_write(base, data),
+            Backend::Virtio(0) if !self.direct => cache_write(base, data),
             Backend::Virtio(dev) => crate::virtio_blk::write_io_dev(dev, base, data),
             Backend::Nvme => crate::nvme::write_sectors(base, data),
             Backend::Ahci(idx) => crate::ahci::write_sectors(idx, base, data),
@@ -231,7 +255,7 @@ impl BlockDevice for RootBlk {
     fn flush(&mut self) -> BlockResult<()> {
         if self.on_disk {
             let ok = match self.backend {
-                Backend::Virtio(0) => {
+                Backend::Virtio(0) if !self.direct => {
                     let written = cache_flush(); // dirty cache blocks to disk (EuroFS checkpoint commit)
                     // Then force the disk's OWN write-back cache to the persistent
                     // medium (VIRTIO_BLK_T_FLUSH) — makes the A/B-superblock barrier a hard
