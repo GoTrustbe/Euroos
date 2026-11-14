@@ -3356,7 +3356,8 @@ fn reset_fd_table_inner() {
 /// e.g. the PNG chrome writes for --screenshot, which then leaves this machine as
 /// hex in the boot log (the only channel out).
 pub fn vfs_file_bytes(path: &str) -> Option<alloc::vec::Vec<u8>> {
-    FILES.lock().iter().find(|(p, _)| p == path).map(|(_, d)| d.to_vec())
+    let fi = FILES.lock().iter().position(|(p, _)| p == path)?;
+    Some(ram_bytes(fi))
 }
 
 pub fn register_file(path: &str, bytes: alloc::vec::Vec<u8>) {
@@ -4474,10 +4475,12 @@ fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
     let name = String::from_utf8_lossy(path).into_owned();
     {
         let mut files = FILES.lock();
-        match files.iter_mut().find(|(p, _)| p.as_bytes() == path) {
-            Some((_, d)) => {
+        match files.iter_mut().position(|(p, _)| p.as_bytes() == path) {
+            Some(i) => {
                 if truncate {
-                    d.to_mut().clear();
+                    files[i].1.to_mut().clear();
+                    drop(files);
+                    paged_set_len(i, 0); // a file made of frames
                 }
             }
             None => files.push((name.clone(), alloc::borrow::Cow::Owned(alloc::vec::Vec::new()))),
@@ -4525,6 +4528,7 @@ fn vfs_write(fd: usize, buf: u64, len: usize) -> u64 {
         Some(e) => e,
         None => return u64::MAX,
     };
+    paged_named_adopt(fi);
     if is_paged(fi) {
         // BUG-154: the file is frames. The bytes are taken from the caller
         // first (that may fault), then written with no fault possible.
@@ -4564,16 +4568,12 @@ pub fn take_dirty() -> alloc::vec::Vec<(String, alloc::vec::Vec<u8>)> {
     // preemption can occur while held (mirrors the reap_dead/BG fix).
     x86_64::instructions::interrupts::without_interrupts(|| {
         let paths: alloc::vec::Vec<String> = core::mem::take(&mut *DIRTY.lock());
-        let files = FILES.lock();
-        paths
-            .into_iter()
-            .filter_map(|p| {
-                files
-                    .iter()
-                    .find(|(q, _)| q == &p)
-                    .map(|(_, d)| (p.clone(), d.to_vec()))
-            })
-            .collect()
+        // Index first, bytes after: a paged file is read without FILES held.
+        let found: alloc::vec::Vec<(String, usize)> = {
+            let files = FILES.lock();
+            paths.into_iter().filter_map(|p| files.iter().position(|(q, _)| q == &p).map(|i| (p, i))).collect()
+        };
+        found.into_iter().map(|(p, i)| (p, ram_bytes(i))).collect()
     })
 }
 
@@ -7690,6 +7690,7 @@ fn vfs_ftruncate(fd: usize, len: usize) -> u64 {
     if fi >= DISK_FI_BASE {
         return (-9i64) as u64; // WAD/proc-mem/disk fds are not truncatable
     }
+    paged_named_adopt(fi);
     if let Some(ok) = paged_set_len(fi, len) {
         return if ok { 0 } else { (-27i64) as u64 }; // -EFBIG: past what a file can be
     }
@@ -7991,6 +7992,9 @@ fn reclaim_tombstones(idxs: &[usize]) {
             if e.0.is_empty() {
                 e.1 = alloc::borrow::Cow::Borrowed(&[]);
             }
+        }
+        if is_paged(fi) {
+            ram_file_sweep_due(); // its frames go with the next sweep
         }
     }
 }
@@ -12329,6 +12333,7 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     let dpb = PERSIST_DP_BASE.swap(0, Ordering::Relaxed);
     let dpf = PERSIST_DP_FRAMES.swap(0, Ordering::Relaxed);
     if dpf != 0 {
+        paged_named_release(); // files with a name outlive the pool
         crate::procpool::demand_uninstall();
         for i in 0..dpf {
             let _ = falloc.free(dpb + i * 4096);
@@ -12735,6 +12740,7 @@ fn free_demand_extra(falloc: &mut euromm::FrameAllocator) {
 /// (`pml4` != 0, with the vDSO's table chain) and the arena.
 fn glibc_launch_abort(falloc: &mut FrameAllocator, arena: u64, frames: usize, pml4: u64, dp_base: u64, dp_frames: usize) {
     if dp_frames != 0 {
+        paged_named_release(); // files with a name outlive the pool
         crate::procpool::demand_uninstall();
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
@@ -13206,6 +13212,7 @@ pub fn run_glibc_disk(
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
     if dp_frames != 0 {
+        paged_named_release(); // files with a name outlive the pool
         crate::procpool::demand_uninstall();
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
@@ -13631,6 +13638,88 @@ fn paged_adopt(fi: usize) -> bool {
     }
     PAGED_ANY.store(true, Ordering::Relaxed);
     true
+}
+
+/// A file WITH a name that a program writes during a demand-paged run is
+/// made of frames too, as a file without one is (BUG-154): its bytes move out
+/// of the kernel heap at its first write, ftruncate or fallocate. The kernel's
+/// own files (/proc, /dev) stay byte vectors. At the end of the run, when the
+/// pool goes, the files that still have a name get their bytes back in the
+/// heap (`paged_named_release`): they outlive the run, as before.
+fn paged_named_adopt(fi: usize) {
+    if fi >= DISK_FI_BASE || !DEMAND_ENABLED.load(Ordering::Relaxed) || crate::procpool::demand_total_frames() == 0 || is_paged(fi) {
+        return;
+    }
+    let named = {
+        let _g = crate::sched::IfOffGuard::new();
+        match FILES.lock().get(fi) {
+            Some((p, d)) => !p.is_empty() && p.starts_with('/') && !p.starts_with("/proc/") && !p.starts_with("/dev/")
+                && (matches!(d, alloc::borrow::Cow::Owned(_)) || d.is_empty()),
+            None => false,
+        }
+    };
+    if named && paged_adopt(fi) {
+        PAGED_NAMED_ADOPTED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+static PAGED_NAMED_ADOPTED: AtomicU64 = AtomicU64::new(0);
+
+/// The end of a demand-paged run: every paged file that still has a name gets
+/// its bytes back in the kernel heap, because its frames go with the pool.
+/// Files without a name die with the run (shared_frames_drop_all).
+fn paged_named_release() {
+    let list: alloc::vec::Vec<usize> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let files = FILES.lock();
+        PAGED_FILES.lock().iter().copied().filter(|&fi| files.get(fi).map(|(p, _)| !p.is_empty()).unwrap_or(false)).collect()
+    };
+    let (mut n, mut bytes, mut lost) = (0usize, 0usize, 0usize);
+    for fi in list {
+        let len = ram_len(fi);
+        let v = paged_read(fi, 0, len).unwrap_or_default();
+        if v.len() != len {
+            lost += 1;
+        }
+        let _g = crate::sched::IfOffGuard::new();
+        let gone = {
+            let mut sf = SHARED_FRAMES.lock();
+            sf.iter().position(|(f, _)| *f == fi).map(|k| sf.swap_remove(k).1)
+        };
+        if let Some(mut f) = gone {
+            f.release(&mut PoolFrames);
+        }
+        {
+            let mut pf = PAGED_FILES.lock();
+            if let Ok(k) = pf.binary_search(&fi) {
+                pf.remove(k);
+            }
+        }
+        bytes += v.len();
+        if let Some(e) = FILES.lock().get_mut(fi) {
+            e.1 = alloc::borrow::Cow::Owned(v);
+        }
+        n += 1;
+    }
+    if n > 0 {
+        crate::serial_println!("[ramfiles] end of the run: {n} files with a name back from frames into the kernel heap ({} KiB){}",
+            bytes / 1024, if lost > 0 { alloc::format!(", {lost} of them did not fit and are shorter") } else { String::new() });
+    }
+}
+
+/// Is `path` a RAM file of the VFS (not a directory, not a file of a pack)?
+fn is_ram_file(path: &[u8]) -> bool {
+    let _g = crate::sched::IfOffGuard::new();
+    FILES.lock().iter().any(|(p, _)| p.as_bytes() == path)
+}
+
+/// The bytes of RAM file `fi`, whatever it is made of. Takes FILES itself:
+/// call it without holding it.
+fn ram_bytes(fi: usize) -> alloc::vec::Vec<u8> {
+    if let Some(v) = paged_read(fi, 0, usize::MAX) {
+        return v;
+    }
+    let _g = crate::sched::IfOffGuard::new();
+    FILES.lock().get(fi).map(|(_, d)| d.to_vec()).unwrap_or_default()
 }
 
 /// Length of RAM file `fi`, whatever it is made of.
@@ -14292,6 +14381,7 @@ pub fn run_glibc(
     // one sweep — simpler and complete vs. walking PML4[2]. (The pml4 itself, incl.
     // the now-stale PML4[2] entry, is freed just below.)
     if dp_frames != 0 {
+        paged_named_release(); // files with a name outlive the pool
         crate::procpool::demand_uninstall();
         for i in 0..dp_frames as u64 {
             let _ = falloc.free(dp_base + i * 4096);
@@ -16068,7 +16158,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 return 0;
             }
             // A regular file (embedded or disk-backed).
-            let sz = FILES.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).map(|(_, d)| d.len())
+            let sz = {
+                    let fpos = FILES.lock().iter().position(|(p, _)| p.as_bytes() == path.as_slice());
+                    fpos.map(|i| with_paged(i, |f| f.len() as usize).unwrap_or_else(|| FILES.lock().get(i).map(|(_, d)| d.len()).unwrap_or(0)))
+                }
                 .or_else(|| DISK_FILES.lock().iter().find(|(p, _, _, _)| p.as_bytes() == path.as_slice()).map(|&(_, _, _, s)| s as usize))
                 .or_else(|| SYMLINKS.lock().iter().find(|(p, _)| p.as_bytes() == path.as_slice()).map(|(_, t)| t.len()));
             match sz {
@@ -16642,8 +16735,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                                 return (-12i64) as u64; // -ENOMEM
                             }
                             HEAP_BREAK.store(b + region, Ordering::Relaxed);
+                            let paged_bytes = paged_read(fi, 0, region as usize);
                             let files = FILES.lock();
-                            let data: &[u8] = files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]);
+                            let data: &[u8] = match paged_bytes.as_ref() {
+                                Some(v) => &v[..],
+                                None => files.get(fi).map(|f| &f.1[..]).unwrap_or(&[]),
+                            };
                             // SAFETY: b..b+region validated in-arena above.
                             unsafe {
                                 core::ptr::write_bytes(b as *mut u8, 0, region as usize);
@@ -17424,6 +17521,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             if fi >= DISK_FI_BASE {
                 return (-9i64) as u64; // disk/WAD/proc-mem fds not fallocatable
             }
+            paged_named_adopt(fi);
             if let Some(cur) = with_paged(fi, |f| f.len() as usize) {
                 // Frames come when the pages are touched or written.
                 return match cur >= need || paged_set_len(fi, need) == Some(true) {
@@ -18253,6 +18351,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             }
             let fd = if flags & 0x40 != 0 {
                 vfs_open_create(&path, flags & 0x200 != 0)
+            } else if flags & 0x200 != 0 && flags & 0x3 != 0 && is_ram_file(&path) {
+                // O_TRUNC without O_CREAT on a file that exists: emptied as well.
+                vfs_open_create(&path, true)
             } else {
                 vfs_open(&path)
             };
@@ -18438,7 +18539,11 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let found = files.iter().enumerate().find(|(_, (p, _))| p.as_bytes() == path.as_slice());
                 let mut sz = found.map(|(_, (_, d))| d.len());
                 let mut ino = found.map(|(i, _)| i as u64 + 1).unwrap_or(0);
+                let fidx = found.map(|(i, _)| i);
                 drop(files);
+                if let Some(n) = fidx.and_then(|i| with_paged(i, |f| f.len() as usize)) {
+                    sz = Some(n); // a file made of frames
+                }
                 if sz.is_none() {
                     // Disk-backed (EuroPack) file: report its real size so stat() succeeds
                     // (e.g. chrome dlopen'ing /pack/*.so stats it first).
