@@ -941,7 +941,6 @@ pub fn selftest() {
 }
 
 /// **[wizard-targets]** (BUG-201): a disk that refuses writes is never selectable.
-#[cfg(feature = "selftest")]
 pub fn selftest_targets() {
     for t in scan_targets() {
         if let Bus::Virtio(d) = t.bus {

@@ -410,7 +410,6 @@ pub fn nmi_scan_end(rsp: u64, stack_top: Option<u64>) -> u64 {
 
 /// **[nmi-bound]** (BUG-202): the probe scan of a stack with RSP within 2 KiB of
 /// its top, and of an unknown stack near the end of a page, stays inside.
-#[cfg(feature = "selftest")]
 pub fn selftest_nmi_bound() {
     let top = 0x80_0001_9000u64; // page aligned top, like task 4 of the report
     let rsp = top - 0x1e0; // 0x...18e20 in the report: 480 bytes below the top
