@@ -86,6 +86,7 @@ mod ps2;
 mod ring3;
 mod rtc;
 mod sched;
+mod schedstat;
 mod watchdog;
 mod serial;
 mod gdbstub;

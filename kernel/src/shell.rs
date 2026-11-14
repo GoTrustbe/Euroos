@@ -670,6 +670,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             lines
         }
+        // Scheduler measurement and tests (docs/design/SMP-SCHEDULER.md, S0).
+        "sched-stat" => crate::schedstat::sched_stat(arg1),
+        "hogtest" => crate::schedstat::hogtest(ctx.mem, line),
+        "hogs" => crate::schedstat::hogs_cmd(ctx.mem, arg1),
+        "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
+        "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
         // "wakeyield on|off": the wake hand-off of the scheduler (W23).
         "wakeyield" => {
             match arg1 {

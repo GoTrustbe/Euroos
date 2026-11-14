@@ -839,7 +839,11 @@ pub fn any_other_ready() -> bool {
     (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready)
 }
 
+#[track_caller]
 pub fn yield_now() {
+    if current_lockfree() == 0 {
+        note_t0_yield(core::panic::Location::caller());
+    }
     // SAFETY: YIELD_VECTOR is wired to `yield_switch` in the IDT (interrupts::init).
     // No options: the software interrupt pushes a frame (uses the stack) and the
     // context switch reads/writes scheduler memory; the switch preserves all GP
@@ -938,7 +942,12 @@ static T0_IDLE: AtomicBool = AtomicBool::new(false);
 /// scheduler know that the time is idle, not work.
 pub fn desktop_idle_hlt() {
     T0_IDLE.store(true, Ordering::Relaxed);
+    T0_HLT_START.store(rdtsc(), Ordering::Relaxed);
     x86_64::instructions::hlt();
+    let st = T0_HLT_START.swap(0, Ordering::Relaxed);
+    if st != 0 {
+        T0_HLT_ACC.fetch_add(rdtsc().saturating_sub(st), Ordering::Relaxed);
+    }
     T0_IDLE.store(false, Ordering::Relaxed);
 }
 /// The tick in which the desktop loop was last given the CPU by the scheduler.
@@ -959,6 +968,133 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+
+// -- S0 measurement (docs/design/SMP-SCHEDULER.md) --
+// Run time per task on the TSC (a short turn right after a tick is never seen by
+// the tick ledger), the ticks split by ring, switches, and where the desktop loop
+// gives the CPU away. All lock-free; read by `sched-stat` and `hogtest`.
+/// TSC cycles each task ran, charged at every switch away from it (task 0's
+/// idle halt not included).
+pub static RUN_TSC: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// TSC at which the running task's turn began (or was last charged).
+static EXEC_START: AtomicU64 = AtomicU64::new(0);
+/// The running task has an address space of its own (a ring-3 task).
+static CUR_USER: AtomicBool = AtomicBool::new(false);
+/// Ticks that found each task in ring 3, and in ring 0 (task 0's idle halt apart).
+pub static UTICKS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+pub static KTICKS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+pub static IDLE_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Times each task was given the CPU.
+pub static SWITCHES_IN: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// TSC the desktop loop spent halted in all; the start of a halt in progress;
+/// halted time not yet taken off its run time.
+pub static T0_IDLE_TSC: AtomicU64 = AtomicU64::new(0);
+static T0_HLT_START: AtomicU64 = AtomicU64::new(0);
+static T0_HLT_ACC: AtomicU64 = AtomicU64::new(0);
+
+fn rdtsc() -> u64 {
+    // SAFETY: rdtsc has no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+/// Idle time of the desktop loop since the last charge, up to `now`.
+fn t0_idle_take(now: u64) -> u64 {
+    let mut idle = T0_HLT_ACC.swap(0, Ordering::Relaxed);
+    let st = T0_HLT_START.load(Ordering::Relaxed);
+    if st != 0 {
+        idle += now.saturating_sub(st);
+        T0_HLT_START.store(now, Ordering::Relaxed);
+    }
+    T0_IDLE_TSC.fetch_add(idle, Ordering::Relaxed);
+    idle
+}
+
+/// Run time of task `idx` so far, the running task's turn included.
+pub fn run_tsc_now(idx: usize) -> u64 {
+    let base = RUN_TSC[idx].load(Ordering::Relaxed);
+    if current_lockfree() == idx {
+        base + rdtsc().saturating_sub(EXEC_START.load(Ordering::Relaxed))
+    } else {
+        base
+    }
+}
+
+/// Bumped each time a slot gets a new task: `hogtest` tells the processes
+/// started in its window from the tasks that were there before.
+pub static SPAWN_GEN: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+
+/// Kernel time of ring-3 tasks on the TSC (system calls and demand faults). A
+/// system call runs with IF=0, so no tick ever samples it: the tick ledger
+/// cannot see this share. KSTART: when the task's current stretch in a system
+/// call began (0 = not in one, 1 = in one but switched away).
+pub static KTSC: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+static KSTART: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+
+/// A system call of task `t` begins / ends (ring3::linux_dispatch).
+pub fn syscall_enter(t: usize) {
+    if t < MAX_TASKS {
+        KSTART[t].store(rdtsc().max(2), Ordering::Relaxed);
+    }
+}
+pub fn syscall_exit(t: usize) {
+    if t < MAX_TASKS {
+        let st = KSTART[t].swap(0, Ordering::Relaxed);
+        if st > 1 {
+            KTSC[t].fetch_add(rdtsc().saturating_sub(st), Ordering::Relaxed);
+        }
+    }
+}
+/// A demand fault of task `t` outside a system call took `cycles`.
+pub fn fault_time(t: usize, cycles: u64) {
+    if t < MAX_TASKS && KSTART[t].load(Ordering::Relaxed) == 0 {
+        KTSC[t].fetch_add(cycles, Ordering::Relaxed);
+    }
+}
+
+/// Is the running task a ring-3 task (lock-free, for the tick)?
+pub fn task_is_user(idx: usize) -> bool {
+    idx == current_lockfree() && CUR_USER.load(Ordering::Relaxed)
+}
+
+/// Where the desktop loop yielded (`#[track_caller]` of `yield_now`): the
+/// address of the `Location` and a count, 16 sites.
+static T0_YIELD_KEY: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+static T0_YIELD_N: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+fn note_t0_yield(loc: &'static core::panic::Location<'static>) {
+    let key = loc as *const _ as u64;
+    for i in 0..16 {
+        let k = T0_YIELD_KEY[i].load(Ordering::Relaxed);
+        if k == key || (k == 0 && T0_YIELD_KEY[i].compare_exchange(0, key, Ordering::Relaxed, Ordering::Relaxed).is_ok()) {
+            T0_YIELD_N[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+/// The yield sites of the desktop loop so far: (key, count).
+pub fn t0_yield_sites() -> alloc::vec::Vec<(u64, u64)> {
+    (0..16)
+        .map(|i| (T0_YIELD_KEY[i].load(Ordering::Relaxed), T0_YIELD_N[i].load(Ordering::Relaxed)))
+        .filter(|x| x.0 != 0)
+        .collect()
+}
+
+/// `file:line` of a yield site key.
+pub fn site_name(key: u64) -> alloc::string::String {
+    // SAFETY: keys are addresses of `&'static Location` stored by note_t0_yield.
+    let loc = unsafe { &*(key as *const core::panic::Location<'static>) };
+    alloc::format!("{}:{}", loc.file(), loc.line())
+}
+
+/// Stop a Ready task until [`start_parked`] (the scheduler tests' hogs). Not
+/// for the running task.
+pub fn park(idx: usize) {
+    let mut s = SCHED.lock();
+    if idx < s.count && idx != s.current && s.tasks[idx].state == State::Ready {
+        s.tasks[idx].state = State::Blocked(PARKED);
+    }
+}
 /// TSC at the timer interrupt that was taken last (BUG-182).
 pub fn last_tick_tsc() -> u64 {
     LAST_TICK_TSC.load(Ordering::Relaxed)
@@ -977,6 +1113,8 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // minutes while the timer itself was fine.
     let now_tsc = unsafe { core::arch::x86_64::_rdtsc() };
     let prev_tsc = LAST_TICK_TSC.swap(now_tsc, Ordering::Relaxed);
+    // S0: [if0-window], the cause of a late tick (steal, disk wait, faults, syscall).
+    crate::schedstat::on_tick(prev_tsc, now_tsc, rsp);
     let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed);
     let mut add = 1u64;
     if prev_tsc != 0 && per != 0 {
@@ -1037,10 +1175,19 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     unsafe {
         let rip = *((rsp + 120) as *const u64);
         let cs = *((rsp + 128) as *const u64);
+        let c = current_lockfree();
         if cs & 3 == 3 {
             crate::ring3::sample_user_rip(current(), rip);
+            if c < MAX_TASKS {
+                UTICKS[c].fetch_add(1, Ordering::Relaxed);
+            }
         } else {
             crate::ring3::sample_kernel_rip(rip);
+            if c == 0 && T0_IDLE.load(Ordering::Relaxed) {
+                IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
+            } else if c < MAX_TASKS {
+                KTICKS[c].fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
@@ -1122,6 +1269,19 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         sched_state_corrupt(cur, count, pc, rsp);
     }
     s.tasks[cur].rsp = rsp;
+    // S0: charge the outgoing task's turn on the TSC (task 0's idle halt apart).
+    let now_tsc = rdtsc();
+    let mut ran_tsc = now_tsc.saturating_sub(EXEC_START.swap(now_tsc, Ordering::Relaxed));
+    if cur == 0 {
+        ran_tsc = ran_tsc.saturating_sub(t0_idle_take(now_tsc));
+    }
+    RUN_TSC[cur].fetch_add(ran_tsc, Ordering::Relaxed);
+    // Kernel time: a task switched away inside a system call stops the clock.
+    let ks = KSTART[cur].load(Ordering::Relaxed);
+    if ks > 1 {
+        KTSC[cur].fetch_add(now_tsc.saturating_sub(ks), Ordering::Relaxed);
+        KSTART[cur].store(1, Ordering::Relaxed);
+    }
     // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
     // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
     // user-return state; restored when this task is scheduled again.
@@ -1265,6 +1425,16 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     if best != cur {
         unsafe { fpu_switch(cur, best) };
     }
+    if KSTART[best].load(Ordering::Relaxed) == 1 {
+        KSTART[best].store(now_tsc.max(2), Ordering::Relaxed);
+    }
+    if best != cur {
+        SWITCHES_IN[best].fetch_add(1, Ordering::Relaxed);
+        if best == 0 && T0_HLT_START.load(Ordering::Relaxed) != 0 {
+            T0_HLT_START.store(now_tsc, Ordering::Relaxed);
+        }
+    }
+    CUR_USER.store(s.tasks[best].cr3 != 0, Ordering::Relaxed);
     s.current = best;
     CURRENT_MIRROR.store(best as u64, Ordering::Relaxed);
     let next = s.current;
@@ -1500,6 +1670,8 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     // The new occupant starts in the launcher's fd space; a spawner that gives
     // it another one does so before the task can run (ring3/fdspace.rs).
     crate::ring3::fd_space_slot_reset(i);
+    SPAWN_GEN[i].fetch_add(1, Ordering::Relaxed);
+    KSTART[i].store(0, Ordering::Relaxed);
     Some(i)
 }
 

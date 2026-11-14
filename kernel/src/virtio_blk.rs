@@ -179,12 +179,27 @@ pub static KICK_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomi
 pub static KICK_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
+    let if0 = !x86_64::instructions::interrupts::are_enabled();
     let t0 = core::arch::x86_64::_rdtsc();
     let r = kick_and_wait_inner(blk);
+    let c = core::arch::x86_64::_rdtsc().wrapping_sub(t0);
     KICK_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    KICK_CYCLES.fetch_add(core::arch::x86_64::_rdtsc().wrapping_sub(t0),
-        core::sync::atomic::Ordering::Relaxed);
+    KICK_CYCLES.fetch_add(c, core::sync::atomic::Ordering::Relaxed);
+    WAIT_MAX.fetch_max(c, core::sync::atomic::Ordering::Relaxed);
+    if if0 {
+        WAIT_IF0_MAX.fetch_max(c, core::sync::atomic::Ordering::Relaxed);
+    }
     r
+}
+
+/// The longest request wait since the last timer tick took them, and the longest
+/// one with interrupts off (cycles): `[if0-window]` names a disk wait as the
+/// cause of a late tick (BUG-182).
+static WAIT_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static WAIT_IF0_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn take_wait_max() -> (u64, u64) {
+    (WAIT_MAX.swap(0, core::sync::atomic::Ordering::Relaxed), WAIT_IF0_MAX.swap(0, core::sync::atomic::Ordering::Relaxed))
 }
 
 /// How long one request may take before the disk counts as not answering. A

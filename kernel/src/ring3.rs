@@ -8481,6 +8481,7 @@ static GPOLICY_ELF: &[u8] = include_bytes!("../../userland/glibc/gpolicy");
 static GTHREADCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gthreadchurn");
 static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn");
 static GSLOTS_ELF: &[u8] = include_bytes!("../../userland/glibc/gslots");
+static GWAKELAT_ELF: &[u8] = include_bytes!("../../userland/glibc/gwakelat");
 static GSYNCSOCK_ELF: &[u8] = include_bytes!("../../userland/glibc/gsyncsock");
 static GPCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gpcm");
 static GMANYTHREADS_ELF: &[u8] = include_bytes!("../../userland/glibc/gmanythreads");
@@ -8629,6 +8630,7 @@ pub fn gpolicy_bytes() -> &'static [u8] { GPOLICY_ELF }
 pub fn gthreadchurn_bytes() -> &'static [u8] { GTHREADCHURN_ELF }
 pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 pub fn gslots_bytes() -> &'static [u8] { GSLOTS_ELF }
+pub fn gwakelat_bytes() -> &'static [u8] { GWAKELAT_ELF }
 pub fn gsyncsock_bytes() -> &'static [u8] { GSYNCSOCK_ELF }
 pub fn gpcm_bytes() -> &'static [u8] { GPCM_ELF }
 pub fn gmanythreads_bytes() -> &'static [u8] { GMANYTHREADS_ELF }
@@ -9027,6 +9029,18 @@ extern "C" {
 /// multiple ring-3 processes can run preemptively at once. Returns the address
 /// of the counter (the kernel reads it for display).
 pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
+    spawn_counter_task_in(falloc, false).map(|(_, c)| c).unwrap_or(0)
+}
+
+/// A CPU-bound ring-3 task for the scheduler tests (`hogtest`, `[fair]`,
+/// `[wakelat]`): the counter task above, made parked (it runs only after
+/// `sched::start_parked`, and `sched::park` stops it again). Returns the task
+/// index and the physical address of its counter.
+pub fn spawn_hog(falloc: &mut FrameAllocator) -> Option<(usize, u64)> {
+    spawn_counter_task_in(falloc, true)
+}
+
+fn spawn_counter_task_in(falloc: &mut FrameAllocator, parked: bool) -> Option<(usize, u64)> {
     init_syscall_msrs();
     const MIB2: u64 = 1 << 21;
 
@@ -9045,7 +9059,7 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
     // that reads 0), not a boot panic.
     let Ok(arena) = falloc.allocate_aligned(512, 512) else {
         crate::serial_println!("[euro] counter task: no free 2 MiB arena - not started");
-        return 0;
+        return None;
     };
     let code = arena;
     let stack_top = arena + MIB2; // user stack grows downward from the arena top
@@ -9055,7 +9069,7 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
             let _ = falloc.free(arena + f * 4096);
         }
         crate::serial_println!("[euro] counter task: no kernel stack free - not started");
-        return 0;
+        return None;
     };
     let kstack_top = (kstack + 4 * 4096) & !0xF;
     // SAFETY: arena lies in the identity-mapped lowest 1 GiB; under the boot CR3
@@ -9082,11 +9096,18 @@ pub fn spawn_counter_task(falloc: &mut FrameAllocator) -> u64 {
                 let _ = falloc.free(kstack + f * 4096);
             }
             crate::serial_println!("[euro] counter task: no frames for page tables - not started");
-            return 0;
+            return None;
         }
     };
-    let idx = crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top, pml4);
-    counter_ptr
+    let idx = if parked {
+        crate::sched::spawn_user_parked(code, stack_top, user_cs, user_ss, kstack_top, pml4)
+    } else {
+        crate::sched::spawn_user(code, stack_top, user_cs, user_ss, kstack_top, pml4)
+    };
+    if idx == usize::MAX {
+        return None;
+    }
+    Some((idx, counter_ptr))
 }
 
 /// Read a counter value. `ptr` is the PHYSICAL arena address; under the boot CR3 (where
@@ -9280,6 +9301,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gthreadchurn" => include_bytes!("../../userland/glibc/gthreadchurn.sig"),
         "/bin/gforkchurn" => include_bytes!("../../userland/glibc/gforkchurn.sig"),
         "/bin/gslots" => include_bytes!("../../userland/glibc/gslots.sig"),
+        "/bin/gwakelat" => include_bytes!("../../userland/glibc/gwakelat.sig"),
         "/bin/gsyncsock" => include_bytes!("../../userland/glibc/gsyncsock.sig"),
         "/bin/gpcm" => include_bytes!("../../userland/glibc/gpcm.sig"),
         "/bin/gmanythreads" => include_bytes!("../../userland/glibc/gmanythreads.sig"),
@@ -11589,9 +11611,10 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     }
     let r = handle_demand_fault_inner(addr);
     if r {
+        let c = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0);
         FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
-        FAULT_CYCLES.fetch_add(
-            unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0), Ordering::Relaxed);
+        FAULT_CYCLES.fetch_add(c, Ordering::Relaxed);
+        crate::sched::fault_time(crate::sched::current_lockfree(), c);
     }
     r
 }
@@ -15174,12 +15197,17 @@ pub fn trace_failures(budget: u32) {
 }
 
 fn linux_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
-    {
-        let t = crate::sched::current();
-        if t < crate::sched::MAX_TASKS {
-            SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
-        }
+    let t = crate::sched::current();
+    if t < crate::sched::MAX_TASKS {
+        SYSCALLS_PER_TASK[t].fetch_add(1, Ordering::Relaxed);
     }
+    crate::sched::syscall_enter(t);
+    let r = linux_dispatch_timed(num, a1, a2, a3, a4, a5);
+    crate::sched::syscall_exit(t);
+    r
+}
+
+fn linux_dispatch_timed(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     if TRACE_FAILS.load(Ordering::Relaxed) {
         let r = linux_dispatch_inner_traced(num, a1, a2, a3, a4, a5);
         let sr = r as i64;
