@@ -1018,6 +1018,239 @@ pub fn fill_remap_tables_multiblock(pml4: u64, pdpt: u64, pd: u64,
     }
 }
 
+// -- The arena of a fork child, made of single frames (BUG-156) ------------------
+// The launched process has its arena in one piece (128 MiB for the browser),
+// identity mapped with 2 MiB pages. A fork child used to get the same: 128 MiB
+// in one piece from the process pool, copied whole, whatever the child used of
+// it. An idle utility process of the browser uses 2-3 MiB of it, and the 13th
+// process did not fit a 4 GiB machine.
+// The arena of a child is a range of 4 KiB pages now: a page table per 2 MiB
+// (the PD entry carries LAZY_PT), and a frame of its own (the PTE carries
+// OWNED) only for a page that has something in it. A page nobody wrote reads
+// as zeros and gets its frame at the first touch, from ring 3 or from the
+// kernel (`lazy_arena_fault`). fork copies the pages of the parent that are
+// not all zeros; execve gives every frame back (`lazy_arena_discard`); the end
+// of the process frees them with its tables (`free_fork_tables`).
+/// In a PD entry: the page table below belongs to a lazy arena.
+const LAZY_PT: u64 = 1 << 9;
+/// In a PTE of such a table: the frame belongs to the process (process pool).
+const OWNED: u64 = 1 << 9;
+
+/// The low address space of a fork child like [`fill_remap_tables_multiblock`],
+/// with `nblocks` empty page tables over the arena at `virt_arena` instead of
+/// a block of memory. False when a table frame could not be had (the caller
+/// gives everything back through `free_fork_tables`).
+pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, nblocks: u64) -> bool {
+    // SAFETY: three fresh identity-mapped frames; filled completely.
+    unsafe {
+        core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
+        core::ptr::write_bytes(pdpt as *mut u8, 0, 4096);
+        core::ptr::write_bytes(pd as *mut u8, 0, 4096);
+        let pml4p = pml4 as *mut u64;
+        let pdptp = pdpt as *mut u64;
+        let pdp = pd as *mut u64;
+        pml4p.write_volatile(pdpt | PRESENT | WRITABLE | USER);
+        pml4p.add(1).write_volatile(high_pdpt_entry()); // share high region (MMIO)
+        pdptp.write_volatile(pd | PRESENT | WRITABLE | USER);
+        for i in 1..512u64 {
+            pdptp.add(i as usize).write_volatile((i * GIB) | PRESENT | WRITABLE | HUGE);
+        }
+        for i in 0..512usize {
+            pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
+        }
+        for b in 0..nblocks {
+            let virt = virt_arena + b * MIB2;
+            let i3 = ((virt >> 30) & 0x1FF) as usize;
+            let i2 = ((virt >> 21) & 0x1FF) as usize;
+            let e3 = pdptp.add(i3).read_volatile();
+            let wpd = if e3 & PRESENT != 0 && e3 & HUGE == 0 {
+                e3 & ADDR_MASK
+            } else {
+                let Some(npd) = crate::procpool::alloc() else { return false };
+                let np = npd as *mut u64;
+                for i in 0..512u64 {
+                    np.add(i as usize).write_volatile(((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE);
+                }
+                pdptp.add(i3).write_volatile(npd | PRESENT | WRITABLE | USER);
+                npd
+            };
+            let Some(pt) = crate::procpool::alloc() else {
+                // The 2 MiB identity entry must not stay: ring 0 would write
+                // into the memory of whoever owns those frames.
+                (wpd as *mut u64).add(i2).write_volatile(0);
+                return false;
+            };
+            core::ptr::write_bytes(pt as *mut u8, 0, 4096);
+            (wpd as *mut u64).add(i2).write_volatile(pt | PRESENT | WRITABLE | USER | LAZY_PT);
+        }
+    }
+    true
+}
+
+/// The entry of the lazy arena page table for `virt` under `pml4`, when there
+/// is one.
+unsafe fn lazy_pte_ptr(pml4: u64, virt: u64) -> Option<*mut u64> {
+    if virt >> 39 != 0 {
+        return None; // the arena lies under PML4[0]
+    }
+    let e4 = (pml4 as *const u64).read_volatile();
+    if e4 & PRESENT == 0 {
+        return None;
+    }
+    let e3 = ((e4 & ADDR_MASK) as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
+    if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+        return None;
+    }
+    let e2 = ((e3 & ADDR_MASK) as *const u64).add(((virt >> 21) & 0x1FF) as usize).read_volatile();
+    if e2 & PRESENT == 0 || e2 & HUGE != 0 || e2 & LAZY_PT == 0 {
+        return None;
+    }
+    Some(((e2 & ADDR_MASK) as *mut u64).add(((virt >> 12) & 0x1FF) as usize))
+}
+
+/// Is the arena at `virt` under `pml4` a lazy one (a fork child since BUG-156)?
+pub fn arena_is_lazy(pml4: u64, virt: u64) -> bool {
+    // SAFETY: identity-mapped tables, read only.
+    unsafe { lazy_pte_ptr(pml4, virt).is_some() }
+}
+
+/// A page fault on a page that is not present: when `addr` lies in a lazy
+/// arena of `pml4`, the page gets a zeroed frame of its own. None: not a lazy
+/// arena page (or present already: not this fault). Some(false): no frame
+/// (the pool has `reserve` frames or fewer).
+/// Takes the process-pool lock and nothing else, so it may be entered from a
+/// system call that copies into its caller with any other lock held.
+pub fn lazy_arena_fault(pml4: u64, addr: u64, reserve: usize) -> Option<bool> {
+    // SAFETY: identity-mapped tables of the address space that faulted.
+    unsafe {
+        let ptep = lazy_pte_ptr(pml4, addr)?;
+        if ptep.read_volatile() & PRESENT != 0 {
+            return None;
+        }
+        if crate::procpool::free_frames() <= reserve {
+            return Some(false);
+        }
+        let Some(f) = crate::procpool::alloc() else { return Some(false) };
+        core::ptr::write_bytes(f as *mut u8, 0, 4096);
+        ptep.write_volatile(f | PRESENT | WRITABLE | USER | OWNED);
+    }
+    Some(true)
+}
+
+fn page_is_zero(va: u64) -> bool {
+    // SAFETY: the caller checked that the page is mapped under the current CR3.
+    unsafe {
+        let p = va as *const u64;
+        for i in 0..512 {
+            if p.add(i).read() != 0 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// fork(): give the lazy arena of `child` a copy of every page of the arena of
+/// the running process (`parent`, the current CR3) that is not all zeros.
+/// The arena of the parent is one piece of 2 MiB pages (the launched process)
+/// or lazy itself (a fork child that forks). `between` runs after every 2 MiB
+/// and may let other tasks run. Returns (pages copied, pages left out), or
+/// None when the pool has no frame for a page (the caller undoes the fork).
+pub fn clone_arena_lazy(parent: u64, child: u64, virt_arena: u64, nblocks: u64, reserve: usize,
+                        between: &mut dyn FnMut()) -> Option<(usize, usize)> {
+    let (mut copied, mut skipped) = (0usize, 0usize);
+    for b in 0..nblocks {
+        let base = virt_arena + b * MIB2;
+        // SAFETY: identity-mapped tables; the pages of the parent are read
+        // through the current address space (they are present: checked per
+        // page), the fresh frames of the child through the identity mapping
+        // (a pool frame never lies in the arena range, which the launched
+        // process holds).
+        unsafe {
+            let e4 = (parent as *const u64).read_volatile();
+            if e4 & PRESENT == 0 { return Some((copied, skipped)); }
+            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            if e3 & PRESENT == 0 { continue; }
+            // A 1 GiB identity entry is supervisor memory, not an arena.
+            if e3 & HUGE != 0 { continue; }
+            let e2 = ((e3 & ADDR_MASK) as *const u64).add(((base >> 21) & 0x1FF) as usize).read_volatile();
+            if e2 & PRESENT == 0 || e2 & USER == 0 { continue; }
+            let parent_pt = if e2 & HUGE != 0 { None } else { Some((e2 & ADDR_MASK) as *const u64) };
+            for i in 0..512u64 {
+                let va = base + i * 4096;
+                if let Some(pt) = parent_pt {
+                    let pe = pt.add(i as usize).read_volatile();
+                    if pe & PRESENT == 0 || pe & USER == 0 { continue; }
+                }
+                if page_is_zero(va) {
+                    skipped += 1;
+                    continue;
+                }
+                let Some(ptep) = lazy_pte_ptr(child, va) else { return None };
+                if crate::procpool::free_frames() <= reserve { return None; }
+                let Some(f) = crate::procpool::alloc() else { return None };
+                core::ptr::copy_nonoverlapping(va as *const u8, f as *mut u8, 4096);
+                ptep.write_volatile(f | PRESENT | WRITABLE | USER | OWNED);
+                copied += 1;
+            }
+        }
+        between();
+    }
+    Some((copied, skipped))
+}
+
+/// execve in a fork child: every page of its lazy arena goes back to the pool
+/// and reads as zeros again. Returns the frames freed. The caller runs on
+/// `pml4`; the TLB is flushed here.
+pub fn lazy_arena_discard(pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
+    let mut freed = 0;
+    // SAFETY: identity-mapped tables of the running process; the caller is its
+    // only task (execve) and touches no arena page between here and the flush.
+    unsafe {
+        for b in 0..nblocks {
+            let Some(pt) = lazy_pte_ptr(pml4, virt_arena + b * MIB2) else { continue };
+            for i in 0..512usize {
+                let e = pt.add(i).read_volatile();
+                if e & PRESENT != 0 && e & OWNED != 0 {
+                    pt.add(i).write_volatile(0);
+                    crate::procpool::free(e & ADDR_MASK);
+                    freed += 1;
+                }
+            }
+        }
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+    }
+    freed
+}
+
+/// Frames a process holds in lazy arena pages (the census).
+pub fn lazy_arena_frames(pml4: u64) -> usize {
+    let mut n = 0;
+    // SAFETY: identity-mapped tables, read only.
+    unsafe {
+        let e4 = (pml4 as *const u64).read_volatile();
+        if e4 & PRESENT == 0 { return 0; }
+        let pdpt = e4 & ADDR_MASK;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            for j in 0..512usize {
+                let e2 = (pd as *const u64).add(j).read_volatile();
+                if e2 & PRESENT == 0 || e2 & HUGE != 0 || e2 & LAZY_PT == 0 { continue; }
+                let pt = (e2 & ADDR_MASK) as *const u64;
+                for k in 0..512usize {
+                    let e = pt.add(k).read_volatile();
+                    if e & PRESENT != 0 && e & OWNED != 0 { n += 1; }
+                }
+            }
+        }
+    }
+    n
+}
+
 /// fork(): copy every COMMITTED page of the demand region PML4[`idx`] from `parent`
 /// into fresh pool frames mapped at the SAME virtual address in `child`. Read-only
 /// exe/lib pages could be re-faulted from disk, but the child must observe the
@@ -1461,6 +1694,17 @@ pub fn free_fork_tables(pml4: u64) -> usize {
             for j in 0..512usize {
                 let e2 = (pd as *const u64).add(j).read_volatile();
                 if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                    if e2 & LAZY_PT != 0 {
+                        // BUG-156: the pages of a lazy arena are frames of
+                        // the process itself; they go with their table.
+                        let pt = (e2 & ADDR_MASK) as *const u64;
+                        for k in 0..512usize {
+                            let e = pt.add(k).read_volatile();
+                            if e & PRESENT != 0 && e & OWNED != 0 {
+                                crate::procpool::free(e & ADDR_MASK); freed += 1;
+                            }
+                        }
+                    }
                     crate::procpool::free(e2 & ADDR_MASK); freed += 1;
                 }
             }

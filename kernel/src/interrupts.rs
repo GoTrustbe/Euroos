@@ -672,6 +672,24 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // that touch a not-yet-committed demand page during a syscall).
     crate::ring3::FAULT_CODE.store(code.bits(), Ordering::Relaxed);
     crate::ring3::FAULT_RIP.store(frame.instruction_pointer.as_u64(), Ordering::Relaxed);
+    // BUG-156: a page of the arena of a fork child that nobody touched yet. It
+    // gets a zeroed frame from the process pool, for ring 3 and for a system
+    // call that copies into its caller alike. A fault from ring 3 leaves the
+    // last 1 MiB of the pool to the kernel.
+    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr >> 39 == 0 {
+        let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
+        match crate::paging::lazy_arena_fault(cr3, addr, reserve) {
+            Some(true) => {
+                crate::ring3::ARENA_LAZY_FAULTS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Some(false) => serial_println!(
+                "[oom] no frame in the process pool for an arena page at {addr:#x} ({} frames free): the access fails",
+                crate::procpool::free_frames()),
+            None => {}
+        }
+    }
     if crate::ring3::handle_demand_fault(
         addr,
         code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),
