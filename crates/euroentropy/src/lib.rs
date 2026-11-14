@@ -141,6 +141,114 @@ pub fn estimate_jitter_bits(samples: &[u64]) -> usize {
     varying / 4
 }
 
+// ── SP 800-90B health tests (BUG-082) ───────────────────────────────────────
+//
+// The two continuous tests of SP 800-90B section 4.4 on the raw samples of a
+// noise source, before anything is conditioned or credited:
+//
+// - the repetition count test: C or more identical samples in a row fail,
+//   C = 1 + ceil(20 / H) for a false-positive rate of 2^-20;
+// - the adaptive proportion test: in a window of W samples, the first sample
+//   of the window occurring C or more times fails, C = 1 + the (1 - 2^-20)
+//   quantile of Binomial(W, 2^-H).
+//
+// H is the min-entropy per sample the cutoffs assume. For the jitter sample it
+// is 1 bit: below what the memory walk measured (the most frequent value is 5
+// to 19 % of a batch, 2.4 bits and up), and above what is credited (a quarter
+// bit per counted sample), so a source that falls below one bit per sample is
+// caught, while a healthy one fails once in a million windows. The old
+// two-instruction sample (one value in about 70 % of a batch) fails the
+// proportion test; a constant one fails the repetition test.
+//
+// A failed jitter batch is discarded: its samples are neither mixed nor
+// credited, and the next batch is tested afresh. A CPU word source (RDSEED,
+// RDRAND) or the TPM that fails is disabled for the life of the pool.
+
+/// Assumed min-entropy of one jitter sample, in bits, for the cutoffs below.
+pub const JITTER_H_BITS: u32 = 1;
+/// Repetition count cutoff for H = 1: 1 + ceil(20 / 1).
+pub const JITTER_RCT_CUTOFF: u32 = 21;
+/// Adaptive proportion window (SP 800-90B: 512 for a non-binary source).
+pub const APT_WINDOW: usize = 512;
+/// Adaptive proportion cutoff for H = 1 and W = 512 (SP 800-90B, table 2).
+pub const JITTER_APT_CUTOFF: u32 = 311;
+/// Repetition count cutoff for a 64-bit CPU word credited at 32 bits (H = 32):
+/// 1 + ceil(20 / 32) = 2, two equal words in a row.
+pub const WORD_RCT_CUTOFF: u32 = 2;
+/// Repetition count cutoff for TPM bytes, assumed H = 4: 1 + ceil(20 / 4).
+pub const TPM_RCT_CUTOFF: u32 = 6;
+
+/// Which test failed, on which value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthFailure {
+    /// `run` equal samples in a row (`run >= cutoff`).
+    Repetition { value: u64, run: u32, cutoff: u32 },
+    /// `count` of the window's `window` samples equal to its first one.
+    Proportion { value: u64, count: u32, window: u32, cutoff: u32 },
+}
+
+impl HealthFailure {
+    /// "repetition count 21 >= 21 (value 24)" and the like.
+    pub fn describe(&self) -> alloc::string::String {
+        match *self {
+            HealthFailure::Repetition { value, run, cutoff } => {
+                alloc::format!("repetition count {run} >= cutoff {cutoff} (value {value:#x})")
+            }
+            HealthFailure::Proportion { value, count, window, cutoff } => {
+                alloc::format!("adaptive proportion {count} of {window} >= cutoff {cutoff} (value {value:#x})")
+            }
+        }
+    }
+}
+
+/// The repetition count test over `samples`, continuing from `state`
+/// (the last value and its run length).
+fn rct(samples: &[u64], cutoff: u32, state: &mut Option<(u64, u32)>) -> Result<(), HealthFailure> {
+    for &x in samples {
+        let next = match *state {
+            Some((v, run)) if v == x => (v, run + 1),
+            _ => (x, 1),
+        };
+        *state = Some(next);
+        if next.1 >= cutoff {
+            return Err(HealthFailure::Repetition { value: x, run: next.1, cutoff });
+        }
+    }
+    Ok(())
+}
+
+/// The adaptive proportion test over whole windows of `samples` (a shorter
+/// tail is a window of its own).
+fn apt(samples: &[u64], window: usize, cutoff: u32) -> Result<(), HealthFailure> {
+    for w in samples.chunks(window) {
+        let first = w[0];
+        let count = w.iter().filter(|&&x| x == first).count() as u32;
+        if count >= cutoff {
+            return Err(HealthFailure::Proportion { value: first, count, window: w.len() as u32, cutoff });
+        }
+    }
+    Ok(())
+}
+
+/// Both tests on one batch of jitter samples (a batch is tested on its own:
+/// batches are minutes or microseconds apart, a run does not carry over).
+pub fn jitter_health(samples: &[u64]) -> Result<(), HealthFailure> {
+    let mut st = None;
+    rct(samples, JITTER_RCT_CUTOFF, &mut st)?;
+    apt(samples, APT_WINDOW, JITTER_APT_CUTOFF)
+}
+
+/// The continuous state of the sources other than jitter.
+#[derive(Clone, Copy, Debug, Default)]
+struct SourceHealth {
+    rdseed: Option<(u64, u32)>,
+    rdrand: Option<(u64, u32)>,
+    tpm: Option<(u64, u32)>,
+    rdseed_off: bool,
+    rdrand_off: bool,
+    tpm_off: bool,
+}
+
 /// Fold raw noise bytes into a 32-byte conditioned block (SHA-256 as the
 /// vetted conditioning component, SP 800-90B style).
 fn condition(material: &[u8]) -> [u8; 32] {
@@ -166,6 +274,9 @@ pub struct EntropyPool {
     reseeds: u64,
     /// What [`seed_from`](Self::seed_from) has gathered so far, over all its calls.
     report: SeedReport,
+    /// The health state of the TPM and the CPU sources (BUG-082).
+    health: SourceHealth,
+    reseeds_requested: u64,
 }
 
 /// Staged material is folded into one conditioned block when it reaches this
@@ -183,6 +294,8 @@ impl EntropyPool {
             staged: Vec::new(),
             reseeds: 0,
             report: SeedReport { threshold: threshold_bits, ..SeedReport::default() },
+            health: SourceHealth::default(),
+            reseeds_requested: 0,
         }
     }
 
@@ -317,6 +430,35 @@ pub struct SeedReport {
     pub jitter_bits: usize,
     /// The last call reached its bound without meeting the threshold.
     pub gave_up: bool,
+    /// Health test failures (BUG-082), all sources, and the last one.
+    pub health_failures: usize,
+    pub last_failure: Option<(HealthSource, HealthFailure)>,
+    /// Jitter batches the health tests discarded (not mixed, not credited).
+    pub jitter_discarded: usize,
+    /// Sources the health tests switched off for the life of the pool.
+    pub rdseed_off: bool,
+    pub rdrand_off: bool,
+    pub tpm_off: bool,
+}
+
+/// A noise source, as the health report names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthSource {
+    Jitter,
+    Rdseed,
+    Rdrand,
+    Tpm,
+}
+
+impl HealthSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            HealthSource::Jitter => "jitter",
+            HealthSource::Rdseed => "rdseed",
+            HealthSource::Rdrand => "rdrand",
+            HealthSource::Tpm => "tpm",
+        }
+    }
 }
 
 impl EntropyPool {
@@ -340,29 +482,59 @@ impl EntropyPool {
     /// later call continues from there.
     pub fn seed_from(&mut self, src: &mut dyn NoiseSources, policy: &SeedPolicy) -> SeedReport {
         // 1. TPM.
-        if let Some(b) = src.tpm() {
-            if !b.is_empty() {
-                let credit = if self.report.tpm_bytes == 0 { b.len().min(32) * TPM_BITS_PER_BYTE } else { 0 };
-                self.add(&b, credit);
-                self.report.tpm_bytes += b.len();
+        if !self.health.tpm_off {
+            if let Some(b) = src.tpm() {
+                if !b.is_empty() {
+                    let raw: Vec<u64> = b.iter().map(|&x| x as u64).collect();
+                    match rct(&raw, TPM_RCT_CUTOFF, &mut self.health.tpm) {
+                        Ok(()) => {
+                            let credit = if self.report.tpm_bytes == 0 { b.len().min(32) * TPM_BITS_PER_BYTE } else { 0 };
+                            self.add(&b, credit);
+                            self.report.tpm_bytes += b.len();
+                        }
+                        Err(f) => {
+                            self.health.tpm_off = true;
+                            self.health_failed(HealthSource::Tpm, f);
+                        }
+                    }
+                }
             }
         }
         // 2. The CPU's sources. Material from both goes in; the credit is capped.
         let cpu_cap = self.threshold_bits / 2;
         let mut words: Vec<u8> = Vec::new();
         let mut credit = 0usize;
-        for _ in 0..policy.cpu_words {
-            if let Some(w) = src.rdseed() {
-                words.extend_from_slice(&w.to_le_bytes());
-                self.report.rdseed_words += 1;
-                credit += RDSEED_BITS_PER_WORD;
+        for (source, per_word) in [(HealthSource::Rdseed, RDSEED_BITS_PER_WORD), (HealthSource::Rdrand, RDRAND_BITS_PER_WORD)] {
+            let mut got: Vec<u64> = Vec::new();
+            for _ in 0..policy.cpu_words {
+                let off = if source == HealthSource::Rdseed { self.health.rdseed_off } else { self.health.rdrand_off };
+                if off {
+                    break;
+                }
+                let w = if source == HealthSource::Rdseed { src.rdseed() } else { src.rdrand() };
+                let Some(w) = w else { continue };
+                let st = if source == HealthSource::Rdseed { &mut self.health.rdseed } else { &mut self.health.rdrand };
+                if let Err(f) = rct(&[w], WORD_RCT_CUTOFF, st) {
+                    // A stuck generator: none of this call's words are used.
+                    got.clear();
+                    if source == HealthSource::Rdseed {
+                        self.health.rdseed_off = true;
+                    } else {
+                        self.health.rdrand_off = true;
+                    }
+                    self.health_failed(source, f);
+                    break;
+                }
+                got.push(w);
             }
-        }
-        for _ in 0..policy.cpu_words {
-            if let Some(w) = src.rdrand() {
+            for w in &got {
                 words.extend_from_slice(&w.to_le_bytes());
-                self.report.rdrand_words += 1;
-                credit += RDRAND_BITS_PER_WORD;
+                credit += per_word;
+            }
+            if source == HealthSource::Rdseed {
+                self.report.rdseed_words += got.len();
+            } else {
+                self.report.rdrand_words += got.len();
             }
         }
         if !words.is_empty() {
@@ -371,6 +543,7 @@ impl EntropyPool {
             self.report.cpu_bits += credit;
         }
         // 3. Jitter: at least the minimum, then until ready, at most the bound.
+        //    A batch that fails a health test is discarded.
         let mut batches = 0usize;
         self.report.gave_up = false;
         loop {
@@ -382,19 +555,59 @@ impl EntropyPool {
                 break;
             }
             let samples = src.jitter(policy.jitter_batch);
-            self.report.jitter_bits += estimate_jitter_bits(&samples);
-            self.add_jitter(&samples);
             self.report.jitter_batches += 1;
             batches += 1;
+            if samples.is_empty() {
+                continue;
+            }
+            if let Err(f) = jitter_health(&samples) {
+                self.report.jitter_discarded += 1;
+                self.health_failed(HealthSource::Jitter, f);
+                continue;
+            }
+            self.report.jitter_bits += estimate_jitter_bits(&samples);
+            self.add_jitter(&samples);
         }
         self.report.ready = self.ready();
         self.report.bits = self.entropy_bits;
-        self.report
+        self.seed_report()
     }
 
     /// What [`seed_from`](Self::seed_from) has gathered so far.
     pub fn seed_report(&self) -> SeedReport {
-        SeedReport { ready: self.ready(), bits: self.entropy_bits, ..self.report }
+        SeedReport {
+            ready: self.ready(),
+            bits: self.entropy_bits,
+            rdseed_off: self.health.rdseed_off,
+            rdrand_off: self.health.rdrand_off,
+            tpm_off: self.health.tpm_off,
+            ..self.report
+        }
+    }
+
+    fn health_failed(&mut self, source: HealthSource, f: HealthFailure) {
+        self.report.health_failures += 1;
+        self.report.last_failure = Some((source, f));
+    }
+
+    /// Reseed a seeded pool from fresh noise (BUG-089: after the restore of a
+    /// snapshot, in a clone, or because it is time): the CPU words and
+    /// `batches` jitter batches, health-tested as at boot, and `additional`
+    /// (what tells this instance apart: a VM generation id, the clock) mixed
+    /// in whatever the sources gave. The report of the pool afterwards.
+    pub fn reseed_from(&mut self, src: &mut dyn NoiseSources, batches: usize, additional: &[u8]) -> SeedReport {
+        let policy = SeedPolicy { jitter_batch: 512, min_jitter_batches: batches, max_jitter_batches: batches, cpu_words: 8 };
+        self.seed_from(src, &policy);
+        if !additional.is_empty() {
+            self.add(additional, 0);
+        }
+        self.reseeds_requested += 1;
+        self.seed_report()
+    }
+
+    /// Reseeds asked for through [`reseed_from`](Self::reseed_from).
+    pub fn reseeds_requested(&self) -> u64 {
+        self.reseeds_requested
     }
 }
 
@@ -426,7 +639,8 @@ mod seed_tests {
     }
     impl NoiseSources for Script {
         fn tpm(&mut self) -> Option<Vec<u8>> {
-            self.tpm.then(|| vec![0xA5; 32])
+            // Varying bytes: a TPM that hands out one byte value fails its health test.
+            self.tpm.then(|| (0..32u8).map(|i| i.wrapping_mul(37) ^ 0xA5).collect())
         }
         fn rdseed(&mut self) -> Option<u64> {
             if self.rdseed {
@@ -632,5 +846,220 @@ mod tests {
         // Varying low bits → some, but conservative (< samples/4 + slack).
         let samples: Vec<u64> = (0..64).map(|i| i as u64 * 7 + (i as u64 & 3)).collect();
         assert!(estimate_jitter_bits(&samples) <= samples.len() / 4);
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    //! BUG-082: the SP 800-90B health tests against models of a source.
+    use super::*;
+
+    /// xorshift64*: test data, not randomness.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        /// A value of a source whose most frequent value has probability
+        /// `p_top` per mille and is otherwise spread over 64 values.
+        fn sample(&mut self, p_top: u64) -> u64 {
+            let r = self.next();
+            if r % 1000 < p_top { 100 } else { 101 + (r >> 20) % 64 }
+        }
+    }
+
+    /// The memory-walk sample as measured: 88 ticks and up, many values, the
+    /// most frequent one at 5 to 19 % of a batch (proof/integ-2026-11b).
+    fn walk_batch(rng: &mut Rng) -> Vec<u64> {
+        (0..512).map(|_| if rng.next() % 100 < 19 { 120 } else { 88 + rng.next() % 140 }).collect()
+    }
+
+    #[test]
+    fn the_cutoffs_are_the_sp800_90b_ones() {
+        // RCT: C = 1 + ceil(20 / H).
+        assert_eq!(JITTER_RCT_CUTOFF, 1 + (20 + JITTER_H_BITS - 1) / JITTER_H_BITS);
+        assert_eq!(WORD_RCT_CUTOFF, 1 + (20 + 32 - 1) / 32);
+        assert_eq!(TPM_RCT_CUTOFF, 1 + (20 + 4 - 1) / 4);
+        // APT: C = 1 + the (1 - 2^-20) quantile of Binomial(512, 2^-H), H = 1,
+        // i.e. the smallest c with P(X >= c) <= 2^-20.
+        let n = APT_WINDOW as u32;
+        let p = 0.5f64;
+        let alpha = 2f64.powi(-20);
+        let ln_choose = |k: u32| -> f64 { (0..k).map(|i| ((n - i) as f64).ln() - ((i + 1) as f64).ln()).sum() };
+        let tail = |c: u32| -> f64 {
+            (c..=n).map(|k| (ln_choose(k) + k as f64 * p.ln() + (n - k) as f64 * (1.0 - p).ln()).exp()).sum()
+        };
+        let c = (1..=n).find(|&c| tail(c) <= alpha).unwrap();
+        assert_eq!(JITTER_APT_CUTOFF, c, "computed cutoff {c}");
+    }
+
+    #[test]
+    fn a_constant_source_fails_the_repetition_test() {
+        let e = jitter_health(&[24; 512]).unwrap_err();
+        assert_eq!(e, HealthFailure::Repetition { value: 24, run: 21, cutoff: 21 });
+        // 20 in a row is still allowed.
+        let mut s: Vec<u64> = (0..512).map(|i| i as u64).collect();
+        for x in s.iter_mut().take(20) {
+            *x = 7;
+        }
+        assert!(jitter_health(&s).is_ok());
+    }
+
+    #[test]
+    fn the_old_periodic_sample_fails_the_proportion_test_and_was_credited() {
+        // BUG-082: the two-instruction sample of the BUG-065 diagnosis,
+        // 12, 12, 12, 12, 38, 12, 12, 12, 14, 38, ... The estimator credits it.
+        let pat = [12u64, 12, 12, 12, 38, 12, 12, 12, 14, 38];
+        let s: Vec<u64> = (0..512).map(|i| pat[i % pat.len()]).collect();
+        assert!(estimate_jitter_bits(&s) >= 60, "the estimator alone gives it {}", estimate_jitter_bits(&s));
+        match jitter_health(&s) {
+            Err(HealthFailure::Proportion { value: 12, count, window: 512, cutoff: 311 }) => assert!(count >= 311),
+            other => panic!("not refused by the proportion test: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_source_of_a_handful_of_values_fails() {
+        // Two values, one of them in 75 % of the samples (under 1 bit/sample).
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let s: Vec<u64> = (0..512).map(|_| if rng.next() % 4 == 0 { 38 } else { 12 }).collect();
+        assert!(jitter_health(&s).is_err());
+    }
+
+    #[test]
+    fn healthy_models_pass_twenty_thousand_batches() {
+        // The measured walk and a source at 2 bits per sample fail none of
+        // 20 000 batches. A source at exactly the 1 bit the cutoffs assume
+        // (most frequent value 1/2) is the edge: the repetition test has a
+        // false-positive rate of 2^-20 per sample, 512 x 2^-21 per batch, about
+        // 5 in 20 000 batches; it may fail a few, never many.
+        let mut rng = Rng(0x0123_4567_89AB_CDEF);
+        for _ in 0..20_000 {
+            assert!(jitter_health(&walk_batch(&mut rng)).is_ok());
+        }
+        for (p_top, most) in [(250u64, 0u32), (500, 20)] {
+            let mut fails = 0;
+            for _ in 0..20_000 {
+                let s: Vec<u64> = (0..512).map(|_| rng.sample(p_top)).collect();
+                fails += jitter_health(&s).is_err() as u32;
+            }
+            assert!(fails <= most, "p_top {p_top} per mille: {fails} of 20 000 batches failed");
+        }
+    }
+
+    #[test]
+    fn a_source_below_one_bit_is_caught() {
+        // Most frequent value at 70 %: about 0.5 bit per sample. The
+        // proportion test counts the window's FIRST value, so it catches the
+        // 70 % of windows that start with the frequent one (358 of 512 on
+        // average, the cutoff is 311); the repetition test some of the rest.
+        let mut rng = Rng(42);
+        let mut fails = 0;
+        for _ in 0..1000 {
+            let s: Vec<u64> = (0..512).map(|_| rng.sample(700)).collect();
+            fails += jitter_health(&s).is_err() as u32;
+        }
+        assert!(fails >= 650, "{fails} of 1000");
+    }
+
+    /// A platform with a scripted fault.
+    struct Faulty {
+        rng: Rng,
+        stuck_rdrand: bool,
+        stuck_tpm: bool,
+        dead_jitter: bool,
+    }
+    impl NoiseSources for Faulty {
+        fn tpm(&mut self) -> Option<Vec<u8>> {
+            Some(if self.stuck_tpm { vec![0xFF; 32] } else { (0..32).map(|_| self.rng.next() as u8).collect() })
+        }
+        fn rdrand(&mut self) -> Option<u64> {
+            // The AMD failure: all ones, every time.
+            Some(if self.stuck_rdrand { u64::MAX } else { self.rng.next() })
+        }
+        fn jitter(&mut self, n: usize) -> Vec<u64> {
+            if self.dead_jitter {
+                vec![24; n]
+            } else {
+                walk_batch(&mut self.rng)[..n].to_vec()
+            }
+        }
+    }
+    fn faulty() -> Faulty {
+        Faulty { rng: Rng(7), stuck_rdrand: false, stuck_tpm: false, dead_jitter: false }
+    }
+    const P: SeedPolicy = SeedPolicy { jitter_batch: 512, min_jitter_batches: 4, max_jitter_batches: 64, cpu_words: 8 };
+
+    #[test]
+    fn a_stuck_rdrand_is_switched_off_and_the_pool_seeds_from_the_rest() {
+        let mut src = faulty();
+        src.stuck_rdrand = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(r.rdrand_off && !r.tpm_off && !r.rdseed_off);
+        assert_eq!(r.rdrand_words, 0, "no word of the stuck generator is used");
+        assert!(matches!(
+            r.last_failure,
+            Some((HealthSource::Rdrand, HealthFailure::Repetition { value: u64::MAX, run: 2, cutoff: 2 }))
+        ));
+        assert!(r.ready, "jitter and the TPM still seed the pool");
+        let r2 = p.seed_from(&mut src, &P);
+        assert_eq!(r2.rdrand_words, 0, "not asked again");
+        assert_eq!(r2.health_failures, 1);
+    }
+
+    #[test]
+    fn a_stuck_tpm_is_switched_off() {
+        let mut src = faulty();
+        src.stuck_tpm = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(r.tpm_off);
+        assert_eq!(r.tpm_bytes, 0);
+        assert!(r.ready);
+    }
+
+    #[test]
+    fn dead_jitter_is_discarded_and_the_pool_stays_closed_without_a_panic() {
+        let mut src = faulty();
+        src.dead_jitter = true;
+        src.stuck_tpm = true;
+        src.stuck_rdrand = true;
+        let mut p = EntropyPool::new(256);
+        let r = p.seed_from(&mut src, &P);
+        assert!(!r.ready && r.gave_up);
+        assert_eq!(r.jitter_discarded, 64);
+        assert_eq!(r.jitter_bits, 0);
+        let mut b = [0x33u8; 8];
+        assert!(!p.fill(&mut b));
+        assert_eq!(b, [0x33u8; 8]);
+        // The source recovers: the next attempt tests afresh and seeds.
+        src.dead_jitter = false;
+        let r = p.seed_from(&mut src, &P);
+        assert!(r.ready);
+    }
+
+    #[test]
+    fn a_reseed_changes_the_stream_of_two_equal_pools() {
+        // BUG-089: two pools in the same state (a snapshot restored twice) give
+        // the same bytes until each is reseeded with what tells them apart.
+        let mut a = EntropyPool::new(256);
+        a.add(b"the same seed in both copies....", 300);
+        let mut b = EntropyPool::new(256);
+        b.add(b"the same seed in both copies....", 300);
+        let (mut oa, mut ob) = ([0u8; 32], [0u8; 32]);
+        assert!(a.fill(&mut oa) && b.fill(&mut ob));
+        assert_eq!(oa, ob);
+        // Even with the same noise: the generation ids differ.
+        let mut sa = faulty();
+        let mut sb = faulty();
+        a.reseed_from(&mut sa, 1, b"vmgenid 1111");
+        b.reseed_from(&mut sb, 1, b"vmgenid 2222");
+        assert!(a.fill(&mut oa) && b.fill(&mut ob));
+        assert_ne!(oa, ob);
+        assert_eq!(a.reseeds_requested(), 1);
     }
 }

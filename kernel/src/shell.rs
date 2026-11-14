@@ -402,8 +402,12 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "random" => {
             let mut b = [0u8; 32];
             if crate::entropy::getrandom(&mut b) {
+                let (n, r, w) = crate::entropy::reseed_stats();
                 let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-                vec![format!("random: {hex}")]
+                vec![format!(
+                    "random: {hex} · reseeds {n}, after a restore {r}, VM generation ID {}",
+                    if w { "watched" } else { "none" }
+                )]
             } else {
                 vec![String::from("random: the CSPRNG is not seeded")]
             }

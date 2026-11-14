@@ -2325,6 +2325,7 @@ fn main() -> Status {
     // TPM block.
     if SELFTEST {
         entropy::selftest();
+        entropy::reseed_selftest();
     }
     if SELFTEST {
         // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
@@ -5416,6 +5417,8 @@ fn main() -> Status {
         sched::deskwatch::mark(0);
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
+        // BUG-089: once a second, the wall clock against the HPET (a restore).
+        entropy::poll_clock();
         // Service any pending network request from a graphics app (the browser):
         // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
         // (interrupts on, no bg lock), not inside the app's no-yield syscall.
