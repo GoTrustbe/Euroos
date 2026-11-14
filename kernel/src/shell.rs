@@ -398,6 +398,16 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // EuroFS lives directly on the disk → changes are already persistent.
         "reboot" => crate::power::reboot(),
         "shutdown" | "poweroff" => crate::power::shutdown(),
+        // BUG-089: 32 bytes of the kernel CSPRNG (what getrandom gives a program).
+        "random" => {
+            let mut b = [0u8; 32];
+            if crate::entropy::getrandom(&mut b) {
+                let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+                vec![format!("random: {hex}")]
+            } else {
+                vec![String::from("random: the CSPRNG is not seeded")]
+            }
+        }
         "uptime" => {
             let t = crate::interrupts::ticks();
             let mut out = vec![format!("uptime: {t} timer ticks (~{} s) at 100 Hz APIC timer", t / 100)];
