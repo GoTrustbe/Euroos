@@ -187,7 +187,37 @@ unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
     r
 }
 
+/// BUG-191 diagnostics: requests that did not complete in the spin budget, that
+/// completed with a status other than OK, and requests entered while another one
+/// on the same disk was still in flight.
+pub static BLK_TIMEOUTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static BLK_BAD_STATUS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static BLK_OVERLAP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static BLK_BUSY: [core::sync::atomic::AtomicBool; MAX_BLK] = [const { core::sync::atomic::AtomicBool::new(false) }; MAX_BLK];
+
+fn diag_ms(t0: u64) -> u64 {
+    let per = crate::apic::TSC_PER_TICK.load(core::sync::atomic::Ordering::Relaxed).max(1);
+    unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0) * 10 / per
+}
+
+/// Enter and leave a request on disk dev (BUG-191 diagnostics: is the queue shared).
+fn diag_enter(dev: usize, what: &str, sector: u64) {
+    if dev < MAX_BLK && BLK_BUSY[dev].swap(true, core::sync::atomic::Ordering::AcqRel) {
+        let n = BLK_OVERLAP.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n < 8 {
+            crate::serial_println!("[blk-diag] disk {dev}: {what} at {sector} entered while another request is in flight (cpu {}, task {})",
+                crate::sched::this_cpu(), crate::sched::current());
+        }
+    }
+}
+fn diag_leave(dev: usize) {
+    if dev < MAX_BLK {
+        BLK_BUSY[dev].store(false, core::sync::atomic::Ordering::Release);
+    }
+}
+
 unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
+    let t0 = core::arch::x86_64::_rdtsc();
     let idx = blk.vq.avail_idx_ptr().read();
     blk.vq.avail_ring(idx % blk.vq.size).write(0);
     compiler_fence(Ordering::SeqCst);
@@ -197,10 +227,25 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
 
     for _ in 0..40_000_000 {
         if blk.vq.used_idx() != blk.vq.last_used {
+            let late = blk.vq.used_idx().wrapping_sub(blk.vq.last_used);
             blk.vq.last_used = blk.vq.used_idx();
-            return (blk.status as *const u8).read_volatile() == 0;
+            let st = (blk.status as *const u8).read_volatile();
+            if st != 0 || late != 1 {
+                let n = BLK_BAD_STATUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if n < 16 {
+                    crate::serial_println!("[blk-diag] request type {} sector {} completed with status {st} ({late} used entries at once, avail {}) after {} ms",
+                        (blk.hdr as *const u32).read_volatile(), ((blk.hdr + 8) as *const u64).read_volatile(), idx.wrapping_add(1), diag_ms(t0));
+                }
+            }
+            return st == 0;
         }
         core::hint::spin_loop();
+    }
+    let n = BLK_TIMEOUTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n < 16 {
+        crate::serial_println!("[blk-diag] request type {} sector {} TIMED OUT after {} ms (used {} last_used {} avail {} status {:#x})",
+            (blk.hdr as *const u32).read_volatile(), ((blk.hdr + 8) as *const u64).read_volatile(), diag_ms(t0),
+            blk.vq.used_idx(), blk.vq.last_used, idx.wrapping_add(1), (blk.status as *const u8).read_volatile());
     }
     false
 }
@@ -244,7 +289,10 @@ pub fn flush_dev(dev: usize) -> bool {
         if !blk.flush_ok {
             return true; // no negotiated FLUSH feature → nothing to do
         }
-        submit_flush(blk)
+        diag_enter(dev, "flush", 0);
+        let r = submit_flush(blk);
+        diag_leave(dev);
+        r
     }
 }
 
@@ -314,10 +362,13 @@ pub fn read_io_dev(dev: usize, sector: u64, buf: &mut [u8]) -> bool {
         if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors {
             return false;
         }
+        diag_enter(dev, "read", sector);
         if !submit(blk, false, sector, n) {
+            diag_leave(dev);
             return false;
         }
         core::ptr::copy_nonoverlapping(blk.data as *const u8, buf.as_mut_ptr(), n);
+        diag_leave(dev);
         true
     }
 }
@@ -334,13 +385,16 @@ pub fn write_io_dev(dev: usize, sector: u64, buf: &[u8]) -> bool {
         if n > DATA_MAX || sector + (n as u64).div_ceil(512) > blk.capacity_sectors || blk.read_only {
             return false;
         }
+        diag_enter(dev, "write", sector);
         core::ptr::copy_nonoverlapping(buf.as_ptr(), blk.data as *mut u8, n);
         // Zero-fill the rest of the last sector.
         let dlen = (n + 511) / 512 * 512;
         if dlen > n {
             core::ptr::write_bytes((blk.data + n as u64) as *mut u8, 0, dlen - n);
         }
-        submit(blk, true, sector, n)
+        let r = submit(blk, true, sector, n);
+        diag_leave(dev);
+        r
     }
 }
 

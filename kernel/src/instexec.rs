@@ -29,6 +29,9 @@ pub struct InstallMedia {
 
 static MEDIA: Mutex<Option<InstallMedia>> = Mutex::new(None);
 
+/// BUG-191 diagnostics: boot-disk writes of an install that the device refused.
+static WRITE_FAILS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 /// Read `\EFI\BOOT\{BOOTX64.EFI, eurokernel-A.efi, eurokernel-B.efi}` from the
 /// boot volume via UEFI Simple File System. **Must run before ExitBootServices.**
 /// The kernel was started by the loader from a memory buffer (no device handle
@@ -235,11 +238,18 @@ pub fn install_to_disk(dev: usize, cfg: &Config, progress: &dyn Fn(&str)) -> boo
         &alloc::format!("virtio disk {dev}"),
         progress,
         |lba, bytes| {
-            crate::virtio_blk::write_io_dev(dev, lba, bytes);
+            if !crate::virtio_blk::write_io_dev(dev, lba, bytes) {
+                let n = WRITE_FAILS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if n < 8 {
+                    crate::serial_println!("[q1x3-diag] write of {} B at sector {lba} on virtio disk {dev} FAILED", bytes.len());
+                }
+            }
         },
         |lba, buf| crate::virtio_blk::read_io_dev(dev, lba, buf),
         || {
-            crate::virtio_blk::flush_dev(dev);
+            if !crate::virtio_blk::flush_dev(dev) {
+                crate::serial_println!("[q1x3-diag] flush of virtio disk {dev} FAILED");
+            }
         },
         |first, blocks| crate::rootblk::RootBlk::disk_on(dev, first, blocks),
     )
@@ -336,9 +346,20 @@ fn install_to_target(
     let blocks = layout.eurofs_sectors / 8; // 8 sectors per 4 KiB block
     let pdev = make_root(layout.eurofs_first, blocks);
     let steps = plan(cfg).unwrap_or_default();
+    crate::serial_println!("[q1x3-diag] before format: {} failed writes; blk timeouts {} bad-status {} overlaps {}",
+        WRITE_FAILS.load(core::sync::atomic::Ordering::Relaxed),
+        crate::virtio_blk::BLK_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed),
+        crate::virtio_blk::BLK_BAD_STATUS.load(core::sync::atomic::Ordering::Relaxed),
+        crate::virtio_blk::BLK_OVERLAP.load(core::sync::atomic::Ordering::Relaxed));
     let provisioned = match EuroFs::format(pdev.clone(), [vid as u8; 16], now) {
         Ok(mut fs) => provision(&mut fs, &steps, &users_db),
-        Err(_) => 0,
+        Err(e) => {
+            crate::serial_println!("[q1x3-diag] EuroFs::format on {label} failed: {e:?}; blk timeouts {} bad-status {} overlaps {}",
+                crate::virtio_blk::BLK_TIMEOUTS.load(core::sync::atomic::Ordering::Relaxed),
+                crate::virtio_blk::BLK_BAD_STATUS.load(core::sync::atomic::Ordering::Relaxed),
+                crate::virtio_blk::BLK_OVERLAP.load(core::sync::atomic::Ordering::Relaxed));
+            0
+        }
     };
     flush();
     progress("Verifying the installation (re-reading GPT, ESP and the root)");
