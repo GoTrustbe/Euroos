@@ -43,8 +43,7 @@ print("\n".join("[ro-install] " + l for l in w))
 check("wizard does not offer the read-only disk", bool(w) and all("FAILED" not in l for l in w))
 for tag in ("[randid] dhcp xid", "[randid] smb client challenge", "[nmi-bound]"):
     l = [x for x in t.splitlines() if x.startswith(tag)]
-    print("
-".join("[ro-install] " + x for x in l))
+    print(chr(10).join("[ro-install] " + x for x in l))
     check(f"marker {tag}", bool(l) and all("FAILED" not in x for x in l))
 os.unlink(tgt)
 sys.exit(0 if all(res) else 1)
