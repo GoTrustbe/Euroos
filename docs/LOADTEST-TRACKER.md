@@ -2343,6 +2343,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   is ended (wait status SIGKILL) and the main process gets its memory; a child that touches twice the pool is ended
   and the parent lives. The path "inside a system call" has no self-test (see the README, not done).
 
+- **Named files (`feature/mem-2026-11e`):** a file with a name written during a demand-paged run is frames as well (`92f619b`), see BUG-242; the heap of a two-hour session at 4 GiB in `proof/mem-2026-11e/`.
+
 ### BUG-156 — every browser process kept a 128 MiB arena; the 13th did not fit 4 GiB, the 28th not 8 or 16 ✅ FIXED
 - **Status:**   FIXED (`8157a3d`; test `3966637`) · **Severity:** HIGH for a long session
 - **Actual:**   in the two-hour sessions of `proof/chrome-mem/` the process count only grew (6 ... 27 at 16 GiB), each
@@ -2374,6 +2376,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   from the datacentre, not bypassed): not seen again, not explained further.
 - **Not done:** the split of the RAM in a process pool (up to half) and a demand pool is unchanged; with children at
   17 MiB the process pool is mostly unused now (`design/MEMORY-RECLAIM.md` section 6).
+
+- **Copy-on-write (`feature/mem-2026-11e`):** fork shares the arena and demand pages copy-on-write (`dc0b337`, `d29ff3d`; test `c793def`): `[memt] cowfork`, a 64 MiB process, 72 336 kB of frames per fork before, 340 kB after. `design/MEMORY-RECLAIM.md` section 8.
 
 ### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ NOT REPRODUCED (the probe that hung is fixed)
 - **Status:**   NOT REPRODUCED in 20 sessions of the s4 kind on `28d5d33` (`proof/chrome-mem2/s4-repeats.txt`: 0 hangs) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
@@ -2503,5 +2507,41 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   overflow of task 4. Not related to the fix190 changes (BUG-157 probe of `feature/chrome-mem2`).
 - **Next:**     bound the scan by the top of the interrupted task stack (or the end of its page), with a test that probes a
   task whose RSP is within 2 KiB of its stack top.
+
+### BUG-240 — sysinfo() wrote 256 MiB into loads[2] and 128 MiB into totalram; /proc/meminfo said 256 MiB ✅ FIXED
+- **Status:**   FIXED (`4c0467d`; test `685af41`) · **Severity:** MEDIUM (Chromium sizes caches and memory-pressure levels from it)
+- **Actual:**   syscall 99 wrote `totalram` at offset 24 (that is `loads[2]`) and `freeram` at offset 32 (that is `totalram`):
+  programs saw a machine of 128 MiB with 0 bytes free, at every guest size; `/proc/meminfo` said `MemTotal: 262144 kB` and
+  the free kernel heap.
+- **Fix:**      one source (`machine_mem`): total = the RAM the frame allocator manages, free = demand pool + process pool
+  free, shared = frames of the memory files, buffer/Cached = page cache, MemAvailable = free + page cache, swap from the
+  swap partition; the struct is copied with `copy_to_user`.
+- **Proof:**    `[memt] sysinfo` 7/7 at 1, 2, 4, 8 GiB (KVM); 4 GiB: totalram 131 072 → 3 427 616 kB, freeram 0 → 2 454 336 kB.
+  `proof/mem-2026-11e/`.
+
+### BUG-241 — open(O_TRUNC) without O_CREAT did not empty a RAM file ✅ FIXED
+- **Status:**   FIXED (`92f619b`; test `685af41`) · **Severity:** LOW
+- **Actual:**   `open(path, O_RDWR | O_TRUNC)` of an existing RAM file went to `vfs_open` and kept the bytes (only
+  `O_CREAT|O_TRUNC` truncated). Found by `[memt] ramnamed` ("O_TRUNC empties it (8 kB held)").
+- **Fix:**      a RAM file opened for writing with `O_TRUNC` is emptied, also a file made of frames.
+
+### BUG-242 — a store through a MAP_SHARED mapping of a named RAM file was not read by pread ✅ FIXED
+- **Status:**   FIXED (`92f619b`; test `685af41`) · **Severity:** MEDIUM (two copies of one file: heap bytes and the frames of the mapping)
+- **Actual:**   `[memt] ramnamed` before the fix: "pread sees a store through the mapping (3f00003)" FAIL, and the renamed file
+  showed the old bytes. A file with a name was a byte vector in the kernel heap next to the frames of its mapping.
+- **Fix:**      a named file written during a demand-paged run is made of frames (BUG-154 for files with a name): one memory
+  for read, write and every mapping. 15/15 at 1, 2, 4, 8 GiB.
+
+### BUG-243 — /bin/msock as a background process does not run at all when its arena lies at 0xc200000 (TCG, 1 GiB) ⬜ OPEN (worked around)
+- **Status:**   OPEN, cause not found · **Severity:** LOW (seen in one self-test; the arena placement that shows it is gone)
+- **Actual:**   with `dc0b337` the copy-on-write holder counts (128 frames at 1 GiB) were taken from the frame allocator early in
+  the boot. Every later allocation moved: the bg-musl arenas of the network self-tests landed at 0xc200000 instead of
+  0x200000 (PML4 0x206000 instead of 0x186000). There, `/bin/msock` (`[bgnet-cap]`, no CAP_NET) was spawned and printed
+  nothing in 30 s ("socket() refused 0 time(s), still running") in the four 1 GiB TCG configurations, 6 of 6 boots, while
+  `/bin/mtrack` just before it ran fine at the same address. The image of the test commit `c793def` and validate-2026-11d
+  pass the same boot (arena 0x200000).
+- **Workaround:** the holder counts live in the kernel heap (`9c30378`); the layout is as before and `[bgnet-cap]` passes.
+- **Next:**     place a bg-musl arena at 0xc200000 on purpose (TCG, 1 GiB, storage config) and find where msock stands
+  (NMI probe or the syscall ring of task 22).
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->

@@ -1,0 +1,119 @@
+# KVM self-test boots of st-f3 (9c30378), R630, 2 vCPU, -nic none, intel-hda (kboot-hda.sh); 1, 2, 4, 8 GiB
+k3-1g end=marker after 240s failed-lines=2 crash-lines=0
+k3-2g end=marker after 257s failed-lines=0 crash-lines=0
+k3-4g end=marker after 262s failed-lines=0 crash-lines=0
+k3-8g end=marker after 276s failed-lines=0 crash-lines=0
+
+== 1 GiB
+[cow] holder counts for 1022 MiB of RAM: 511 KiB
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 170515 us in the parent, 352 kB of frames
+[memt]   cowfork: info demand pool 149300 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 604468 kB, freeram 304948 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 604468, MemFree 304948, MemAvailable 304948, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 107472 → 107472
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 34→34 · process-pool 40960→40960 · demand-pool 0→0 · frames 107472→107472 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 34→34 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+-- FAILED lines:
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+-- crash lines: 0
+
+== 2 GiB
+[cow] holder counts for 2046 MiB of RAM: 1023 KiB
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 129300 us in the parent, 352 kB of frames
+[memt]   cowfork: info demand pool 476980 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 1390900 kB, freeram 763700 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 1390900, MemFree 763700, MemAvailable 763700, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 271312 → 271312
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 50→50 · process-pool 73728→73728 · demand-pool 0→0 · frames 271312→271312 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 50→50 · thread-kstacks 0→0 · process-pool 73728→73728 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+-- FAILED lines:
+-- crash lines: 0
+
+== 4 GiB
+[cow] holder counts for 6144 MiB of RAM: 3072 KiB
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 170927 us in the parent, 356 kB of frames
+[memt]   cowfork: info demand pool 756004 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 3427608 kB, freeram 2455844 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 3427608, MemFree 2455844, MemAvailable 2455844, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 410825 → 410825
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 427008→427008 · demand-pool 0→0 · frames 410825→410825 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 427008→427008 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+-- FAILED lines:
+-- crash lines: 0
+
+== 8 GiB
+[cow] holder counts for 10240 MiB of RAM: 5120 KiB
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 124628 us in the parent, 340 kB of frames
+[memt]   cowfork: info demand pool 1703204 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 7621912 kB, freeram 5244196 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 7621912, MemFree 5244196, MemAvailable 5244196, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[bug053] process starts with only their arena + k frames free: bg-musl refused x8, started with 8 spare · foreground refused x4, ran with 4 spare (exit 0) · glibc refused x6, ran with 6 spare (exit 42), bad executable refused=true kept 0 frames, next launch exit 42 · frames kept by refused starts: 0 · free frames 884425 → 884425
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 887296→887296 · demand-pool 0→0 · frames 884425→884425 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 887296→887296 · demand-pool 0→0 → OK ✓
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓
+-- FAILED lines:
+-- crash lines: 0
