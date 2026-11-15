@@ -2672,17 +2672,20 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   `[wakelat]` p50 0.05 ms unchanged.
 
 ### BUG-270 — the q35 `power` leg fails since BUG-251: the shutdown lines never reach the serial port
-- **Status:**   OPEN (found by the validation of `48dfd05`) · **Severity:** LOW (the guest does power off; the proof lines are lost, and so is any other line queued at that moment)
+- **Status:**   FIXED (`feature/fix270`, proof `proof/fix270/`) · **Severity:** LOW (the guest does power off; the proof lines are lost, and so is any other line queued at that moment)
 - **Actual:**   `run-metal-matrix.py --legs power` (KVM, restrict=on, 1 vCPU, self-test image): `FAIL: power button did not trigger a clean ACPI S5 shutdown`
   (q35 matrix 12/13). QEMU exits by itself within 1 s of `system_powerdown`, but `[acpi] power button pressed` and `[power] shutting
   down system` are not in the serial log.
 - **Reproduce:** `EK_RESTRICT=1 EK_ACCEL=kvm python3 scripts/run-metal-matrix.py IMG.raw --legs power` (or `proof/validate-2026-11e/drivers/power-direct.sh`).
   Bisect over self-test images, 2 boots each: `c70dddf` (BUG-250) PASS 2/2, `0cf75e6` (BUG-251) FAIL 2/2, `f42be2a` FAIL 2/2,
   `48dfd05` FAIL 3/3; `9cbebe8` (d2) PASS 2/2, validate-2026-11d PASS 2/2.
-- **Cause:**    (code reading, not fixed) since `0cf75e6` every print goes into the deferred queue once the desktop loop runs;
+- **Cause:**    (confirmed by the fix) since `0cf75e6` every print goes into the deferred queue once the desktop loop runs;
   `power::shutdown()` prints and then writes PM1a without calling `serial::emergency()`, which the comment of `serial.rs` says a
   shutdown does. The guest is off before the sender task has a turn; the queue is lost.
-- **Proof:**    `proof/validate-2026-11e/power-leg.txt`.
+- **Fix:**      `power::shutdown()` and `power::reboot()` call `serial::emergency()` first and again before the register writes (queue drained, synchronous prints from then on);
+  `emergency()` retries the UART lock (bounded) instead of giving up. Panic and fault paths already did it; no other reset path exists. The BUG-251 deferral is untouched in normal operation.
+  Result: `power` leg FAIL 3/3 -> PASS 5/5, q35 matrix 13/13, cargo test 1381/0, KVM boot markers-compare 0 worse.
+- **Proof:**    `proof/validate-2026-11e/power-leg.txt`, `proof/fix270/`.
 
 ### BUG-271 — the APs no longer take kernel work: `[smp] J1: demo workers parked on 0/N`, `[kwork] no APs accepting work` (since S6)
 - **Status:**   OPEN · **Severity:** MEDIUM (self-test coverage of `[kwork]` and the per-CPU scheduler is gone; per-CPU kernel work queues idle on every release image)

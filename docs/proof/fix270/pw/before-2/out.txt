@@ -1,0 +1,7 @@
+[matrix] image=/srv/euroos/fix270-runs/pw/before-2/disk.raw legs=power work=/srv/euroos/fix270-runs/pw/before-2/ek-matrix-s_g0fpd8
+[matrix] leg: power
+  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown
+  [power] FAIL ✗
+
+[matrix] result:
+  power    FAIL
