@@ -13117,6 +13117,14 @@ pub fn run_glibc_disk(
             Ok(r) => r,
             Err(e) => return (String::from(e), u64::MAX),
         };
+    // BUG-273: the desktop task runs this program in the foreground and only
+    // waits for it: the program gets the desktop task's weight (nice -10, S1).
+    // At nice 0 it got one share among the ring-3 demo spinners of the self-test
+    // image, and on a host core shared with another guest the 20 000-call
+    // fuzzer ran into its deadline in 12 of 32 boots (S0: 0 of 32).
+    if crate::sched::current() == 0 {
+        crate::sched::set_nice(main_task, crate::sched::DESKTOP_NICE);
+    }
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     // Periodic snapshot: every ~700 ticks while the run is active, dump syscall/futex/
     // epoll rates + task states — a busy-spin livelock shows as a runaway futex/epoll
@@ -14416,6 +14424,14 @@ pub fn run_glibc(
     );
 
     // The launcher (boot task) waits, yielding so the glibc tasks get the CPU.
+    // BUG-273: the desktop task runs this program in the foreground and only
+    // waits for it: the program gets the desktop task's weight (nice -10, S1).
+    // At nice 0 it got one share among the ring-3 demo spinners of the self-test
+    // image, and on a host core shared with another guest the 20 000-call
+    // fuzzer ran into its deadline in 12 of 32 boots (S0: 0 of 32).
+    if crate::sched::current() == 0 {
+        crate::sched::set_nice(main_task, crate::sched::DESKTOP_NICE);
+    }
     let deadline = crate::interrupts::ticks() + GLIBC_DEADLINE_TICKS.load(Ordering::Relaxed);
     while !GLIBC_DONE.load(Ordering::Relaxed) && crate::interrupts::ticks() < deadline {
         // Route real keyboard + mouse input into X events for a running X client
