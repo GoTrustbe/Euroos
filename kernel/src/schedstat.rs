@@ -225,6 +225,44 @@ pub fn if0test(n: usize) -> Vec<String> {
     alloc::vec![l]
 }
 
+/// BUG-182: `connif0 [ip]`. A scheduled glibc process (/bin/gnet) connects to
+/// a peer that does not answer (default 192.0.2.1, TEST-NET-1; under QEMU
+/// `restrict=on` every outside address is one): its blocking connect waits a
+/// whole SYN round. Chrome's first connect did that with interrupts off on the
+/// in-kernel NIC (1.0 s without a timer tick, `[timer-probe] FROZEN`). Passes
+/// when no window without a tick is longer than 50 ms meanwhile.
+pub fn connif0_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
+    if crate::net::get().is_none() {
+        let l = String::from("[conn-if0] no network configured -> SKIPPED ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    let ip = if arg.trim().is_empty() { "192.0.2.1" } else { arg.trim() };
+    wait_ticks(2);
+    WIN_MAX.store(0, Ordering::Relaxed);
+    let s0 = crate::net::RX_SLEEPS.load(Ordering::Relaxed);
+    let t0 = rdtsc();
+    let (out, exit) = crate::ring3::run_glibc(
+        mem,
+        crate::ring3::gnet_bytes(),
+        crate::ring3::ldlinux_bytes(),
+        &[b"/bin/gnet", ip.as_bytes(), b"example.com"],
+        &[b"PATH=/bin"],
+        crate::ring3::CAP_CONSOLE | crate::ring3::CAP_NET,
+    );
+    let total = rdtsc() - t0;
+    wait_ticks(2);
+    let w = WIN_MAX.load(Ordering::Relaxed);
+    let sleeps = crate::net::RX_SLEEPS.load(Ordering::Relaxed) - s0;
+    let pass = ms(w) <= 50;
+    let l = format!(
+        "[conn-if0] /bin/gnet connect to {ip}:80 over {} ({:?} exit={exit}, {} ms, its network waits slept {sleeps} time(s)): longest window without a timer tick {} ms (limit 50 ms) -> {}",
+        crate::nic::kind(), out.trim(), ms(total), ms(w), if pass { "OK ✓" } else { "FAILED" }
+    );
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
 // ── sched-stat ─────────────────────────────────────────────────────────────
 
 struct Snap {
