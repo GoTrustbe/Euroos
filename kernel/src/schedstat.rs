@@ -542,10 +542,18 @@ pub fn smpuser_cmd(arg: &str) -> Vec<String> {
     if let Some(m) = crate::apuser::parse_mode(arg) {
         crate::apuser::set_mode(m);
     }
+    // Test knob: `smpuser noshoot` / `smpuser shoot` switch the S4 shootdown and
+    // the fork hold off and on (to show what [tlb-smp] and [cow-smp] catch).
+    match arg.trim() {
+        "noshoot" => crate::apuser::SHOOT_OFF.store(true, Ordering::Relaxed),
+        "shoot" => crate::apuser::SHOOT_OFF.store(false, Ordering::Relaxed),
+        _ => {}
+    }
     let l = format!(
-        "[smpuser] {} ({} AP(s) can run ring 3)",
+        "[smpuser] {} ({} AP(s) can run ring 3){}",
         crate::apuser::mode_name(crate::apuser::mode()),
-        crate::apuser::user_aps().len()
+        crate::apuser::user_aps().len(),
+        if crate::apuser::SHOOT_OFF.load(Ordering::Relaxed) { ", TLB shootdown and fork hold OFF (test knob)" } else { "" }
     );
     crate::serial_println!("{l}");
     alloc::vec![l]
@@ -605,7 +613,11 @@ pub fn apuser_test(mem: &mut FrameAllocator, line: &str) -> Vec<String> {
     if cow {
         argv.push(b"cow");
     }
+    // Demand-paged, as the browser runs: the worker pages are demand faults and
+    // the fork shares the buffer page by page copy-on-write.
+    let prev_demand = crate::ring3::DEMAND_ENABLED.swap(true, Ordering::Relaxed);
     let (outp, exit) = crate::ring3::run_glibc(mem, crate::ring3::gapuser_bytes(), crate::ring3::ldlinux_bytes(), &argv, &[b"PATH=/bin"], caps);
+    crate::ring3::DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
     crate::apuser::pin_plan(&[]);
     crate::apuser::set_mode(mode0);
     crate::ring3::reap_dead(mem);
@@ -685,11 +697,13 @@ pub fn tlbsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let cpu_us = (per_tick() / 10_000).max(1);
     let (cs, rs) = (format!("{cpu_us}"), format!("{rounds}"));
     let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    let prev_demand = crate::ring3::DEMAND_ENABLED.swap(true, Ordering::Relaxed);
     let (outp, exit) = with_test_mode(|| {
         crate::apuser::pin_plan(&[usize::MAX, aps[0]]);
         crate::ring3::run_glibc(mem, crate::ring3::gtlbsmp_bytes(), crate::ring3::ldlinux_bytes(),
             &[b"/bin/gtlbsmp", cs.as_bytes(), rs.as_bytes()], &[b"PATH=/bin"], caps)
     });
+    crate::ring3::DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
     crate::ring3::reap_dead(mem);
     let mut out = tagged("[tlb-smp]", &outp, "TLBSMP mode=");
     let pass = exit == 77 && outp.lines().any(|l| l == "TLBSMP all ok");

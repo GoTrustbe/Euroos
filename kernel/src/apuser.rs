@@ -840,9 +840,12 @@ static HOLD_CR3: AtomicU64 = AtomicU64::new(0);
 /// reloads it before this returns. An AP that switches to `cr3` later loads it
 /// fresh (switch_in writes CR3 after publishing CUR_CR3; the fence orders the
 /// caller's table writes before the look at CUR_CR3).
+/// Test knob (`smpuser noshoot`): no shootdown, no fork hold.
+pub static SHOOT_OFF: AtomicBool = AtomicBool::new(false);
+
 pub fn shootdown(cr3: u64) {
     let cr3 = cr3 & CR3_ADDR;
-    if cr3 == 0 {
+    if cr3 == 0 || SHOOT_OFF.load(Ordering::Relaxed) {
         return;
     }
     core::sync::atomic::fence(Ordering::SeqCst);
@@ -932,6 +935,9 @@ pub fn evict_wait(idx: usize) {
 /// until `release_hold` (fork copies the address space: it must not move).
 /// Returns the tasks that were away (the caller drains the inbox).
 pub fn hold_cr3(cr3: u64) -> usize {
+    if SHOOT_OFF.load(Ordering::Relaxed) {
+        return 0;
+    }
     let cr3 = cr3 & CR3_ADDR;
     HOLD_CR3.store(cr3, Ordering::SeqCst);
     let mut n = 0;
