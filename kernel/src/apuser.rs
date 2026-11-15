@@ -542,6 +542,7 @@ fn next_or_idle(cpu: usize, now: u64) -> u64 {
 /// the 20-word frame the stub saved. Returns the frame to resume.
 pub fn ap_switch(cpu: usize, rsp: u64, why: u8) -> u64 {
     let now = rdtsc();
+    timer_on(cpu);
     let cs = unsafe { frame_word(rsp, 16) };
     if cs & 3 != 3 {
         // The AP's own kernel context: the idle loop (or a kwork job).
@@ -632,6 +633,13 @@ pub extern "sysv64" fn ap_resched_tick(rsp: u64) -> u64 {
     ap_switch((crate::apic::lapic_id() & 7) as usize, rsp, WHY_RESCHED)
 }
 
+/// S6: the idle loop found queued work while polling: switch now (a software
+/// interrupt, no EOI).
+#[no_mangle]
+pub extern "sysv64" fn ap_yield_tick(rsp: u64) -> u64 {
+    ap_switch((crate::apic::lapic_id() & 7) as usize, rsp, WHY_RESCHED)
+}
+
 #[no_mangle]
 pub extern "sysv64" fn ap_ping_tick(rsp: u64) -> u64 {
     let cpu = (crate::apic::lapic_id() & 7) as usize;
@@ -681,6 +689,18 @@ core::arch::global_asm!(
     "mov rdi, rsp",
     "and rsp, -16",
     "call ap_resched_tick",
+    "mov rsp, rax",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "iretq",
+    ".global ap_yield_switch",
+    "ap_yield_switch:",
+    "cld",
+    "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "mov rdi, rsp",
+    "and rsp, -16",
+    "call ap_yield_tick",
     "mov rsp, rax",
     "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
     "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
@@ -759,6 +779,7 @@ extern "C" {
     fn ap_dead();
     fn ap_resched_switch();
     fn ap_ping_switch();
+    fn ap_yield_switch();
 }
 
 static mut AP_IDT: Option<x86_64::structures::idt::InterruptDescriptorTable> = None;
@@ -801,6 +822,8 @@ pub fn build_ap_idt() {
             .set_stack_index(crate::gdt::PAGE_FAULT_IST_INDEX);
         idt[crate::interrupts::IPI_RESCHED_VECTOR].set_handler_addr(VirtAddr::new((ap_resched_switch as unsafe extern "C" fn()) as usize as u64));
         idt[crate::interrupts::IPI_PING_VECTOR].set_handler_addr(VirtAddr::new((ap_ping_switch as unsafe extern "C" fn()) as usize as u64));
+        // S6: the idle loop's own switch (a software interrupt, no EOI).
+        idt[crate::interrupts::YIELD_VECTOR].set_handler_addr(VirtAddr::new((ap_yield_switch as unsafe extern "C" fn()) as usize as u64));
         *core::ptr::addr_of_mut!(AP_IDT) = Some(idt);
     }
     record_parity(BSP_SLOT);
@@ -897,9 +920,11 @@ pub fn stat_lines() -> alloc::vec::Vec<alloc::string::String> {
             t => alloc::format!("task {t}"),
         };
         v.push(alloc::format!(
-            "[smpstat] cpu{c}: switch-ins {} (stolen {}) user {} ms, bounces syscall {} fault {} other {}, evictions {}, ticks user {} idle {}, queued {}, running {run}",
+            "[smpstat] cpu{c}: switch-ins {} (stolen {}, from polling {}, tickless halts {}) user {} ms, bounces syscall {} fault {} other {}, evictions {}, ticks user {} idle {}, queued {}, running {run}",
             ST_IN[c].load(Ordering::Relaxed),
             ST_STEALS[c].load(Ordering::Relaxed),
+            ST_POLL_HITS[c].load(Ordering::Relaxed),
+            ST_TICKLESS[c].load(Ordering::Relaxed),
             ST_USER_TSC[c].load(Ordering::Relaxed) * 10 / per,
             ST_BOUNCE_SC[c].load(Ordering::Relaxed),
             ST_BOUNCE_PF[c].load(Ordering::Relaxed),
@@ -1052,4 +1077,81 @@ pub fn shootdown_current() {
     let cr3: u64;
     unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
     shootdown(cr3);
+}
+
+// ── S6: tickless AP idle, idle polling ───────────────────────────────────────
+
+const AP_TIMER_VECTOR: u8 = 0x41;
+static TIMER_MASKED: [AtomicBool; MAX_CPU] = [const { AtomicBool::new(false) }; MAX_CPU];
+pub static ST_TICKLESS: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
+pub static ST_POLL_HITS: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
+/// 0 = not decided, 1 = poll (KVM or metal), 2 = do not poll (TCG: a spinning
+/// vCPU costs a host core).
+static POLL: AtomicU8 = AtomicU8::new(0);
+const POLL_US: u64 = 200;
+
+fn timer_on(cpu: usize) {
+    if TIMER_MASKED[cpu].swap(false, Ordering::Relaxed) {
+        crate::apic::set_timer_masked(AP_TIMER_VECTOR, false);
+    }
+}
+
+fn may_poll() -> bool {
+    match POLL.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            // CPUID.1:ECX[31] hypervisor present; 0x4000_0000 names it.
+            let c1 = core::arch::x86_64::__cpuid(1);
+            let poll = if c1.ecx & (1 << 31) == 0 {
+                true
+            } else {
+                let h = core::arch::x86_64::__cpuid(0x4000_0000);
+                let mut sig = [0u8; 12];
+                sig[..4].copy_from_slice(&h.ebx.to_le_bytes());
+                sig[4..8].copy_from_slice(&h.ecx.to_le_bytes());
+                sig[8..].copy_from_slice(&h.edx.to_le_bytes());
+                &sig[..9] == b"KVMKVMKVM"
+            };
+            POLL.store(if poll { 1 } else { 2 }, Ordering::Relaxed);
+            poll
+        }
+    }
+}
+
+/// The idle wait of AP `cpu` (kwork's idle loop, interrupts on, no job).
+/// With smpuser test/on it first polls its queue for up to 200 us (KVM, metal:
+/// waking a halted vCPU costs more than the IPI); then it halts, with its
+/// timer masked when it has no user work queued (an IPI wakes it: an offload,
+/// a kwork job, a shootdown).
+pub fn ap_idle_wait(cpu: usize) {
+    let cpu = cpu % MAX_CPU;
+    if !USER_OK[cpu].load(Ordering::Relaxed) {
+        x86_64::instructions::interrupts::enable_and_hlt();
+        return;
+    }
+    if mode() != OFF && may_poll() {
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let end = rdtsc() + per * POLL_US / 10_000;
+        while rdtsc() < end {
+            if NR[cpu].load(Ordering::Acquire) > 0 {
+                ST_POLL_HITS[cpu].fetch_add(1, Ordering::Relaxed);
+                unsafe { core::arch::asm!("int {v}", v = const crate::interrupts::YIELD_VECTOR) };
+                return;
+            }
+            if crate::kwork::ap_pending(cpu) {
+                return;
+            }
+            core::hint::spin_loop();
+        }
+    }
+    x86_64::instructions::interrupts::disable();
+    if NR[cpu].load(Ordering::SeqCst) == 0 && !crate::kwork::ap_pending(cpu) && CUR_ON[cpu].load(Ordering::SeqCst) == IDLE {
+        TIMER_MASKED[cpu].store(true, Ordering::Relaxed);
+        crate::apic::set_timer_masked(AP_TIMER_VECTOR, true);
+        ST_TICKLESS[cpu].fetch_add(1, Ordering::Relaxed);
+    }
+    // sti; hlt: no interrupt can slip in between (the sti shadow).
+    x86_64::instructions::interrupts::enable_and_hlt();
+    timer_on(cpu);
 }

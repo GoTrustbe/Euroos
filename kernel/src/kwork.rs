@@ -130,7 +130,9 @@ pub fn ap_idle_loop(cpu: usize) -> ! {
             }
             // `sti; hlt` is atomic with respect to interrupt delivery: a ping that
             // arrives after the check above still wakes this hlt.
-            None => x86_64::instructions::interrupts::enable_and_hlt(),
+            // S6: the idle wait of an AP (polling briefly under KVM, then a
+            // halt with its timer masked when nothing can come but an IPI).
+            None => crate::apuser::ap_idle_wait(cpu),
         }
     }
 }
