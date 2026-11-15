@@ -62,37 +62,64 @@ pub fn now() -> DateTime {
             last = cur;
             tries += 1;
         }
-        let (mut sec, mut min, mut hour_raw, mut day, mut month, mut year) = last;
-        let regb = cmos_read(0x0B);
-        let pm = hour_raw & 0x80 != 0;
-        let mut hour = hour_raw & 0x7F;
-        if regb & 0x04 == 0 {
-            // BCD mode → binary.
-            sec = bcd_to_bin(sec);
-            min = bcd_to_bin(min);
-            hour = bcd_to_bin(hour);
-            day = bcd_to_bin(day);
-            month = bcd_to_bin(month);
-            year = bcd_to_bin(year);
-        }
-        let _ = &mut hour_raw;
-        // 12-hour → 24-hour.
-        if regb & 0x02 == 0 {
-            if pm && hour != 12 {
-                hour += 12;
-            } else if !pm && hour == 12 {
-                hour = 0;
-            }
-        }
-        DateTime { year: year as u16 + 2000, month, day, hour, min, sec }
+        decode(last)
     }
+}
+
+/// Six raw CMOS registers (sec, min, hour, day, month, year) to a date.
+fn decode(raw: (u8, u8, u8, u8, u8, u8)) -> DateTime {
+    let (mut sec, mut min, mut hour_raw, mut day, mut month, mut year) = raw;
+    // SAFETY: a read of CMOS register B.
+    let regb = unsafe { cmos_read(0x0B) };
+    let pm = hour_raw & 0x80 != 0;
+    let mut hour = hour_raw & 0x7F;
+    if regb & 0x04 == 0 {
+        // BCD mode → binary.
+        sec = bcd_to_bin(sec);
+        min = bcd_to_bin(min);
+        hour = bcd_to_bin(hour);
+        day = bcd_to_bin(day);
+        month = bcd_to_bin(month);
+        year = bcd_to_bin(year);
+    }
+    let _ = &mut hour_raw;
+    // 12-hour → 24-hour.
+    if regb & 0x02 == 0 {
+        if pm && hour != 12 {
+            hour += 12;
+        } else if !pm && hour == 12 {
+            hour = 0;
+        }
+    }
+    DateTime { year: year as u16 + 2000, month, day, hour, min, sec }
+}
+
+/// [`epoch`] read once, without waiting: `None` while the RTC is updating or
+/// the two reads differ. For a check that runs in any context and must not
+/// spin (BUG-089: did the wall clock jump against the HPET?).
+pub fn epoch_nowait() -> Option<u64> {
+    // SAFETY: reads of CMOS registers.
+    let read = || unsafe {
+        (cmos_read(0x00), cmos_read(0x02), cmos_read(0x04), cmos_read(0x07), cmos_read(0x08), cmos_read(0x09))
+    };
+    if update_in_progress() {
+        return None;
+    }
+    let a = read();
+    if update_in_progress() || read() != a {
+        return None;
+    }
+    Some(epoch_of(decode(a)))
 }
 
 /// Unix time (seconds since 1970-01-01 UTC) from the RTC — the REAL wall clock for
 /// `clock_gettime(CLOCK_REALTIME)` and `gettimeofday` in the Linux compat layer, so
 /// time-aware Linux programs see the actual time instead of the boot uptime.
 pub fn epoch() -> u64 {
-    let d = now();
+    epoch_of(now())
+}
+
+fn epoch_of(d: DateTime) -> u64 {
     fn is_leap(y: u16) -> bool {
         (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
     }

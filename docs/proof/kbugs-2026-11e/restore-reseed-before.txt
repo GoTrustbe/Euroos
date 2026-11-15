@@ -1,0 +1,13 @@
+# restore-reseed.py on the public image of a49e6a1 (before the fix), KVM, -device vmgenid,guid=auto
+[restore-reseed] original: random: 8b4c2460e0538eb24e6835aadfedfab3e895fe48c6d3c40017c992e699d0631e
+[restore-reseed] original: random: c84a08ef4f393f9852f6793edd4a37a402f56049fec4ca2c31eab65dd82cb429
+[restore-reseed] original serial: [entropy] CSPRNG seeded: 498 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (370 bits) · 0.883 ms → OK
+[restore-reseed] ok   the original boots and gives two different values
+[restore-reseed] savevm: {'return': ''}
+[restore-reseed] waiting 20 s before the restores
+[restore-reseed] restore 1: random: 513fdc3952ec1c6654f527e7a0099b8fb54121edf5952602ec449c41df7ff26c
+[restore-reseed] restore 2: random: 513fdc3952ec1c6654f527e7a0099b8fb54121edf5952602ec449c41df7ff26c
+[restore-reseed] ok   every restore answered `random` (2/2)
+[restore-reseed] FAIL the restores of one snapshot give different bytes — 513fdc3952ec1c66 vs 513fdc3952ec1c66
+[restore-reseed] ok   no restore repeats a value the original gave before the snapshot
+[restore-reseed] 3/4 checks ok

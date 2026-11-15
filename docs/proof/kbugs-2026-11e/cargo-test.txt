@@ -1,0 +1,3 @@
+# cargo test (default members), worktree /opt/euroos/wt-kbugs at ad38d73, host .16
+188 test binaries, 1375 passed, 0 failed, 1 ignored
+rc=0

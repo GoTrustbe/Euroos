@@ -1,0 +1,9 @@
+# [aslr] on the self-test image of ad38d73 with the slides of before 8c3b146 (git apply -R of its ring3.rs hunk), KVM 4 GiB
+[aslr]   exe      first 0x0001204010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000120c00000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x010011660100  varying bits 11  distinct 62/64
+[aslr]   stack    first 0x000138259d34  varying bits  8  distinct 57/64
+[aslr]   brk      first 0x0001224b0000  varying bits  4  distinct 16/64
+[aslr]   mmap     first 0x000124485000  varying bits  5  distinct 28/64
+[aslr]   mmapbig  first 0x010011812000  varying bits 11  distinct 62/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 5 (4 KiB 5, 1 MiB 11), stack 8, PIE base 0, brk 4, ld.so 0, libc 11; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)

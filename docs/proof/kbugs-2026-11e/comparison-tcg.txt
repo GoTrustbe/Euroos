@@ -1,0 +1,100 @@
+== /srv/euroos/final-runs/tcg/f/combined-smp1-iommu-1g.log  vs  tcg/g/combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/combined-smp4-iommu-1g.log  vs  tcg/g/combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/kernel-smp1.log  vs  tcg/g/kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/kernel-smp4.log  vs  tcg/g/kernel-smp4.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/storage-smp1-iommu-1g.log  vs  tcg/g/storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/storage-smp4-iommu-1g.log  vs  tcg/g/storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/user-smp1-iommu.log  vs  tcg/g/user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/user-smp1-noiommu.log  vs  tcg/g/user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/user-smp4-iommu.log  vs  tcg/g/user-smp4-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/tcg/f/user-smp4-noiommu.log  vs  tcg/g/user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1

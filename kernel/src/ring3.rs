@@ -428,6 +428,10 @@ mod fdspace;
 // One descriptor table per process on top of them (BUG-098).
 #[path = "fdtab.rs"]
 mod fdtab;
+// BUG-111: the file table and EuroFS on disk (write-back, lookup).
+#[path = "fsback.rs"]
+mod fsback;
+pub use fsback::{forget_for_test as fsback_forget_for_test, with_backing_fs, write_back};
 pub use fdtab::{census as fd_census, census_lines as fd_census_lines, peer_lines as fd_peer_lines};
 
 /// A spin-locked value that exists once per fd space: `lock()` takes the one
@@ -3445,6 +3449,9 @@ pub fn cap_names(caps: u64) -> String {
 /// `path` is a /proc file that is now (freshly generated) in the VFS.
 fn ensure_proc(path: &[u8]) -> bool {
     if !path.starts_with(b"/proc/") {
+        // BUG-111: a file on EuroFS that this table does not know yet (a
+        // foreground program of the Terminal; no-op otherwise).
+        fsback::fetch(path);
         return false;
     }
     let cores = crate::smp::AP_ONLINE.load(Ordering::Relaxed) + 1;
@@ -4470,6 +4477,7 @@ static DIRTY: Mutex<alloc::vec::Vec<String>> = Mutex::new(alloc::vec::Vec::new()
 /// Open a path for WRITING: create it if it does not exist (O_CREAT),
 /// truncate it on `truncate` (O_TRUNC). Marks the path as 'dirty'.
 fn vfs_open_create(path: &[u8], truncate: bool) -> u64 {
+    fsback::fetch(path); // BUG-111: O_CREAT without O_TRUNC keeps what is on disk
     let name = String::from_utf8_lossy(path).into_owned();
     {
         let mut files = FILES.lock();
@@ -5336,11 +5344,15 @@ fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
 
 fn aslr_slides() -> Slides {
     let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
+    // BUG-088: every slide in pages (4 KiB), over the same ranges as before:
+    // brk 4 -> 8 bits, mmap window 5 -> 9, demand pool 10 -> 19. The ranges
+    // are what the identity-mapped arena and the one PML4 slot of the demand
+    // pool leave; the Linux level (28 bits) needs a virtual arena.
     Slides {
-        brk: (r & 0xF) << 16,              // 0..1 MiB in 64 KiB steps
-        mmap: ((r >> 4) & 0x1F) << 16,     // 0..2 MiB in 64 KiB steps
-        stack: ((r >> 9) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
-        demand: ((r >> 17) & 0x3FF) << 21, // 0..2 GiB in 2 MiB steps
+        brk: (r & 0xFF) << 12,              // 0..1 MiB in 4 KiB steps
+        mmap: ((r >> 8) & 0x1FF) << 12,     // 0..2 MiB in 4 KiB steps
+        stack: ((r >> 17) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
+        demand: ((r >> 25) & 0x7FFFF) << 12, // 0..2 GiB in 4 KiB steps
     }
 }
 
@@ -7766,11 +7778,13 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
     // after that file read and wrote their neighbour's bytes: SQLite's WAL frames
     // landed in the -shm file, and the renderers aborted on "Likely file
     // corruption" (BUG-091).
+    fsback::fetch(oldp); // BUG-111: the old name may be a file only on EuroFS
     let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
     {
         let mut files = FILES.lock();
         if let Some(src) = files.iter().position(|(p, _)| *p == o) {
-            if o != n {
+            let moved = o != n;
+            if moved {
                 for (i, (p, _)) in files.iter_mut().enumerate() {
                     if i != src && *p == n {
                         p.clear();
@@ -7781,6 +7795,18 @@ fn vfs_rename(oldp: &[u8], newp: &[u8]) -> u64 {
             }
             drop(files);
             reclaim_tombstones(&dead);
+            if moved {
+                // BUG-111: the bytes have a new name. The dirty mark goes with
+                // them (the Terminal writes back by name), and for a program
+                // with EuroFS behind it the new name is written and the old
+                // one removed whatever the mark said.
+                let mut dirty = DIRTY.lock();
+                if (dirty.iter().any(|p| *p == o) || fsback::active()) && !dirty.iter().any(|p| *p == n) {
+                    dirty.push(n.clone());
+                }
+                drop(dirty);
+                fsback::removed(&o);
+            }
             return 0;
         }
     }
@@ -7841,12 +7867,16 @@ fn vfs_unlink(path: &[u8]) -> u64 {
     // POSIX promises, and what "create, unlink, ftruncate, mmap(MAP_SHARED)"
     // depends on: the standard way to get anonymous shared memory, and how chrome
     // allocates the Mojo buffers that carry a page's bytes to its renderer.
+    fsback::fetch(path); // BUG-111: a file only on EuroFS is unlinked there too
     let mut dead: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
     for (i, (q, _)) in FILES.lock().iter_mut().enumerate() {
         if *q == p && !p.is_empty() {
             q.clear();
             dead.push(i);
         }
+    }
+    if !dead.is_empty() {
+        fsback::removed(&p);
     }
     SYMLINKS.lock().retain(|(q, _)| *q != p);
     MKDIRS.lock().retain(|q| *q != p);
@@ -9350,6 +9380,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/renprobe" => include_bytes!("../../userland/renprobe.elf.sig"),
         "/bin/grenprobe" => include_bytes!("../../userland/glibc/grenprobe.sig"),
         "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
+        "/bin/gaslr" => include_bytes!("../../userland/glibc/gaslr.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
         "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),

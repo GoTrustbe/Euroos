@@ -101,6 +101,7 @@ mod tpm;
 mod entropy;
 mod linuxrand;
 mod renametest;
+mod aslrtest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -2367,6 +2368,7 @@ fn main() -> Status {
     // TPM block.
     if SELFTEST {
         entropy::selftest();
+        entropy::reseed_selftest();
     }
     if SELFTEST {
         // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
@@ -4306,6 +4308,10 @@ fn main() -> Status {
         linuxrand::selftest(&mut allocator);
         // BUG-091: rename over an existing file under open descriptors and mappings ([rename]).
         renametest::selftest(&mut allocator);
+        // BUG-111: a save by a Linux program reaches EuroFS and the next boot ([rename-disk]).
+        renametest::disk_selftest(&mut allocator, &mut vfs);
+        // BUG-088: how many address bits of a Linux program change per start ([aslr]).
+        aslrtest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
@@ -5460,6 +5466,8 @@ fn main() -> Status {
         sched::deskwatch::mark(0);
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
+        // BUG-089: once a second, the wall clock against the HPET (a restore).
+        entropy::poll_clock();
         // Service any pending network request from a graphics app (the browser):
         // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
         // (interrupts on, no bg lock), not inside the app's no-yield syscall.
@@ -6761,8 +6769,9 @@ fn main() -> Status {
                                 }
                             }
                             let mem = &mut *ctx.mem;
-                            let (ec, o) = x86_64::instructions::interrupts::without_interrupts(|| {
-                                ring3::run_args(mem, &bytes, &argv, caps, abi)
+                            // BUG-111: the program sees EuroFS behind its file table.
+                            let (ec, o) = ring3::with_backing_fs(&mut *ctx.fs, || {
+                                x86_64::instructions::interrupts::without_interrupts(|| ring3::run_args(mem, &bytes, &argv, caps, abi))
                             });
                             ring3::set_stdout_redirect(None, false);
                             ring3::set_stdin(&[]);
@@ -6783,11 +6792,8 @@ fn main() -> Status {
                                 }
                             }
                             // Sync written files back to EuroFS.
-                            for (p, bytes) in ring3::take_dirty() {
-                                let n = bytes.len();
-                                if ctx.fs.write_file(&p, &bytes).is_ok() {
-                                    out.push(format!("[fs] {p} ({n} B) -> EuroFS synced"));
-                                }
+                            for l in ring3::write_back(&mut *ctx.fs) {
+                                out.push(l);
                             }
                             out.push(format!("[exit {ec}, abi={}]", if abi { "linux" } else { "native" }));
                         }
