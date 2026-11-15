@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #define MAXT 32
+#define STRIDE (64 * 4096L)
 static long nsys, npages;
 static int have_avx2;
 static volatile unsigned char *shared; /* cow mode: a buffer shared with a forked child */
@@ -65,29 +66,31 @@ static void work(struct res *r) {
         if ((i & 511) == 0) r->apic_mask |= 1ull << (apic_id() & 63);
         if (i % 20 == 0 && r->sys_ok < nsys && syscall(SYS_getpid) == pid) r->sys_ok++;
         if (cow_mode && shared && (i & 1023) == 0)
-            for (long p = 0; p < shared_len; p += 4096) {
-                if (shared[p] != (unsigned char)(p >> 12)) r->cow_bad++;
+            for (long p = 0; p < shared_len; p += STRIDE) {
+                if (shared[p] != (unsigned char)(p / STRIDE)) r->cow_bad++;
                 shared[p + 2048] = (unsigned char)(i >> 10); /* our writes: never seen by the child */
             }
     }
     /* cow mode: keep writing until the child is done (writes through a stale TLB entry would reach it) */
     for (long k = 0; cow_mode && shared && !cow_done; k++)
-        for (long p = 0; p < shared_len; p += 4096) {
-            if (shared[p] != (unsigned char)(p >> 12)) r->cow_bad++;
+        for (long p = 0; p < shared_len; p += STRIDE) {
+            if (shared[p] != (unsigned char)(p / STRIDE)) r->cow_bad++;
             shared[p + 2048] = (unsigned char)k;
         }
     while (r->sys_ok < nsys && syscall(SYS_getpid) == pid) r->sys_ok++;
     memcpy(&x, &a, 8); sum = sum * 31 + x;
     memcpy(&x, &b, 8); sum = sum * 31 + x;
     if (have_avx2) sum = sum * 31 + avx_part(7);
-    unsigned char *m = mmap(NULL, npages * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    /* One page in every 64 of a large mapping: too large for the arena's mmap
+     * window, so every touched page is a demand fault. */
+    unsigned char *m = mmap(NULL, npages * STRIDE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) { r->faults = -1; r->sum = sum; return; }
     for (long p = 0; p < npages; p++) {
-        m[p * 4096] = (unsigned char)(p * 7 + 3);
-        m[p * 4096 + 4095] = (unsigned char)(p * 13 + 1);
+        m[p * STRIDE] = (unsigned char)(p * 7 + 3);
+        m[p * STRIDE + 4095] = (unsigned char)(p * 13 + 1);
         r->faults++;
     }
-    for (long p = 0; p < npages; p++) sum = sum * 31 + m[p * 4096] + m[p * 4096 + 4095];
+    for (long p = 0; p < npages; p++) sum = sum * 31 + m[p * STRIDE] + m[p * STRIDE + 4095];
     r->mem = m;
     r->sum = sum;
 }
@@ -109,12 +112,14 @@ int main(int argc, char **argv) {
     unsigned bsp = apic_id();
     work(&R[MAXT]);
     uint64_t ref = R[MAXT].sum;
-    munmap(R[MAXT].mem, npages * 4096);
+    munmap(R[MAXT].mem, npages * STRIDE);
     if (cow_mode) {
-        shared_len = 256 * 4096;
-        unsigned char *b = malloc(shared_len + 4096);
-        b = (unsigned char *)(((uintptr_t)b + 4095) & ~(uintptr_t)4095);
-        for (long p = 0; p < shared_len; p += 4096) memset(b + p, (int)(p >> 12) & 0xff, 4096);
+        /* 256 pages, one in every 64 of a large mapping (demand-paged memory,
+         * shared page by page copy-on-write at the fork). */
+        shared_len = 256 * STRIDE;
+        unsigned char *b = mmap(NULL, shared_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (b == MAP_FAILED) { printf("APUSER cow: mmap failed\n"); return 1; }
+        for (long p = 0; p < shared_len; p += STRIDE) memset(b + p, (int)(p / STRIDE) & 0xff, 4096);
         shared = b;
     }
     pthread_t t[MAXT];
@@ -126,12 +131,12 @@ int main(int argc, char **argv) {
         if (child == 0) {
             int bad = 0;
             unsigned char v1[256];
-            for (long p = 0; p < shared_len; p += 4096) v1[p >> 12] = shared[p + 2048];
+            for (long p = 0; p < shared_len; p += STRIDE) v1[p / STRIDE] = shared[p + 2048];
             for (int k = 0; k < 200; k++) syscall(SYS_sched_yield);
-            for (long p = 0; p < shared_len; p += 4096)
-                if (shared[p + 2048] != v1[p >> 12]) bad++; /* the parent wrote into our copy */
+            for (long p = 0; p < shared_len; p += STRIDE)
+                if (shared[p + 2048] != v1[p / STRIDE]) bad++; /* the parent wrote into our copy */
             for (int round = 0; round < 20; round++)
-                for (long p = 0; p < shared_len; p += 4096) {
+                for (long p = 0; p < shared_len; p += STRIDE) {
                     shared[p] = (unsigned char)(0xA5 ^ round);
                     if (shared[p] != (unsigned char)(0xA5 ^ round)) bad++;
                 }
@@ -148,12 +153,12 @@ int main(int argc, char **argv) {
         printf("APUSER thread %d apic-mask=%#llx sum=%#llx ref=%#llx syscalls=%ld faults=%ld cow-bad=%ld %s\n", i,
                (unsigned long long)R[i].apic_mask, (unsigned long long)R[i].sum, (unsigned long long)ref,
                R[i].sys_ok, R[i].faults, R[i].cow_bad, ok ? "ok" : "WRONG");
-        munmap(R[i].mem, npages * 4096);
+        munmap(R[i].mem, npages * STRIDE);
     }
     if (cow_mode) {
         int pbad = 0;
-        for (long p = 0; p < shared_len; p += 4096)
-            if (shared[p] != (unsigned char)(p >> 12)) pbad++;
+        for (long p = 0; p < shared_len; p += STRIDE)
+            if (shared[p] != (unsigned char)(p / STRIDE)) pbad++;
         int cok = child > 0 && WIFEXITED(cst) && WEXITSTATUS(cst) == 0;
         if (!cok || pbad) bad++;
         printf("APUSER cow child=%s parent-pages-changed=%d\n", cok ? "ok" : "WRONG", pbad);
