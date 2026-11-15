@@ -1,0 +1,96 @@
+# BUG-252: 25-minute soaks (ab.sh: loadtest soak, KVM 4 vCPU, 16 GiB, e1000e, hammer 4, procs 32, churn proc 8), R630
+# sk-b8: 9cbebe8 (= 2cf4320 code, drivers fixed at nice -15), the regression before the fix
+# sk-f252-*: first variant (past the budget nice 0, debt kept), window 100 ms
+# sk2-*: nice 19 past the budget, debt forgiven, window 100 ms; sk3-B-W: budget B %, window W ticks
+sk-b8: hammer "ok": 699466, "err": 0, "p50_ms": 5.0, "p99_ms": 29.6; deadman trips 1
+sk-f252-10: hammer "ok": 219210, "err": 0, "p50_ms": 13.8, "p99_ms": 93.1; deadman trips 1
+sk-f252-20: hammer "ok": 341463, "err": 0, "p50_ms": 6.8, "p99_ms": 80.1; deadman trips 1
+sk-f252-35: hammer "ok": 529286, "err": 0, "p50_ms": 5.0, "p99_ms": 61.8; deadman trips 1
+sk2-10: hammer "ok": 150961, "err": 0, "p50_ms": 8.9, "p99_ms": 137.4; deadman trips 0
+sk2-15: hammer "ok": 231187, "err": 0, "p50_ms": 8.0, "p99_ms": 103.9; deadman trips 0
+sk2-20: hammer "ok": 298275, "err": 0, "p50_ms": 6.9, "p99_ms": 89.6; deadman trips 0
+sk2-30: hammer "ok": 435606, "err": 0, "p50_ms": 4.9, "p99_ms": 71.6; deadman trips 1
+sk3-8-100: hammer "ok": 113369, "err": 0, "p50_ms": 5.3, "p99_ms": 884.1; deadman trips 0
+sk3-10-100: hammer "ok": 144383, "err": 0, "p50_ms": 5.1, "p99_ms": 844.3; deadman trips 0
+sk3-12-100: hammer "ok": 172768, "err": 0, "p50_ms": 5.1, "p99_ms": 801.7; deadman trips 0
+sk3-15-100: hammer "ok": 212651, "err": 0, "p50_ms": 5.1, "p99_ms": 746.6; deadman trips 0
+sk3-10-50: hammer "ok": 146352, "err": 0, "p50_ms": 5.7, "p99_ms": 436.7; deadman trips 0
+
+b8: 1170 commands over 25.0 min = 2812 per hour; by status {'ok': 1170}
+   churn proc    n= 150  median     2660 ms  mean     2456 ms  p10     1454  p90     2995  max     4754
+   churn fs      n=  37  median    18870 ms  mean    20565 ms  p10    17951  p90    22694  max    57624
+   sha256sum     n= 112  median      982 ms  mean      962 ms  p10      762  p90     1122  max     1485
+v1-10: 1926 commands over 24.8 min = 4655 per hour; by status {'ok': 1926}
+   churn proc    n= 247  median     1620 ms  mean     1468 ms  p10      910  p90     1699  max     2417
+   churn fs      n=  61  median    10634 ms  mean    11507 ms  p10     9683  p90    12222  max    46788
+   sha256sum     n= 185  median      541 ms  mean      550 ms  p10      490  p90      591  max     1642
+v1-20: 1707 commands over 25.0 min = 4104 per hour; by status {'ok': 1707}
+   churn proc    n= 218  median     1834 ms  mean     1667 ms  p10     1019  p90     1948  max     2846
+   churn fs      n=  54  median    12107 ms  mean    13405 ms  p10    11901  p90    13420  max    36129
+   sha256sum     n= 164  median      612 ms  mean      624 ms  p10      561  p90      672  max     1824
+v1-35: 1420 commands over 25.0 min = 3412 per hour; by status {'ok': 1420}
+   churn proc    n= 182  median     2244 ms  mean     2030 ms  p10     1253  p90     2359  max     3357
+   churn fs      n=  45  median    15069 ms  mean    16392 ms  p10    14686  p90    15967  max    53130
+   sha256sum     n= 136  median      771 ms  mean      771 ms  p10      721  p90      821  max      921
+v2-10: 2126 commands over 25.0 min = 5110 per hour; by status {'ok': 2126}
+   churn proc    n= 272  median     1489 ms  mean     1427 ms  p10      845  p90     2023  max     2839
+   churn fs      n=  68  median     9392 ms  mean     9452 ms  p10     9036  p90     9932  max    11149
+   sha256sum     n= 204  median      481 ms  mean      479 ms  p10      421  p90      519  max      632
+v2-15: 1988 commands over 24.9 min = 4783 per hour; by status {'ok': 1988}
+   churn proc    n= 255  median     1617 ms  mean     1481 ms  p10      901  p90     1695  max     2357
+   churn fs      n=  63  median    10506 ms  mean    10615 ms  p10    10006  p90    11305  max    12188
+   sha256sum     n= 191  median      541 ms  mean      547 ms  p10      491  p90      591  max     1672
+v2-20: 1884 commands over 24.9 min = 4531 per hour; by status {'ok': 1884}
+   churn proc    n= 241  median     1733 ms  mean     1570 ms  p10      969  p90     1815  max     2504
+   churn fs      n=  60  median    11410 ms  mean    11412 ms  p10    10797  p90    12075  max    12657
+   sha256sum     n= 181  median      570 ms  mean      567 ms  p10      510  p90      611  max      681
+v2-30: 1665 commands over 24.9 min = 4006 per hour; by status {'ok': 1665}
+   churn proc    n= 213  median     1977 ms  mean     1803 ms  p10     1086  p90     2092  max     3176
+   churn fs      n=  53  median    12948 ms  mean    13085 ms  p10    12408  p90    13873  max    14797
+   sha256sum     n= 160  median      651 ms  mean      644 ms  p10      591  p90      701  max      800
+w100-8: 2063 commands over 25.0 min = 4958 per hour; by status {'ok': 2063}
+   churn proc    n= 264  median     1372 ms  mean     1308 ms  p10      762  p90     1704  max     1957
+   churn fs      n=  66  median     8816 ms  mean     8919 ms  p10     8129  p90     9885  max    10492
+   sha256sum     n= 198  median      401 ms  mean      414 ms  p10      331  p90      501  max      654
+w100-10: 2107 commands over 25.0 min = 5063 per hour; by status {'ok': 2107}
+   churn proc    n= 270  median     1366 ms  mean     1262 ms  p10      742  p90     1489  max     2066
+   churn fs      n=  67  median     9059 ms  mean     9141 ms  p10     8440  p90    10060  max    10225
+   sha256sum     n= 202  median      381 ms  mean      406 ms  p10      331  p90      511  max      561
+w100-12: 2051 commands over 24.9 min = 4945 per hour; by status {'ok': 2051}
+   churn proc    n= 263  median     1416 ms  mean     1323 ms  p10      778  p90     1564  max     2676
+   churn fs      n=  65  median     9129 ms  mean     9285 ms  p10     8462  p90    10366  max    10879
+   sha256sum     n= 197  median      400 ms  mean      424 ms  p10      330  p90      551  max      601
+w100-15: 1966 commands over 25.0 min = 4727 per hour; by status {'ok': 1966}
+   churn proc    n= 251  median     1507 ms  mean     1391 ms  p10      777  p90     1621  max     2178
+   churn fs      n=  63  median     9762 ms  mean     9879 ms  p10     9082  p90    10930  max    11030
+   sha256sum     n= 189  median      510 ms  mean      483 ms  p10      351  p90      601  max      662
+w50-10: 2175 commands over 24.9 min = 5234 per hour; by status {'ok': 2175}
+   churn proc    n= 279  median     1359 ms  mean     1261 ms  p10      743  p90     1448  max     2077
+   churn fs      n=  69  median     8933 ms  mean     9174 ms  p10     8396  p90    10156  max    10629
+   sha256sum     n= 209  median      421 ms  mean      423 ms  p10      363  p90      471  max      541
+
+# sched-stat with the busy-desktop hammer (hb.sh, 8 rounds of spawn worker 32 + churn proc 8), budget 100 % (= fixed -15) and 20 % of 100 ms:
+== hb-100 "ok": 14865, "err": 0, "p50_ms": 5.2
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 32.8 s: 3284 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 909 switches/s, 66 syscalls/s
+[sched-stat]   t27: ran 45.9 % (15060 ms, in system calls and faults 0 ms), ticks user 1001 kernel 0, 0 syscalls/s, 432 switches/s
+[sched-stat]   t0 (kernel task): ran 21.0 % (6910 ms, in system calls and faults 0 ms), ticks user 0 kernel 1137, 0 syscalls/s, 80 switches/s
+[sched-stat]   t22 (kernel task): ran 6.8 % (2246 ms, in system calls and faults 0 ms), ticks user 0 kernel 11, 0 syscalls/s, 295 switches/s
+[sched-stat]   t14 (kernel task): ran 4.8 % (1573 ms, in system calls and faults 0 ms), ticks user 0 kernel 143, 0 syscalls/s, 47 switches/s
+== hb-20 "ok": 5146, "err": 0, "p50_ms": 7.7
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 22.1 s: 2213 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 1158 switches/s, 98 syscalls/s
+[sched-stat]   t0 (kernel task): ran 31.1 % (6889 ms, in system calls and faults 0 ms), ticks user 0 kernel 792, 0 syscalls/s, 45 switches/s
+[sched-stat]   t27: ran 20.9 % (4631 ms, in system calls and faults 0 ms), ticks user 345 kernel 0, 0 syscalls/s, 477 switches/s
+[sched-stat]   t22 (kernel task): ran 10.1 % (2243 ms, in system calls and faults 0 ms), ticks user 0 kernel 117, 0 syscalls/s, 553 switches/s
+[sched-stat]   t14 (kernel task): ran 6.9 % (1527 ms, in system calls and faults 0 ms), ticks user 0 kernel 129, 0 syscalls/s, 42 switches/s
+
+# D1 criteria on r1 (f42be2a), sched.py, KVM 4 vCPU:
+  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.6 s, worst 1.7 s (limit 12.6 s), lowest task 0 share 43 % -> FAILED
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.05 ms p99 0.07 ms max 0.07 ms, round trip p50 3.10 ms p99 20.99 ms; hogs kept 90 % of their CPU share -> OK ��
+
+# D1 criteria on r2 (72976f7, the final image), sched.py, KVM 4 vCPU:
+  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.5 s, worst 2.4 s (limit 12.6 s), lowest task 0 share 44 % -> FAILED
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.07 ms p99 0.10 ms max 0.13 ms, round trip p50 3.14 ms p99 20.98 ms; hogs kept 90 % of their CPU share -> OK ���
+
+# 2 h soak of r2: out/final r630-soak-summary.txt

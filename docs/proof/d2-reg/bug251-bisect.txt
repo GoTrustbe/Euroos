@@ -1,0 +1,132 @@
+# BUG-251: chrome-smoke --only perf (30 keys, smpuser off), KVM, R630. Images (public + ui.tour=off;update.check=off):
+#  d1 = be87a0c (sched-d1), fc0 = fc0b105 (+small), kb = 3f75d74 (+kbugs), m3 = b6eb05d (+mem), b8 = 9cbebe8 (= 2cf4320 code)
+#  xs = b6eb05d with 4c0467d (sysinfo, BUG-240) reverted; s251 = c70dddf + serial sender v1; lo = s251 + --enable-low-end-device-mode
+#  s2lo = lo + every print deferred; s3lo = s2lo + port access outside the UART lock (= 0cf75e6); r1 = f42be2a
+# Runs of one round ran at the same time on separate CPUs. Columns: harness median, t4 share, kernel keylat total median (us), chrome page faults; then the IF=0 windows by cause (ms).
+
+## round: pd1a pd1b pfc0a
+== pd1a median 547 ms  t4 ran 9.8 %  kern median 427270  faults faults-total=541615
+== pd1b median 475 ms  t4 ran 10.8 %  kern median 246211  faults faults-total=524172
+== pfc0a median 469 ms  t4 ran 6.8 %  kern median 249663  faults faults-total=533722
+== pd1a/serial.log total 7470
+   kernel t0            n= 34 sum=  3234 max=  437
+   kernel t4            n= 11 sum=  1337 max=  329
+== pd1b/serial.log total 7445
+   kernel t0            n= 32 sum=  3275 max=  409
+   kernel t4            n= 15 sum=  2156 max=  502
+== pfc0a/serial.log total 7280
+   kernel t0            n= 33 sum=  4298 max=  624
+   kernel t4            n= 13 sum=  1301 max=  391
+UART forced open (200M spins): pd1a=0 pd1b=0 pfc0a=0 
+
+## round: pkba pm3a
+== pkba median 337 ms  t4 ran 8.3 %  kern median 217428  faults faults-total=544874
+== pm3a median 566 ms  t4 ran 19.0 %  kern median 330641  faults faults-total=692208
+== pkba/serial.log total 4771
+   kernel t0            n= 25 sum=  1574 max=   79
+   kernel t4            n= 12 sum=   797 max=   87
+   kernel t3            n=  2 sum=   476 max=  424
+== pm3a/serial.log total 7386
+   kernel t0            n= 17 sum=  1520 max=  533
+   kernel t4            n= 11 sum=   742 max=  154
+UART forced open (200M spins): pkba=0 pm3a=0 
+
+## round: pb8a pb8b pm3b pkbb
+== pb8a median 631 ms  t4 ran 26.0 %  kern median 487868  faults faults-total=622735
+== pb8b median 980 ms  t4 ran 13.8 %  kern median 1095721  faults faults-total=656566
+== pm3b median 651 ms  t4 ran 39.0 %  kern median 460178  faults faults-total=629384
+== pkbb median 664 ms  t4 ran 25.7 %  kern median 632437  faults faults-total=509260
+== pb8a/serial.log total 9593
+   kernel t0            n= 58 sum=  5136 max=  206
+   kernel t4            n=  6 sum=   602 max=  120
+== pb8b/serial.log total 10680
+   kernel t0            n= 49 sum=  4582 max=  315
+   kernel t4            n=  7 sum=  1073 max=  339
+== pm3b/serial.log total 6573
+   kernel t0            n= 51 sum=  4497 max=  304
+   kernel t4            n=  4 sum=   412 max=  130
+== pkbb/serial.log total 14140
+   kernel t0            n= 56 sum= 12145 max= 7356
+   kernel t4            n=  6 sum=   698 max=  239
+UART forced open (200M spins): pb8a=1 pb8b=0 pm3b=3 pkbb=2 
+
+## round: pxsa pxsb
+== pxsa median 401 ms  t4 ran 8.4 %  kern median 243139  faults faults-total=491042
+== pxsb median 444 ms  t4 ran 10.6 %  kern median 280249  faults faults-total=558639
+== pxsa/serial.log total 5678
+   kernel t0            n= 28 sum=  2480 max=  398
+   kernel t4            n= 14 sum=   912 max=  101
+== pxsb/serial.log total 5737
+   kernel t0            n= 26 sum=  2262 max=  371
+   kernel t4            n=  9 sum=   659 max=  102
+UART forced open (200M spins): pxsa=0 pxsb=0 
+
+## round: q1-m3 q1-xs q1-s251 q1-b8
+== q1-m3 median 578 ms  t4 ran 28.4 %  kern median 386455  faults faults-total=569002
+== q1-xs median 315 ms  t4 ran 6.1 %  kern median 190988  faults faults-total=472443
+== q1-s251 median 915 ms  t4 ran 14.9 %  kern median 876642  faults faults-total=546695
+== q1-b8 median 483 ms  t4 ran 48.1 %  kern median 271684  faults faults-total=558351
+== q1-m3/serial.log total 14767
+   kernel t0            n= 45 sum= 12165 max= 7391
+   kernel t4            n= 11 sum=  1332 max=  215
+== q1-xs/serial.log total 7366
+   kernel t0            n= 48 sum=  5105 max=  375
+   kernel t4            n=  3 sum=   481 max=  196
+== q1-s251/serial.log total 8992
+   kernel t0            n= 48 sum=  5080 max=  320
+   kernel t4            n=  7 sum=   697 max=  183
+== q1-b8/serial.log total 8339
+   kernel t0            n= 28 sum=  3163 max=  268
+   kernel t4            n= 10 sum=  1249 max=  310
+UART forced open (200M spins): q1-m3=4 q1-xs=1 q1-s251=0 q1-b8=1 
+
+## round: q2-m3 q2-xs q2-lo q2-s251
+== q2-m3 median 634 ms  t4 ran 14.3 %  kern median 495860  faults faults-total=682184
+== q2-xs median 458 ms  t4 ran 9.9 %  kern median 254039  faults faults-total=506604
+== q2-lo median 464 ms  t4 ran 11.7 %  kern median 258029  faults faults-total=467977
+== q2-s251 median 803 ms  t4 ran 10.7 %  kern median 506418  faults faults-total=588792
+== q2-m3/serial.log total 9789
+   kernel t0            n= 58 sum=  7697 max= 1881
+   kernel t4            n=  5 sum=   642 max=  312
+   kernel t3            n=  2 sum=   522 max=  375
+== q2-xs/serial.log total 23018
+   kernel t4            n=  7 sum=  8892 max= 8170
+   kernel t0            n= 47 sum=  5104 max=  409
+== q2-lo/serial.log total 12755
+   kernel t0            n= 46 sum= 10235 max= 5324
+   kernel t4            n= 10 sum=  1023 max=  151
+== q2-s251/serial.log total 9175
+   kernel t0            n= 45 sum=  4272 max=  211
+   kernel t4            n= 10 sum=  1072 max=  182
+UART forced open (200M spins): q2-m3=0 q2-xs=1 q2-lo=1 q2-s251=0 
+
+## round: q3-d1 q3-m3 q3-s2lo
+== q3-d1 median 591 ms  t4 ran 29.4 %  kern median 555687  faults faults-total=499814
+== q3-m3 median 786 ms  t4 ran 12.4 %  kern median 655942  faults faults-total=573513
+== q3-s2lo median 400 ms  t4 ran 7.3 %  kern median 210337  faults faults-total=498283
+== q3-d1/serial.log total 14415
+   kernel t4            n=  9 sum=  9624 max= 9014
+   kernel t0            n= 35 sum=  2631 max=  155
+== q3-m3/serial.log total 6306
+   kernel t0            n= 42 sum=  3224 max=  229
+   kernel t4            n= 11 sum=   824 max=  146
+== q3-s2lo/serial.log total 5560
+   kernel t0            n= 53 sum=  4597 max=  165
+   kernel t4            n= 12 sum=   963 max=  109
+UART forced open (200M spins): q3-d1=1 q3-m3=0 q3-s2lo=2 
+
+## round: q4-d1 q4-s3lo q4-s3lo2
+== q4-d1 median 926 ms  t4 ran 18.4 %  kern median 1386498  faults faults-total=520628
+== q4-s3lo median 1038 ms  t4 ran 16.2 %  kern median 1161979  faults faults-total=569735
+== q4-s3lo2 median 1362 ms  t4 ran 13.7 %  kern median 988139  faults faults-total=560872
+== q4-d1/serial.log total 13842
+   kernel t4            n= 11 sum=  8205 max= 7329
+   kernel t0            n= 39 sum=  3149 max=  308
+== q4-s3lo/serial.log total 8024
+   kernel t0            n= 51 sum=  4520 max=  340
+   kernel t4            n= 20 sum=  1867 max=  138
+   kernel t3            n=  2 sum=   168 max=  106
+== q4-s3lo2/serial.log total 9635
+   kernel t0            n= 55 sum=  7025 max= 2160
+   kernel t4            n= 18 sum=  2549 max=  807
+UART forced open (200M spins): q4-d1=1 q4-s3lo=0 q4-s3lo2=0 

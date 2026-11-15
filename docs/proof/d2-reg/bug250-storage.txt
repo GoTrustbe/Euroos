@@ -1,0 +1,34 @@
+# BUG-250: KVM 1 GiB 4 vCPU, storage.nvme=user, NVMe 64 MiB, IOMMU (kvmboot.sh storage), R630
+
+== stor-t250 (8a6f333, the test on 2cf4320)
+stor-t250 done 07:10:12 after 295s desktop=1 wd=0 nmi=0
+[root-heap] RAM root of 8192 KiB: 16384 KiB of RAM-root backing alive in the kernel heap → FAILED (the RAM root is held more than once)
+[ramfiles] a RAM file may not grow to 16388 KiB: 35 MiB of kernel memory left, 32 MiB stay for the kernel (ENOSPC)
+[rename] → FAILED
+[rename-disk]   save 1: exit 1 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B) -> EuroFS synced", "[fs] /tmp/gfdsem-a (8 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l1 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l2 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l3 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-b (5 B) -> EuroFS synced", "[fs] /tmp/gfdsem-d (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-c (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-s (8 B) -> EuroFS synced", "[fs] /tmp/rendisk/a.txt (0 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (0 B) -> EuroFS synced", "[fs] /tmp/rendisk/c.txt (0 B) -> EuroFS synced"]; EuroFS a="" b="" c="" tmp=0
+[rename-disk]   save 2: exit 1 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt.tmp (0 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt.new (0 B) -> EuroFS synced"]; EuroFS a="" b="" c="(none)" tmp=2
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 1 write-back []
+[rename-disk]     renprobe: check a.txt holds the version FAILED version 2 0
+[rename-disk]     renprobe: check b.txt holds the version FAILED version 2 0
+[rename-disk]     renprobe: check no temporary file left FAILED version 2 0
+[rename-disk] → FAILED
+[app-policy] → FAILED
+
+== stor-f250 (c70dddf, the fix)
+stor-f250 done 07:16:39 after 301s desktop=1 wd=0 nmi=0
+[root-heap] RAM root of 8192 KiB: 8192 KiB of RAM-root backing alive in the kernel heap → OK (held once) ✓
+[ramfiles] a RAM file may not grow to 16388 KiB: 43 MiB of kernel memory left, 32 MiB stay for the kernel (ENOSPC)
+[rename] → OK
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B) -> EuroFS synced", "[fs] /tmp/gfdsem-a (8 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l1 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l2 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l3 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-b (5 B) -> EuroFS synced", "[fs] /tmp/gfdsem-d (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-c (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-s (8 B) -> EuroFS synced", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/c.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 1" b="document b version 1" c="document c version 1" tmp=0
+[rename-disk]   save 2: exit 0 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 2" b="document b version 2" c="(none)" tmp=0
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 0 write-back []
+[rename-disk] → OK
+[app-policy] → OK
+
+# TCG pre-check (f252c image = c70dddf..f42be2a minus final defaults), combined 1 GiB:
+combined-smp1-iommu-1g done 09:00:50 after 512s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 09:01:20 after 542s desktop=1 wd=0 nmi=0
+tcg/pre/combined-smp1-iommu-1g.log:[root-heap] RAM root of 8192 KiB: 8192 KiB of RAM-root backing alive in the kernel heap → OK (held once) ✓
+tcg/pre/combined-smp1-iommu-1g.log:[ramfiles] a RAM file may not grow to 16388 KiB: 43 MiB of kernel memory left, 32 MiB stay for the kernel (ENOSPC)
+tcg/pre/combined-smp4-iommu-1g.log:[root-heap] RAM root of 8192 KiB: 8192 KiB of RAM-root backing alive in the kernel heap → OK (held once) ✓
+tcg/pre/combined-smp4-iommu-1g.log:[ramfiles] a RAM file may not grow to 16388 KiB: 43 MiB of kernel memory left, 32 MiB stay for the kernel (ENOSPC)

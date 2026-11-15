@@ -2665,27 +2665,51 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   of `spawn worker 32` + `churn proc 8`), 4 hammer clients: p50 79.5 -> 4.7 ms (S0 5.6 ms), `[fair]` worst 1.5/1.6 s,
   `[wakelat]` p50 0.05 ms unchanged.
 
-### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
+### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ✅ FIXED
+- **Status:**   FIXED (`c70dddf`; test `8a6f333`) · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
 - **Actual:**   TCG storage/combined (1 GiB, `storage.nvme=user`) on `feature/d2` `b6eb05d`: `renprobe` cannot write 3 x 1 MiB
-  (errno 1), `[rename]`, `[rename-disk]`, `[app-policy]` FAILED; `[ramfiles] a RAM file may not grow ...: 31 MiB of kernel memory
-  left, 32 MiB stay for the kernel (ENOSPC)`. KVM, same configuration: 45 MiB left at the first limit line on each branch alone
-  (sched-d1, small, kbugs, mem), 37 MiB on sched-d1 + small (`fc0b105`), 36 MiB on the full merge (`proof/d2/integration/`).
-- **Next:**     heaptrace image of `fc0b105` against sched-d1: which allocation site holds the 8 MiB at that point (a
-  boot-time path of small that runs at a different moment under the S1 scheduler is the first suspect).
+  (errno 1), `[rename]`, `[rename-disk]`, `[app-policy]` FAILED; 45 MiB of kernel memory left at the `[ramfiles]` limit line on
+  each branch alone, 37 MiB on sched-d1 + small, 35-36 MiB on the full merge.
+- **Cause:**    BUG-220 (small) kept the root device after the format for its RAM-root fallback and handed the block cache a
+  `clone()` of it. A disk device clones without data; a RAM root clones its 8 MiB, and both copies lived for the whole boot.
+- **Fix:**      `RootBlk::for_cache` moves a RAM root into the cache (the caller keeps an empty one) and still copies a disk
+  device. `[root-heap]` counts the RAM-root backing alive in the heap (new, clone, drop) and wants it held once.
+- **Proof:**    KVM 1 GiB storage configuration: `[root-heap]` 16 384 KiB FAILED -> 8 192 KiB OK, 35 -> 43 MiB left, `[rename]`,
+  `[rename-disk]`, `[app-policy]` FAILED -> OK; TCG combined 1 GiB smp 1/4: 0 worse against validate-2026-11d.
+  `proof/d2-reg/`.
 
-### BUG-251 — after the 2026-11e integration the serial TX task takes 33 % of the CPU in a browser session (keylat 342 -> 839 ms) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (key to screen 2.5 times slower)
+### BUG-251 — after the 2026-11e integration the serial TX task takes 33 % of the CPU in a browser session (keylat 342 -> 839 ms) ✅ FIXED
+- **Status:**   FIXED (`0cf75e6`, `72976f7`) · **Severity:** MEDIUM (key to screen 2.5 times slower)
 - **Actual:**   chrome-smoke `--only perf --smp 4`, same host and hour: sched-d1 image 342 ms (kernel total 220 ms, t4 9 %), integration
-  `b6eb05d` 839 ms (kernel total 551 ms, t4 33 %). t4 is the serial TX task; `[if0-window] 50-68 ms cause=kernel task 4` resumes in
-  `serial::drain_load` (`proof/d2/final/keylat-ab.txt`). The serial output volume is about the same.
-- **Next:**     bisect small / kbugs / mem (public image + `ui.tour=off;update.check=off`), then why drain_load holds IF=0 that long.
+  `b6eb05d` 839 ms (kernel total 551 ms, t4 33 %); `[if0-window] 50-68 ms cause=kernel task 4` in `serial::drain_load`.
+- **Cause:**    two things. (1) The measurement: the harness's work directories (and a 6 MB screendump per poll) were on the
+  R630's root disk while soaks ran beside them (126 MB/s of writes, IO pressure 10-17 %). QEMU writes a screendump in its
+  main thread with the device lock held, so every port exit of the guest, and the screendump the harness times, waited for
+  the disk. Under those stalls the desktop-sized chrome of the mem merge (BUG-240, true sysinfo) lost more than the
+  low-end-sized one, which is what the bisect over the merges and a revert of `4c0467d` showed (315-458 against 566-651 ms).
+  With the work directories on tmpfs the integration is within the sched-d1 spread (381-403 against 330-455 ms).
+  (2) The guest amplified the stalls: the serial sender polled the line status with interrupts off until the transmitter
+  emptied, and a print of another task or of the timer interrupt did the same; IF=0 windows of 50 ms to 9 s and
+  `UART lock held ... through 200M spins` (sched-d1 images too).
+- **Fix:**      the sender reads the line status once and sleeps a tick when the transmitter is busy; a load is at most a
+  FIFO's worth in one string output; the port accesses run outside the UART lock; every print defers once the desktop loop
+  runs (one FIFO, `emergency()` still flushes); `chatter` reports `[serial-tx]`. A low-end-device flag for chrome was tried
+  (`0cf75e6`) and removed again (`72976f7`): it does not change the clean numbers. The harness runs for keylat use tmpfs
+  work directories (`cms.sh` in the R630 run directory).
+- **Proof:**    `proof/d2-reg/` (`bug251-bisect.txt`, `keylat-final.txt`).
 
-### BUG-252 — with drivers at nice -15 the soak's console commands run at half the rate; one deadman trip in 2 h ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW
+### BUG-252 — with drivers at nice -15 the soak's console commands run at half the rate; one deadman trip in 2 h ✅ FIXED
+- **Status:**   FIXED (`f42be2a`) · **Severity:** LOW
 - **Actual:**   soak of `9cbebe8`: commands per hour 5 630 -> 2 887, churn fs 8.5 -> 18.2 s, sha256sum 0.42 -> 0.98 s; one `WATCHDOG
-  TRIPPED` during a 20 s `churn fs`. The hammer is served 4.5 times as often (3.7 M requests, p50 4.6 ms) and takes the CPU.
-- **Next:**     whether the trip is the synchronous 20 s command alone (deadman grace) or BUG-251; a cap on the driver's share.
+  TRIPPED` during a 20 s `churn fs`. 25-minute soak of the same image: 2 812 an hour, churn fs median 18.9 s, max 57.6 s, 1 trip.
+- **Cause:**    e1000d under the hammer is no short pass per interrupt: each frame is a device exit that, under QEMU's user
+  network, carries the host's TCP work (about 1 ms of CPU per request). At the fixed weight of nice -15 it took 45 % of the
+  CPU (sched-stat, busy desktop). The trip is the synchronous churn fs passing the 15 s deadman.
+- **Fix:**      a driver keeps nice -15 within a budget of 10 % of every 500 ms; past it it is charged at nice 19 until the
+  window ends, and the next window starts it at the pack (no vruntime debt). `sched.drvbudget=`, `sched.drvwindow=`,
+  `drvbudget [PCT]`.
+- **Proof:**    2 h soak: 5 217 commands an hour, churn fs worst 10.6 s, hammer p50 5.6 ms, 0 trips. 25-minute soaks: 5 232 an hour, hammer p50 5.7 ms (budget
+  10 % of 100 ms: p50 8.9 ms; 30 %: 4 006 an hour); `[fair]` worst 1.7 s, `[wakelat]` p50 0.05 ms. `proof/d2-reg/`.
 
 ### BUG-240 — sysinfo() wrote 256 MiB into loads[2] and 128 MiB into totalram; /proc/meminfo said 256 MiB ✅ FIXED
 - **Status:**   FIXED (`4c0467d`; test `685af41`) · **Severity:** MEDIUM (Chromium sizes caches and memory-pressure levels from it)
