@@ -440,6 +440,52 @@ pub fn want_desktop() {
     DESK_KICK.store(true, Ordering::Relaxed);
 }
 
+/// S3: the entry stack of AP `cpu` (TSS.rsp0 there): slot 0 of its scheduler
+/// stacks, which the idle context never used (it runs on the AP boot stack) and
+/// which `ap_setup` registered with `percpu`.
+pub fn ap_entry_stack_top(cpu: usize) -> u64 {
+    let base = unsafe { core::ptr::addr_of!(AP_STACKS2[cpu % MAX_CPU][0]) as u64 };
+    (base + STACK_SIZE as u64) & !0xF
+}
+
+/// S3: save the FPU state of task `idx` (an AP switching it out).
+pub(crate) unsafe fn fpu_save_task(idx: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let p = (*areas.add(idx)).0.as_mut_ptr();
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xsave [{}]", in(reg) p, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
+    }
+    FPU_VALID[idx].store(true, Ordering::Release);
+}
+
+/// S3: load the FPU state of task `idx` (an AP switching it in).
+pub(crate) unsafe fn fpu_restore_task(idx: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let src = if FPU_VALID[idx].load(Ordering::Acquire) {
+        (*areas.add(idx)).0.as_ptr()
+    } else {
+        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8
+    };
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xrstor [{}]", in(reg) src, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    }
+}
+
+/// S3: may task `i` of the table leave for an AP now? A `Ready` ring-3 task
+/// whose saved frame is a user-mode frame at the top of its own kernel stack.
+fn ap_target(s: &Scheduler, i: usize) -> Option<usize> {
+    let t = &s.tasks[i];
+    if i == 0 || t.cr3 == 0 || t.kstack == 0 || t.rsp != t.kstack - (CONTEXT_WORDS as u64) * 8 {
+        return None;
+    }
+    let cs = unsafe { ((t.rsp + 16 * 8) as *const u64).read_volatile() };
+    crate::apuser::target(i, cs & 3 == 3)
+}
+
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
 pub fn unblock(idx: usize) {
     {
@@ -498,6 +544,7 @@ pub fn spawn_kernel(entry: extern "C" fn() -> !, nice: i8) -> Option<usize> {
     s.tasks[i].stack_bottom = task_stack_bottom(i);
     s.tasks[i].nice = nice;
     s.tasks[i].vruntime = s.min_vr;
+    crate::apuser::on_spawn(i, false);
     s.tasks[i].state = State::Ready;
     Some(i)
 }
@@ -520,7 +567,7 @@ pub fn idle_next_deadline(current: usize) -> Option<u64> {
             continue;
         }
         match s.tasks[i].state {
-            State::Ready => return None, // real work is runnable now
+            State::Ready if crate::apuser::on_bsp(i) => return None, // real work is runnable now
             State::Sleeping(w) => earliest = Some(earliest.map_or(w, |e| e.min(w))),
             State::Blocked(_) => any_blocked = true,
             _ => {}
@@ -976,7 +1023,7 @@ pub fn any_other_ready() -> bool {
         None => return true, // contended: assume someone is runnable
     };
     let cur = s.current;
-    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready)
+    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready && crate::apuser::on_bsp(i))
 }
 
 #[track_caller]
@@ -1452,6 +1499,18 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     // of the incoming one — this way each preemptive musl process keeps its own TLS.
     let mut fs = Msr::new(IA32_FS_BASE);
     s.tasks[cur].fs_base = unsafe { fs.read() };
+    // S3: tasks the APs sent home (a system call, a fault, an eviction): their
+    // saved user frame and TLS come back into the table, their AP time is charged.
+    if crate::apuser::inbox_pending() {
+        let st = &mut *s;
+        crate::apuser::drain_inbox(|i, r, f, tsc| {
+            st.tasks[i].rsp = r;
+            st.tasks[i].fs_base = f;
+            let c = vr_charge(tsc, st.tasks[i].nice);
+            st.tasks[i].vruntime = st.tasks[i].vruntime.wrapping_add(c);
+            place_woken(st, i);
+        });
+    }
     // 1. Wake sleepers: Sleeping -> Ready as soon as their wake time is reached.
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     for i in 0..s.count {
@@ -1521,10 +1580,25 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     let mut bestv = u64::MAX;
     let mut found = false;
     let t0_out = T0_YIELDED.load(Ordering::Relaxed);
+    // S3: Ready tasks in user context that go to an AP instead (offloaded at the
+    // end of this switch, after the outgoing task's FPU state is saved).
+    let ap_mode = crate::apuser::mode() != crate::apuser::OFF;
+    let mut leave = [(0u16, 0u8); 16];
+    let mut nleave = 0usize;
     for k in 1..=s.count {
         let i = (cur + k) % s.count;
         if i == 0 && t0_out {
             continue;
+        }
+        if s.tasks[i].state == State::Ready && !crate::apuser::on_bsp(i) {
+            continue; // an AP owns it
+        }
+        if ap_mode && nleave < leave.len() && s.tasks[i].state == State::Ready {
+            if let Some(c) = ap_target(&s, i) {
+                leave[nleave] = (i as u16, c as u8);
+                nleave += 1;
+                continue;
+            }
         }
         if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
             bestv = s.tasks[i].vruntime;
@@ -1548,8 +1622,10 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
         }
     }
     if !found {
-        best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
+        let cur_leaves = leave[..nleave].iter().any(|&(t, _)| t as usize == cur);
+        best = if s.tasks[cur].state == State::Ready && !cur_leaves && crate::apuser::on_bsp(cur) { cur } else { 0 };
     }
+    crate::apuser::picked_on_bsp(best);
     if best != cur {
         ran(best);
     }
@@ -1615,6 +1691,16 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
         s.tasks[next].sc_saved_regs,
         ks,
     );
+    // S3: hand the leaving tasks to their APs. The outgoing task's FPU state was
+    // saved by fpu_switch above (it is not `next`: it was no pick candidate).
+    for &(t, c) in &leave[..nleave] {
+        let t = t as usize;
+        if t == next {
+            continue;
+        }
+        let tk = &s.tasks[t];
+        crate::apuser::offload(t, c as usize, tk.rsp, tk.fs_base, tk.cr3, tk.kstack);
+    }
     s.tasks[next].rsp
 }
 
@@ -1954,6 +2040,7 @@ fn spawn_user_in(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64
     // (see the `else boot` fallback in `switch`) would run its ring-3 code on the boot
     // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
     s.tasks[idx].cr3 = cr3;
+    crate::apuser::on_spawn(idx, spawn_migratable());
     s.tasks[idx].state = initial;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr); // at the pack, never behind it
     s.tasks[idx].nice = 0;
@@ -2008,10 +2095,31 @@ pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: 
     s.tasks[idx].kstack = kstack_top;
     s.tasks[idx].cr3 = cr3; // SHARED address space with the process
     s.tasks[idx].fs_base = fs_base; // own TLS
+    crate::apuser::on_spawn(idx, spawn_migratable());
     s.tasks[idx].state = State::Ready;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr);
     s.tasks[idx].nice = 0;
     idx
+}
+
+/// S3: tasks spawned while this is false never leave the BSP (the musl and
+/// EuroOS background paths, drivers, the demo counters). The glibc launchers
+/// and clone() set it around their spawn (`MigratableSpawn`).
+static SPAWN_MIGRATABLE: AtomicBool = AtomicBool::new(false);
+fn spawn_migratable() -> bool {
+    SPAWN_MIGRATABLE.load(Ordering::Relaxed)
+}
+/// Guard: tasks spawned while it lives are glibc tasks that may run on an AP.
+pub struct MigratableSpawn(bool);
+impl MigratableSpawn {
+    pub fn new() -> Self {
+        MigratableSpawn(SPAWN_MIGRATABLE.swap(true, Ordering::Relaxed))
+    }
+}
+impl Drop for MigratableSpawn {
+    fn drop(&mut self) {
+        SPAWN_MIGRATABLE.store(self.0, Ordering::Relaxed);
+    }
 }
 
 /// S6 self-test: overwrite the stack canary of a task (simulates an overflow)
@@ -2203,6 +2311,9 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
     note_df(rsp);
     crate::apic::eoi();
     let cpu = this_cpu();
+    if AP_PARKED[cpu].load(Ordering::Acquire) {
+        return crate::apuser::ap_tick(cpu, rsp);
+    }
     let mut s = AP_SCHED[cpu].lock();
     if s.count == 0 {
         return rsp;

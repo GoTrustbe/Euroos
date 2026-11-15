@@ -105,6 +105,8 @@ pub extern "sysv64" fn ap_main() -> ! {
     // kernel code (the trampoline only enables PAE + long mode).
     ap_cpu_features();
     crate::sched::ap_setup(id);
+    // S3: ring 3 on this core (entry stack, AP IDT, parity record).
+    crate::apuser::ap_init(id);
     crate::apic::start_timer_on_this_cpu(0x41);
     x86_64::instructions::interrupts::enable();
     // The idle task of this core = the per-CPU kernel work loop (sleeps in hlt
@@ -116,6 +118,7 @@ pub extern "sysv64" fn ap_main() -> ! {
 static BSP_CR0: AtomicU64 = AtomicU64::new(0);
 static BSP_CR4: AtomicU64 = AtomicU64::new(0);
 static BSP_EFER: AtomicU64 = AtomicU64::new(0);
+static BSP_PAT: AtomicU64 = AtomicU64::new(0);
 
 fn record_bsp_cpu_features() {
     unsafe {
@@ -125,6 +128,7 @@ fn record_bsp_cpu_features() {
         BSP_CR0.store(cr0, Ordering::Release);
         BSP_CR4.store(cr4, Ordering::Release);
         BSP_EFER.store(x86_64::registers::model_specific::Msr::new(0xC000_0080).read(), Ordering::Release);
+        BSP_PAT.store(x86_64::registers::model_specific::Msr::new(0x277).read(), Ordering::Release);
     }
 }
 
@@ -154,11 +158,19 @@ fn ap_cpu_features() {
         core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags));
         let mut cr4: u64;
         core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
-        cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT | (bcr4 & CR4_OSXSAVE);
+        // S3: and every bit ring 3 depends on, as the BSP has it ([ap-parity]):
+        // PGE, UMIP, FSGSBASE, SMEP, SMAP.
+        const CR4_RING3: u64 = (1 << 7) | (1 << 11) | (1 << 16) | (1 << 20) | (1 << 21);
+        cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT | (bcr4 & CR4_OSXSAVE) | (bcr4 & CR4_RING3);
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, preserves_flags));
         if bcr4 & CR4_OSXSAVE != 0 {
             // Same XCR0 as the BSP (x87|SSE|AVX), see sched::fpu_init.
             core::arch::asm!("xsetbv", in("ecx") 0u32, in("eax") 0x7u32, in("edx") 0u32, options(nomem, nostack, preserves_flags));
+        }
+        // S3: the BSP's memory types (PAT) for user mappings.
+        let pat = BSP_PAT.load(Ordering::Acquire);
+        if pat != 0 {
+            x86_64::registers::model_specific::Msr::new(0x277).write(pat);
         }
         if befer & EFER_NXE != 0 {
             let mut efer = x86_64::registers::model_specific::Msr::new(0xC000_0080);
@@ -217,6 +229,9 @@ pub fn init() {
     }
 
     // Copy trampoline to 0x8000 + patch CR3/entry (per-AP stack follows).
+    // S3: the APs' IDT (exception stubs that send a ring-3 task home), built
+    // before any AP loads it.
+    crate::apuser::build_ap_idt();
     unsafe {
         core::ptr::copy_nonoverlapping(TRAMPOLINE.as_ptr(), TRAMP as *mut u8, TRAMPOLINE.len());
         ((TRAMP + OFF_CR3) as *mut u64).write_volatile(cr3);
@@ -320,6 +335,9 @@ pub fn init() {
     // From here on only the cores that really run (a core that timed out has
     // no scheduler, counters or kwork loop of its own).
     let enabled = online;
+    if started > 0 {
+        crate::apuser::parity_report();
+    }
 
     // Release image: no scheduler/IPI/load-balance demonstration (0.25 s of
     // waiting for counters to move). The demo workers are parked at once and

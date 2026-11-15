@@ -49,6 +49,17 @@ pub static JOBS_STOLEN: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 
 /// The APs that can take jobs right now (core indexes, BSP excluded).
+/// S3: AP `cpu` runs no job and has none queued (its idle context may give
+/// the core to a user task).
+pub fn ap_quiet(cpu: usize) -> bool {
+    !BUSY[cpu].load(Ordering::Acquire) && PENDING[cpu].load(Ordering::Acquire) == 0
+}
+
+/// S3: AP `cpu` has a job queued (its user task makes room for it).
+pub fn ap_pending(cpu: usize) -> bool {
+    PENDING[cpu].load(Ordering::Acquire) != 0
+}
+
 pub fn online_aps() -> alloc::vec::Vec<usize> {
     (0..MAX_CPU).filter(|&c| ONLINE[c].load(Ordering::Acquire)).collect()
 }

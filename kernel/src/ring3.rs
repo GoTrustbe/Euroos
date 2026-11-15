@@ -11333,7 +11333,10 @@ fn do_glibc_fork() -> u64 {
     let sel = crate::gdt::selectors();
     let cs = (sel.user_code.0 | 3) as u64;
     let ss = (sel.user_data.0 | 3) as u64;
-    let child = crate::sched::spawn_thread(urip, ursp, cs, ss, kstack_top, pml4, fs, sregs);
+    let child = {
+        let _m = crate::sched::MigratableSpawn::new(); // S3: a glibc fork child may run on an AP
+        crate::sched::spawn_thread(urip, ursp, cs, ss, kstack_top, pml4, fs, sregs)
+    };
     set_task_caps(child, effective_caps()); // fork child: inherits the parent's rights
     if child == usize::MAX {
         free_thread_kstack_slot(slot);
@@ -13347,7 +13350,10 @@ pub static SKIP_GLIBC_TESTS: core::sync::atomic::AtomicBool = core::sync::atomic
 #[allow(clippy::too_many_arguments)]
 fn spawn_glibc_main(entry: u64, rsp: u64, user_cs: u64, user_ss: u64, slot: usize, kstack: u64, pml4: u64,
                     caps: u64, argv: &[&[u8]]) -> Option<usize> {
-    let main_task = crate::sched::spawn_user_parked(entry, rsp, user_cs, user_ss, kstack, pml4);
+    let main_task = {
+        let _m = crate::sched::MigratableSpawn::new(); // S3: a glibc main thread may run on an AP
+        crate::sched::spawn_user_parked(entry, rsp, user_cs, user_ss, kstack, pml4)
+    };
     if main_task == usize::MAX {
         free_thread_kstack_slot(slot);
         return None;
@@ -15454,6 +15460,10 @@ fn linux_dispatch_timed(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -
     // IPI stays pending while IF=0 and fires at sysret (no yield inside the call).
     if crate::sched::take_resched() {
         crate::sched::resched_ipi();
+    } else if crate::apuser::wants_ap(crate::sched::current_lockfree()) {
+        // S3: the caller may run on an AP: the self IPI fires at sysret and the
+        // scheduler hands it over with its user frame.
+        crate::sched::resched_ipi();
     }
     r
 }
@@ -16559,7 +16569,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 use x86_64::registers::control::Cr3;
                 Cr3::read().0.start_address().as_u64()
             };
-            let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            let child = {
+                let _m = crate::sched::MigratableSpawn::new(); // S3: a glibc thread may run on an AP
+                crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs)
+            };
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
                 return (-11i64) as u64;
@@ -16631,7 +16644,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 use x86_64::registers::control::Cr3;
                 Cr3::read().0.start_address().as_u64()
             };
-            let child = crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs);
+            let child = {
+                let _m = crate::sched::MigratableSpawn::new(); // S3: a glibc thread may run on an AP
+                crate::sched::spawn_thread(user_rip, child_stack, user_cs, user_ss, kstack_top, pml4, fs, saved_regs)
+            };
             if child == usize::MAX {
                 free_thread_kstack_slot(slot); // scheduler table full -> -EAGAIN, no crash
                 return (-11i64) as u64;

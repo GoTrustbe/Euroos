@@ -380,6 +380,11 @@ pub fn init() {
     IDT.load();
 }
 
+/// The BSP's IDT (S3: the APs get a copy with their own exception stubs).
+pub fn bsp_idt() -> &'static InterruptDescriptorTable {
+    &IDT
+}
+
 extern "x86-interrupt" fn debug_handler(frame: InterruptStackFrame) {
     crate::memwatch::on_debug(
         frame.instruction_pointer.as_u64(),
