@@ -1,7 +1,8 @@
 # Memory that comes back: frames for memory files, page-cache eviction, out of memory
 
 Status: implemented on `feature/chrome-mem` (BUG-150 to BUG-155); section 7 on
-`feature/chrome-mem2` (BUG-156). Measurements and
+`feature/chrome-mem2` (BUG-156); section 8, named RAM files in frames and sysinfo on
+`feature/mem-2026-11e` (proof `docs/proof/mem-2026-11e/`). Measurements and
 proof: `docs/proof/chrome-mem/README.md`. Code: `crates/euromm` (`ramfile`,
 `pagecache`, `oom`, host-tested against models) and `kernel/src/ring3.rs`,
 `kernel/src/paging.rs`.
@@ -14,7 +15,7 @@ A glibc process tree (the browser and its children) runs on three stores:
 |---|---|---|
 | demand pool | at launch: the RAM that is left, minus a margin | every 4 KiB page that is committed on a fault: anonymous memory, private copies of file pages, page tables of the demand region, the page cache of the packs, the frames of memory files |
 | process pool | at boot: up to half of the RAM | the identity arena of the launched process (128 MiB for the browser, one piece); per fork child its page tables and the arena pages it uses, as single frames (section 7) |
-| kernel heap | at boot: a quarter of the RAM, 64 to 512 MiB | kernel objects; the bytes of RAM files that have a name |
+| kernel heap | at boot: a quarter of the RAM, 64 to 512 MiB | kernel objects; the bytes of RAM files that have a name outside a demand-paged run (section 3) |
 
 The census (`memstat`, `[mem]`/`[memstat]` every 30 s and after `ramfiles`) names
 the owner of every frame of the demand pool and prints what it cannot name as
@@ -45,8 +46,13 @@ then touches in part cost what is touched.
 Which files: a file **without a name**, i.e. a memfd from its creation and a file
 that is unlinked while a descriptor or a mapping still holds it (the two ways
 Chromium makes shared memory). Its bytes move out of the heap at that moment.
-Files with a name (the profile, caches, `/tmp`) stay byte vectors in the kernel
-heap under the existing rule (never into the last 32 MiB of it, `ENOSPC`).
+A file **with a name** (the profile, caches, `/tmp`) that a program writes during a
+demand-paged run is made of frames too, from its first `write`, `ftruncate` or
+`fallocate` (`paged_named_adopt`); the kernel's own files (`/proc`, `/dev`) stay byte
+vectors. Both kinds share the one budget below. At the end of the run, before the pool
+goes, every paged file that still has a name gets its bytes back in the kernel heap
+(`paged_named_release`), so files outlive the run as before; outside a run they are byte
+vectors under the old rule (never into the last 32 MiB of the heap, `ENOSPC`).
 
 `Budget::for_pool(pool)`: the files together may hold **half of the demand pool**,
 and stop while **a sixteenth of the pool (at most 256 MiB)** is still free for the
@@ -142,10 +148,7 @@ something (the PTE carries `OWNED`):
 | end of the process, by whatever path | `free_fork_tables` frees the frames with the tables |
 | the pool has no frame for a touch | ring 3: the process is ended (`[oom] no frame in the process pool for an arena page`), 1 MiB before the pool is empty; the kernel may use that last 1 MiB |
 
-Why copy at fork and not copy-on-write: sharing would need the 2 MiB mapping
-of the launched process split into write-protected pages and write faults
-from ring 0 (system calls that copy into their caller) served as well. Not
-done in this round.
+Copy-on-write replaced the copy at fork in `feature/mem-2026-11e`: section 8.
 Copying what is not zero keeps the semantics of the copy that was there and
 removes the cost that mattered: the browser has 23 MiB of 128 that are not
 zero when it forks, and after its execve a child holds 17 MiB.
@@ -157,11 +160,53 @@ Measured (KVM, 4 GiB): an idle fork child of the 96 MiB test arena costs
 
 - One pool instead of two: the process pool keeps up to half of the RAM for
   arenas whatever the browser needs (section 1). Measured in the proof README.
-- Copy-on-write fork: a fork still copies every committed private page of the
-  demand region, and every arena page that is not all zeros (section 7).
 - Reclaim for the process pool: its pages have no backing store and the pool
   is not counted in the census of the demand pool; a child's arena frames are
   what the census prints as `arena=`.
-- Named RAM files in frames; a page cache for writable disk files (the writeback
-  half of section 4 has no caller yet).
-- `sysinfo` and `/proc/meminfo` still report a fixed 256 MiB machine to programs.
+- A page cache for writable disk files (the writeback half of section 4 has no
+  caller yet).
+- A virtual arena: the arena of the launched process is still identity mapped
+  (virt = phys), which is why its frames are pinned in section 8 and why its base
+  cannot be randomised. Its 4 KiB page tables (section 8) are the first step; the
+  kernel's accesses to it by address are what is left.
+
+`sysinfo` and `/proc/meminfo` report the machine since `feature/mem-2026-11e`: total =
+the RAM the frame allocator manages, free = what the demand pool and the process pool
+have free, shared = the frames of the memory files, buffers/Cached = the page cache,
+MemAvailable = free + page cache.
+
+## 8. Copy-on-write fork (`feature/mem-2026-11e`, `euromm::cow`)
+
+Section 7 copied, at every fork, the arena pages of the parent that were not
+all zeros and every committed page of the demand region (23 MiB and ~100 MiB
+for the browser, 56 + 33 ms). Now the two sides share the frames:
+
+| Event | What happens |
+|---|---|
+| `fork` | a private page of the parent (writable, or copy-on-write already) becomes read-only with the software bit `COW` (bit 11) on both sides, and its frame gains a holder in `Refs` (one `u16` per frame of RAM, in frames of their own: 3 MiB at 6 GiB of address space). Windows of `MAP_SHARED` files and the ALSA ring are copied as before; page-cache pages stay read-only and shared as before; a page of the launched process that is all zeros is left out (the child reads zeros) |
+| write to a `COW` page, ring 3 or a system call that writes into its caller | the writer is the last holder: the entry becomes writable, same frame. Otherwise the writer gets a copy and the old frame loses a holder (`paging::demand_cow_fault`, `paging::arena_cow_fault`). The fault handler reads the user page under STAC (SMAP) |
+| the launched process writes a page children share | its frames never move (identity mapped: the kernel reaches that arena by address), so the CHILDREN get the copies (`Evict`, through the registry of child address spaces), then the parent's entry becomes writable |
+| `munmap`, `MADV_DONTNEED`/`MADV_FREE`, `execve`, exit, a refused fork | the entry goes; its frame loses a holder and is freed by the last one (`cow::on_unmap`) |
+| census | a shared frame counts for its part in each holder, so once over the processes; a count left over after the children of a run ended is printed (`[cow]`) and cleared |
+
+The arena of a launched process that runs demand-paged (the browser, the
+`[memt]` runs) gets 4 KiB pages before it starts (`paging::arena_split`: a
+page table per 2 MiB, `SPLIT_PT`, from the frame allocator that built its
+directories, freed with them) so that single pages can be write-protected.
+Any other process keeps 2 MiB pages, and a fork copies its arena pages that
+are not all zeros as in section 7. A page that was
+zero at a fork has its dirty bit cleared and carries `KNOWN_ZERO`; the next
+fork does not read it again while the dirty bit stays clear.
+
+The decisions on an entry (share, write, unmap, evict) are `euromm::cow`,
+host-tested against a model of whole address spaces (bytes per page, random
+forks, writes, reads, munmap, execve and exit on all sides, the launched
+process with pinned frames): every read sees the bytes of the model, every
+frame's count equals its holders, no frame is free while mapped, every frame
+comes back.
+
+What it rests on, and is not proven by a test: ring 3 runs on one core (no
+TLB shootdown); the kernel writes into the memory of a process only through
+that process's own page tables (a write through the identity map of another
+address space would reach a shared frame unseen). `swapmgr` does not swap out
+a `COW` page.
