@@ -483,7 +483,48 @@ fn ap_target(s: &Scheduler, i: usize) -> Option<usize> {
         return None;
     }
     let cs = unsafe { ((t.rsp + 16 * 8) as *const u64).read_volatile() };
-    crate::apuser::target(i, cs & 3 == 3)
+    crate::apuser::target(i, cs & 3 == 3, t.cr3)
+}
+
+/// S3: take back what the APs sent home (scheduler lock held).
+fn drain_locked(s: &mut Scheduler) {
+    if !crate::apuser::inbox_pending() {
+        return;
+    }
+    crate::apuser::drain_inbox(|i, r, f, tsc| {
+        s.tasks[i].rsp = r;
+        s.tasks[i].fs_base = f;
+        let c = vr_charge(tsc, s.tasks[i].nice);
+        s.tasks[i].vruntime = s.tasks[i].vruntime.wrapping_add(c);
+        place_woken(s, i);
+    });
+}
+
+/// S4: task `idx` is on an AP: bring it home before its state changes (kill,
+/// exit, a park, a reclaimed slot). Scheduler lock held; an AP never takes it.
+fn bring_home(s: &mut Scheduler, idx: usize) {
+    if idx < MAX_TASKS && !crate::apuser::on_bsp(idx) {
+        crate::apuser::evict_wait(idx);
+        drain_locked(s);
+    }
+}
+
+/// S4: while this lives, no task of address space `cr3` runs on an AP (fork
+/// copies it). Every task of it that is on an AP is brought home first.
+pub struct HoldMm(());
+impl HoldMm {
+    pub fn new(cr3: u64) -> Self {
+        let mut s = SCHED.lock();
+        if crate::apuser::hold_cr3(cr3) > 0 {
+            drain_locked(&mut s);
+        }
+        HoldMm(())
+    }
+}
+impl Drop for HoldMm {
+    fn drop(&mut self) {
+        crate::apuser::release_hold();
+    }
 }
 
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
@@ -675,6 +716,7 @@ pub fn mark_current_dead() -> usize {
 /// Mark a specific task as terminated (e.g. `kill <pid>` from the shell).
 pub fn mark_dead(idx: usize) {
     let mut s = SCHED.lock();
+    bring_home(&mut s, idx); // S4: never mark a task dead that an AP still runs
     if idx < s.count {
         s.tasks[idx].state = State::Dead;
     }
@@ -1281,6 +1323,7 @@ pub fn site_name(key: u64) -> alloc::string::String {
 /// for the running task.
 pub fn park(idx: usize) {
     let mut s = SCHED.lock();
+    bring_home(&mut s, idx);
     if idx < s.count && idx != s.current && s.tasks[idx].state == State::Ready {
         s.tasks[idx].state = State::Blocked(PARKED);
     }
@@ -1501,16 +1544,7 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     s.tasks[cur].fs_base = unsafe { fs.read() };
     // S3: tasks the APs sent home (a system call, a fault, an eviction): their
     // saved user frame and TLS come back into the table, their AP time is charged.
-    if crate::apuser::inbox_pending() {
-        let st = &mut *s;
-        crate::apuser::drain_inbox(|i, r, f, tsc| {
-            st.tasks[i].rsp = r;
-            st.tasks[i].fs_base = f;
-            let c = vr_charge(tsc, st.tasks[i].nice);
-            st.tasks[i].vruntime = st.tasks[i].vruntime.wrapping_add(c);
-            place_woken(st, i);
-        });
-    }
+    drain_locked(&mut s);
     // 1. Wake sleepers: Sleeping -> Ready as soon as their wake time is reached.
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     for i in 0..s.count {
@@ -1972,6 +2006,7 @@ fn alloc_slot_raw(s: &mut Scheduler) -> Option<usize> {
 /// Dead and not current. Idempotent (won't double-list a slot).
 pub fn reclaim_task(idx: usize) {
     let mut s = SCHED.lock();
+    bring_home(&mut s, idx);
     if idx < s.count && idx != s.current && s.tasks[idx].state == State::Dead && !s.free_slots.contains(&idx) {
         s.free_slots.push(idx);
         // A reused slot must start with a clean FPU/SSE state, not the dead task's:

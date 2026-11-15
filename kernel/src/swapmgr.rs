@@ -116,6 +116,7 @@ pub fn map_one_page(falloc: &mut FrameAllocator, virt: u64, frame: u64) {
         let pt = ensure_table(pd.offset(i2), falloc) as *mut u64;
         *pt.offset(i1) = (frame & PHYS_MASK) | PRESENT | WRITABLE;
         tlb::flush(VirtAddr::new(virt));
+        crate::apuser::shootdown_current(); // S4
     }
 }
 
@@ -229,6 +230,7 @@ pub fn swap_out_in(pml4: u64, virt: u64) -> Option<u64> {
         *pte = ((slot as u64) << 12) | SWAPPED | if e & USER != 0 { USER_MARK } else { 0 };
         if pml4 == active_pml4() as u64 {
             tlb::flush(VirtAddr::new(virt));
+        crate::apuser::shootdown_current(); // S4
         }
         mgr.swap_outs += 1;
         Some(frame)
@@ -365,6 +367,7 @@ pub fn swap_in_into(virt: u64, frame: Option<u64>) -> bool {
         }
         *pte = (frame & PHYS_MASK) | PRESENT | WRITABLE | if user { USER } else { 0 };
         tlb::flush(VirtAddr::new(virt));
+        crate::apuser::shootdown_current(); // S4
         mgr.area.free(slot);
         mgr.swap_ins += 1;
     }
@@ -410,6 +413,7 @@ pub fn try_swap_in(virt: u64) -> bool {
         }
         *pte = (frame & PHYS_MASK) | PRESENT | WRITABLE | if user { USER } else { 0 };
         tlb::flush(VirtAddr::new(virt));
+        crate::apuser::shootdown_current(); // S4
         mgr.area.free(slot);
         mgr.swap_ins += 1;
     }

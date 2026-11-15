@@ -11067,8 +11067,8 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         let keep = shared_phys_sorted();
         irq_window();
         crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &keep);
-        // Flush the TLB so the now-unmapped VAs re-fault.
-        unsafe { Cr3::write(Cr3::read().0, Cr3::read().1); }
+        // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
+        crate::paging::flush_tlb_all();
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
@@ -11227,6 +11227,9 @@ fn do_glibc_fork() -> u64 {
     }
     use x86_64::registers::control::Cr3;
     let parent_pml4 = Cr3::read().0.start_address().as_u64();
+    // S4: no thread of the parent runs on an AP while its address space is
+    // copied and write-protected (design 3.6, mm_quiesce).
+    let _hold = crate::sched::HoldMm::new(parent_pml4);
     let arena = ARENA_BASE.load(Ordering::Relaxed);
     let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
     if arena == 0 || span == 0 {
@@ -11710,7 +11713,7 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
                     crate::procpool::demand_free(fresh);
                     return false;
                 }
-                unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                crate::paging::flush_user_page(page); // S4: also on the APs
                 DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
                 return true;
             }
@@ -11986,7 +11989,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         }
             return false;
         }
-        unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+        crate::paging::flush_user_page(page); // S4: also on the APs
         DEMAND_USED.store(true, Ordering::Relaxed);
         return true;
     }
@@ -12058,7 +12061,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
                             crate::serial_println!("[pcache] map_ro FAILED at {page:#x} (pool dry?)");
                             return false;
                         }
-                        unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+                        crate::paging::flush_user_page(page); // S4: also on the APs
                         DISK_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
                         DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
                         DEMAND_USED.store(true, Ordering::Relaxed);
@@ -12130,7 +12133,7 @@ fn handle_demand_fault_inner(addr: u64) -> bool {
         return false;
     }
     // Flush any stale not-present TLB entry for this page.
-    unsafe { core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags)); }
+    crate::paging::flush_user_page(page); // S4: also on the APs
     DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
     DEMAND_USED.store(true, Ordering::Relaxed);
     if let Some((mbase, mend, dev, dbase, foff, valid, dsize, fidx)) = readahead {
@@ -12226,7 +12229,7 @@ fn demand_readahead(pml4: u64, page: u64, mbase: u64, mend: u64,
             crate::procpool::demand_free(phys);
             break;
         }
-        unsafe { core::arch::asm!("invlpg [{}]", in(reg) p, options(nostack, preserves_flags)); }
+        crate::paging::flush_user_page(p); // S4: also on the APs
         DEMAND_COMMITTED.fetch_add(1, Ordering::Relaxed);
         DEMAND_FILE_FILLED.fetch_add(1, Ordering::Relaxed);
         READAHEAD_PAGES.fetch_add(1, Ordering::Relaxed);
@@ -16770,7 +16773,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                                 if !crate::paging::map_demand_4k(pml4, va, phys + i * 4096) {
                                     return (-12i64) as u64;
                                 }
-                                unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags)); }
+                                crate::paging::flush_user_page(va); // S4: also on the APs
                             }
                             // An alias entry keeps munmap and madvise from freeing or
                             // zeroing the ring's frames: they belong to the device.

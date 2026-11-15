@@ -1220,6 +1220,15 @@ unsafe fn copy_user_page(src: u64, dst: u64) {
 
 unsafe fn invlpg(va: u64) {
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+    // S4: an AP that runs this address space reloads it before we go on.
+    crate::apuser::shootdown_current();
+}
+
+/// S4: drop the translation of user page `va` of the running address space,
+/// here and on every AP that runs it (the one choke point for a flush).
+pub fn flush_user_page(va: u64) {
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags)) };
+    crate::apuser::shootdown_current();
 }
 
 /// The arena page-table entry of `virt` under `pml4` (a lazy table of a
@@ -1753,6 +1762,7 @@ pub fn unmap_demand_range(pml4: u64, start: u64, end: u64,
                 if e1 & PRESENT != 0 {
                     slot.write_volatile(0);
                     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+                    crate::apuser::shootdown(pml4); // S4: and on the APs that run it
                     unmapped += 1;
                     // A copy-on-write page is private: its holder count says
                     // whether the frame goes.
@@ -1826,6 +1836,7 @@ pub fn flush_tlb_all() {
     let (frame, flags) = Cr3::read();
     // SAFETY: the same root is written back.
     unsafe { Cr3::write(frame, flags) };
+    crate::apuser::shootdown(frame.start_address().as_u64()); // S4
 }
 
 /// madvise(MADV_DONTNEED): in [`start`, `end`) of the demand region of `pml4`,
@@ -1859,6 +1870,7 @@ pub fn discard_demand_range(pml4: u64, start: u64, end: u64, owned: &mut dyn FnM
                     if owned(va, e1 & (WRITABLE | COW) != 0) {
                         slot.write_volatile(0);
                         core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+                        crate::apuser::shootdown(pml4); // S4: and on the APs that run it
                         // Shared copy-on-write: the others keep the frame.
                         if euromm::cow::on_unmap(e1, &refs) {
                             crate::procpool::demand_free(e1 & ADDR_MASK);

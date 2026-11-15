@@ -170,9 +170,9 @@ pub fn on_bsp(idx: usize) -> bool {
 
 /// The AP a `Ready` task in user context should go to, or None (stay).
 /// `user_frame`: the task's saved frame has a ring-3 CS.
-pub fn target(idx: usize, user_frame: bool) -> Option<usize> {
+pub fn target(idx: usize, user_frame: bool, cr3: u64) -> Option<usize> {
     let m = mode();
-    if m == OFF || !user_frame {
+    if m == OFF || !user_frame || held(cr3) {
         return None;
     }
     let rc = &RUNCTX[idx];
@@ -235,6 +235,7 @@ pub fn drain_inbox(mut f: impl FnMut(usize, u64, u64, u64)) {
                 let rc = &RUNCTX[idx];
                 let tsc = rc.ap_tsc.swap(0, Ordering::Relaxed);
                 f(idx, rc.rsp.load(Ordering::Relaxed), rc.fs_base.load(Ordering::Relaxed), tsc);
+                rc.flags.fetch_and(!F_EVICT, Ordering::Relaxed);
                 rc.cpu.store(BSP, Ordering::Release);
                 ST_DRAINED.fetch_add(1, Ordering::Relaxed);
             }
@@ -254,7 +255,12 @@ pub fn picked_on_bsp(idx: usize) {
 /// System-call epilogue on the BSP: should the caller leave for an AP at its
 /// first user instruction (a self reschedule IPI)?
 pub fn wants_ap(idx: usize) -> bool {
-    mode() != OFF && target(idx, true).is_some()
+    if mode() == OFF || idx >= MAX_TASKS {
+        return false;
+    }
+    let cr3: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
+    target(idx, true, cr3).is_some()
 }
 
 // ── Test pinning ─────────────────────────────────────────────────────────────
@@ -793,8 +799,10 @@ pub fn stat_lines() -> alloc::vec::Vec<alloc::string::String> {
     let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
     let mut v = alloc::vec::Vec::new();
     v.push(alloc::format!(
-        "[smpstat] smpuser={} offloads {} sent home {}",
-        mode_name(mode()), ST_OFFLOADS.load(Ordering::Relaxed), ST_DRAINED.load(Ordering::Relaxed)
+        "[smpstat] smpuser={} offloads {} sent home {}, shootdowns {} ({} IPIs, {} late), tasks brought home {}",
+        mode_name(mode()), ST_OFFLOADS.load(Ordering::Relaxed), ST_DRAINED.load(Ordering::Relaxed),
+        ST_SHOOTDOWNS.load(Ordering::Relaxed), ST_SHOOT_IPIS.load(Ordering::Relaxed), ST_SHOOT_LATE.load(Ordering::Relaxed),
+        ST_KICKS.load(Ordering::Relaxed)
     ));
     for c in user_aps() {
         let run = match CUR_ON[c].load(Ordering::Relaxed) {
@@ -815,4 +823,139 @@ pub fn stat_lines() -> alloc::vec::Vec<alloc::string::String> {
         ));
     }
     v
+}
+
+// ── S4: TLB shootdown, bringing tasks home ───────────────────────────────────
+
+const CR3_ADDR: u64 = 0x000F_FFFF_FFFF_F000;
+pub static ST_SHOOTDOWNS: AtomicU64 = AtomicU64::new(0);
+pub static ST_SHOOT_IPIS: AtomicU64 = AtomicU64::new(0);
+pub static ST_SHOOT_LATE: AtomicU64 = AtomicU64::new(0);
+pub static ST_KICKS: AtomicU64 = AtomicU64::new(0);
+/// An address space whose tasks must not leave the BSP (fork copies it).
+static HOLD_CR3: AtomicU64 = AtomicU64::new(0);
+
+/// The BSP changed or removed translations of address space `cr3` (a flush on
+/// the BSP's own TLB happens at the call site): every AP that runs `cr3` now
+/// reloads it before this returns. An AP that switches to `cr3` later loads it
+/// fresh (switch_in writes CR3 after publishing CUR_CR3; the fence orders the
+/// caller's table writes before the look at CUR_CR3).
+pub fn shootdown(cr3: u64) {
+    let cr3 = cr3 & CR3_ADDR;
+    if cr3 == 0 {
+        return;
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
+    let mut want = [u64::MAX; MAX_CPU];
+    let mut any = false;
+    for c in 0..MAX_CPU {
+        if CUR_CR3[c].load(Ordering::SeqCst) & CR3_ADDR == cr3 {
+            want[c] = crate::interrupts::TLB_COUNT[c].load(Ordering::Acquire);
+            any = true;
+        }
+    }
+    if !any {
+        return;
+    }
+    ST_SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
+    for c in 0..MAX_CPU {
+        if want[c] != u64::MAX {
+            ST_SHOOT_IPIS.fetch_add(1, Ordering::Relaxed);
+            crate::apic::send_ipi(APIC_OF[c].load(Ordering::Relaxed), crate::interrupts::IPI_TLB_VECTOR);
+        }
+    }
+    // The acknowledgement is the AP's TLB counter (ipi_tlb_handler counts after
+    // its CR3 reload). An AP in user mode takes the IPI at once.
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    let t0 = rdtsc();
+    for c in 0..MAX_CPU {
+        if want[c] == u64::MAX {
+            continue;
+        }
+        while crate::interrupts::TLB_COUNT[c].load(Ordering::Acquire) == want[c] {
+            if rdtsc().saturating_sub(t0) > per * 10 {
+                if ST_SHOOT_LATE.fetch_add(1, Ordering::Relaxed) < 4 {
+                    crate::serial_println!("[tlb-smp] cpu{c} did not acknowledge a shootdown within 100 ms");
+                }
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Bring task `idx` home from its AP (BSP, scheduler lock held by the caller,
+/// who then drains the inbox): a queued task is taken off the queue, a running
+/// one is evicted with a reschedule IPI and awaited. For everything that ends or
+/// changes a task the BSP does not run: kill, exit, exec, a signal, a park.
+pub fn evict_wait(idx: usize) {
+    let rc = &RUNCTX[idx];
+    if rc.cpu.load(Ordering::Acquire) == BSP {
+        return;
+    }
+    ST_KICKS.fetch_add(1, Ordering::Relaxed);
+    let (w, bit) = (idx / 64, 1u64 << (idx % 64));
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    let t0 = rdtsc();
+    let mut asked = BSP;
+    loop {
+        // The owner may change under us (S5: an idle AP steals a queued task).
+        let c = rc.cpu.load(Ordering::Acquire);
+        if c == BSP {
+            return;
+        }
+        let c = c as usize;
+        if INBOX[c][w].load(Ordering::Acquire) & bit != 0 {
+            return; // on its way home: the caller drains
+        }
+        if READY[c][w].fetch_and(!bit, Ordering::SeqCst) & bit != 0 {
+            // Queued, not running: its frame and state were saved when it left.
+            NR[c].fetch_sub(1, Ordering::SeqCst);
+            INBOX[c][w].fetch_or(bit, Ordering::Release);
+            INBOX_ANY.store(true, Ordering::Release);
+            return;
+        }
+        if asked != c as u8 {
+            rc.flags.fetch_or(F_EVICT, Ordering::SeqCst);
+            send_resched(c);
+            asked = c as u8;
+        }
+        if rdtsc().saturating_sub(t0) > per * 10 {
+            crate::serial_println!("[kill-smp] task {idx} on cpu{c} did not come home within 100 ms");
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Bring home every task of address space `cr3` and keep them on the BSP
+/// until `release_hold` (fork copies the address space: it must not move).
+/// Returns the tasks that were away (the caller drains the inbox).
+pub fn hold_cr3(cr3: u64) -> usize {
+    let cr3 = cr3 & CR3_ADDR;
+    HOLD_CR3.store(cr3, Ordering::SeqCst);
+    let mut n = 0;
+    for i in 0..MAX_TASKS {
+        let rc = &RUNCTX[i];
+        if rc.cpu.load(Ordering::Acquire) != BSP && rc.cr3.load(Ordering::Relaxed) & CR3_ADDR == cr3 {
+            evict_wait(i);
+            n += 1;
+        }
+    }
+    n
+}
+pub fn release_hold() {
+    HOLD_CR3.store(0, Ordering::SeqCst);
+}
+fn held(cr3: u64) -> bool {
+    let h = HOLD_CR3.load(Ordering::Relaxed);
+    h != 0 && cr3 & CR3_ADDR == h
+}
+
+/// `shootdown` for the address space the BSP runs now (a flush site that
+/// works on the current tables).
+pub fn shootdown_current() {
+    let cr3: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
+    shootdown(cr3);
 }
