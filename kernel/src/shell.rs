@@ -688,6 +688,19 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "sched-stat" => crate::schedstat::sched_stat(arg1),
         "hogtest" => crate::schedstat::hogtest(ctx.mem, line),
         "hogs" => crate::schedstat::hogs_cmd(ctx.mem, arg1),
+        "renice" => {
+            let t: usize = arg1.trim().parse().unwrap_or(usize::MAX);
+            let l = match (crate::sched::nice_of(t), arg2.trim().parse::<i8>()) {
+                (Some(old), Ok(n)) => {
+                    crate::sched::set_nice(t, n);
+                    alloc::format!("[renice] task {t}: nice {old} -> {}", crate::sched::nice_of(t).unwrap_or(n))
+                }
+                (Some(old), Err(_)) => alloc::format!("[renice] task {t}: nice {old}"),
+                (None, _) => alloc::format!("[renice] no task {t} (renice TASK [NICE])"),
+            };
+            crate::serial_println!("{l}");
+            alloc::vec![l]
+        }
         "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
         "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
         "dmesg" => {

@@ -116,6 +116,17 @@ fn weight(nice: i8) -> u64 {
 /// nice-0 tasks it is entitled to 65 % of the CPU (BUG-192: it got 2.5 %).
 pub const DESKTOP_NICE: i8 = -10;
 
+/// The userspace drivers (e1000d, nvmed, ...) run at the weight of nice -15
+/// (BUG-231). A driver is the device's interrupt handler in ring 3: its
+/// interrupt wakes it, it does a short pass and sleeps again. Under turn-based
+/// vruntime it was never charged (it always slept when it left the CPU) and so
+/// always ran first; charged by time at nice 0 it queued behind the desktop
+/// loop (nice -10) and every CPU-bound task until the next tick, and every frame
+/// of an inbound connection paid that (soak hammer p50 5.4 -> 60.9 ms). At -15
+/// a woken driver is ahead of the pack again; what it takes under a flood is
+/// still bounded by its weight.
+pub const DRIVER_NICE: i8 = -15;
+
 /// vruntime is in weighted nanoseconds. A task that waited gets ahead of the
 /// pack by half a slice at most: `max(vruntime, min_vr - WAKE_FLOOR)`.
 const WAKE_FLOOR: u64 = 5_000_000;
@@ -361,6 +372,12 @@ pub const WAKE_HIST_MS: [&str; 8] = ["<0.1", "<1", "<5", "<10", "<20", "<50", "<
 /// A woken task preempts the running one when its vruntime is at least this far
 /// below the running task's (weighted ns): 1 ms.
 const WAKE_PREEMPT: u64 = 1_000_000;
+
+/// Nice value of task `idx` (None: no such task).
+pub fn nice_of(idx: usize) -> Option<i8> {
+    let s = SCHED.lock();
+    (idx < s.count).then(|| s.tasks[idx].nice)
+}
 
 fn woken(s: &Scheduler, idx: usize) {
     let now = rdtsc();

@@ -2651,13 +2651,19 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     which advice and range (likely MADV_DONTNEED over a large range, cleared with IF=0); clear in chunks with a
   tick allowed in between, or out of the system call.
 
-### BUG-231 — the inbound HTTP hammer of the soak is 11 times slower after S1/S2 (p50 5.4 -> 60.9 ms) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (0 errors, but half the requests in the same 2 h)
+### BUG-231 — the inbound HTTP hammer of the soak is 11 times slower after S1/S2 (p50 5.4 -> 60.9 ms) ✅ FIXED (D2 step B)
+- **Status:**   FIXED · **Severity:** MEDIUM (0 errors, but half the requests in the same 2 h)
 - **Actual:**   loadtest soak of `feature/sched-d1` `8fe1de9` (16 GiB, 4 vCPU, hammer 4): 440 262 requests, p50 60.9 ms, p99 362.9 ms;
   validate-2026-11d 827 487 requests, p50 5.4 ms, p99 161.8 ms. The console commands of the same soak ran 3.3 times as many
   per hour (churn proc 6.6 -> 1.3 s), with the desktop task at nice -10 (`proof/sched-d1/r630-soak-summary.txt`).
 - **Next:**     `sched-stat` during a hammer window: which task serves the requests, its share and its wake waits; whether the
   network worker (nice -5) and the httpd path need a weight of their own or the desktop task's console work should not run at -10.
+- **Fixed in D2 (`proof/d2/bug231/`):** the inbound frames go through e1000d, a ring-3 driver at nice 0. Under turn-based
+  vruntime (S0) a task that slept when it left the CPU was never charged, so the driver always ran first when its interrupt
+  woke it; S1 charges run time, and the woken driver waited behind the desktop loop (nice -10) and the nice-0 counter tasks
+  until the next tick, at every frame. Userspace drivers now run at nice -15 (`sched::DRIVER_NICE`). Busy desktop (15 rounds
+  of `spawn worker 32` + `churn proc 8`), 4 hammer clients: p50 79.5 -> 4.7 ms (S0 5.6 ms), `[fair]` worst 1.5/1.6 s,
+  `[wakelat]` p50 0.05 ms unchanged.
 
 ### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)

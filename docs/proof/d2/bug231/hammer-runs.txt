@@ -1,0 +1,123 @@
+== h-s0
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 72422, "err": 0, "p50_ms": 5.0, "p99_ms": 155.9, "max_ms": 7711.5, "busy_windows": 36, "busy_s": 499, "busy": {"ok": 60082, "err": 0, "p50_ms": 5.0, "p99_ms": 135.5, "max_ms": 1331.2}, "idle": {"ok": 12340, "err": 0, "p50_ms": 5.2, "p99_ms": 222.9, "max_ms": 7711.5}}
+churn proc 8 (ms): 4552ms 
+== h-s1
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 34689, "err": 0, "p50_ms": 60.5, "p99_ms": 464.6, "max_ms": 8255.6, "busy_windows": 33, "busy_s": 260, "busy": {"ok": 15869, "err": 0, "p50_ms": 60.7, "p99_ms": 109.7, "max_ms": 1162.4}, "idle": {"ok": 18820, "err": 0, "p50_ms": 60.2, "p99_ms": 503.5, "max_ms": 8255.6}}
+churn proc 8 (ms): 1261ms 1802ms 1235ms 1261ms 1260ms 
+== h-d1
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 34366, "err": 0, "p50_ms": 61.7, "p99_ms": 417.9, "max_ms": 7867.8, "busy_windows": 31, "busy_s": 262, "busy": {"ok": 16125, "err": 0, "p50_ms": 60.9, "p99_ms": 100.0, "max_ms": 484.9}, "idle": {"ok": 18241, "err": 0, "p50_ms": 66.9, "p99_ms": 497.0, "max_ms": 7867.8}}
+churn proc 8 (ms): 1331ms 1341ms 1315ms 1376ms 1315ms 
+== b-s0st
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 8659, "err": 0, "p50_ms": 5.6, "p99_ms": 193.6, "max_ms": 6134.8}
+churn proc 8 (ms): 4802ms 4910ms 4849ms 4710ms 4818ms 4861ms 4886ms 4859ms 4927ms 4893ms 4832ms 4882ms 4947ms 4703ms 4912ms 
+[sched-stat] 80.1 s: 8013 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 408 switches/s, 51 syscalls/s
+[sched-stat]   t0 (kernel task): ran 15.7 % (12585 ms), ticks user 0 kernel 1038, 0 syscalls/s, 87 switches/s
+[sched-stat]   t11: ran 12.5 % (10030 ms), ticks user 1038 kernel 0, 0 syscalls/s, 13 switches/s
+[sched-stat]   t8: ran 12.2 % (9778 ms), ticks user 1038 kernel 0, 0 syscalls/s, 13 switches/s
+[sched-stat]   t10: ran 12.1 % (9715 ms), ticks user 1038 kernel 0, 0 syscalls/s, 13 switches/s
+[sched-stat]   t9: ran 12.0 % (9619 ms), ticks user 1038 kernel 0, 0 syscalls/s, 13 switches/s
+== b-d1st
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 1238, "err": 0, "p50_ms": 78.4, "p99_ms": 513.9, "max_ms": 7518.9}
+churn proc 8 (ms): 1417ms 1346ms 1293ms 1281ms 1292ms 1289ms 1272ms 1294ms 1319ms 1326ms 1312ms 1331ms 1321ms 1290ms 1292ms 
+[sched-stat] 28.5 s: 2848 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 733 switches/s, 142 syscalls/s
+[sched-stat]   t0 (kernel task): ran 39.0 % (11107 ms, in system calls and faults 0 ms), ticks user 0 kernel 1195, 0 syscalls/s, 55 switches/s
+[sched-stat]   t14 (kernel task): ran 9.8 % (2778 ms, in system calls and faults 0 ms), ticks user 0 kernel 224, 0 syscalls/s, 42 switches/s
+[sched-stat]   t22 (kernel task): ran 6.5 % (1837 ms, in system calls and faults 0 ms), ticks user 0 kernel 39, 0 syscalls/s, 339 switches/s
+[sched-stat]   t11: ran 4.2 % (1192 ms, in system calls and faults 0 ms), ticks user 160 kernel 0, 0 syscalls/s, 6 switches/s
+[sched-stat]   t7: ran 4.2 % (1192 ms, in system calls and faults 0 ms), ticks user 158 kernel 0, 0 syscalls/s, 6 switches/s
+== x-base
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 1287, "err": 0, "p50_ms": 79.5, "p99_ms": 507.3, "max_ms": 6512.7}
+churn proc 8 (ms): 1468ms 1425ms 1392ms 1492ms 1383ms 1424ms 1369ms 1393ms 1368ms 1489ms 1393ms 1406ms 1375ms 1357ms 1366ms 
+[sched-stat] 30.5 s: 3055 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 714 switches/s, 133 syscalls/s
+[sched-stat]   t0 (kernel task): ran 39.1 % (11936 ms, in system calls and faults 0 ms), ticks user 0 kernel 1293, 0 syscalls/s, 55 switches/s
+[sched-stat]   t14 (kernel task): ran 10.2 % (3131 ms, in system calls and faults 0 ms), ticks user 0 kernel 250, 0 syscalls/s, 42 switches/s
+[sched-stat]   t22 (kernel task): ran 6.9 % (2119 ms, in system calls and faults 0 ms), ticks user 0 kernel 59, 0 syscalls/s, 330 switches/s
+[sched-stat]   t7: ran 4.2 % (1284 ms, in system calls and faults 0 ms), ticks user 161 kernel 0, 0 syscalls/s, 5 switches/s
+[sched-stat]   t27: ran 4.2 % (1281 ms, in system calls and faults 0 ms), ticks user 38 kernel 0, 0 syscalls/s, 236 switches/s
+== x-gran
+[schedtune] gran scaled by the woken task weight: true
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 1504, "err": 0, "p50_ms": 70.0, "p99_ms": 509.2, "max_ms": 6123.5}
+churn proc 8 (ms): 1524ms 1446ms 1418ms 1441ms 1436ms 1439ms 1420ms 1431ms 1429ms 1442ms 1424ms 1441ms 1422ms 1432ms 1452ms 
+[sched-stat] 30.2 s: 3023 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 787 switches/s, 134 syscalls/s
+[sched-stat]   t0 (kernel task): ran 40.3 % (12175 ms, in system calls and faults 0 ms), ticks user 0 kernel 1335, 0 syscalls/s, 55 switches/s
+[sched-stat]   t14 (kernel task): ran 8.5 % (2575 ms, in system calls and faults 0 ms), ticks user 0 kernel 211, 0 syscalls/s, 42 switches/s
+[sched-stat]   t22 (kernel task): ran 6.5 % (1955 ms, in system calls and faults 0 ms), ticks user 0 kernel 68, 0 syscalls/s, 366 switches/s
+[sched-stat]   t7: ran 4.3 % (1308 ms, in system calls and faults 0 ms), ticks user 161 kernel 0, 0 syscalls/s, 5 switches/s
+[sched-stat]   t9: ran 4.3 % (1307 ms, in system calls and faults 0 ms), ticks user 163 kernel 0, 0 syscalls/s, 5 switches/s
+== x-nice
+[renice] task 27: nice 0 -> -15
+[renice] task 22: nice -5 -> -15
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 38980, "err": 0, "p50_ms": 7.8, "p99_ms": 35.3, "max_ms": 7099.5, "busy_windows": 15, "busy_s": 83, "busy": {"ok": 34012, "err": 0, "p50_ms": 7.8, "p99_ms": 25.4, "max_ms": 1071.5}, "idle": {"ok": 4968, "err": 0, "p50_ms": 8.0, "p99_ms": 156.4, "max_ms": 7099.5}}
+churn proc 8 (ms): 5626ms 5595ms 5522ms 5364ms 5459ms 5373ms 5402ms 5431ms 5391ms 5342ms 5364ms 5330ms 5673ms 5989ms 6005ms 
+[sched-stat] 99.0 s: 9903 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 4381 switches/s, 41 syscalls/s
+[sched-stat]   t22 (kernel task): ran 36.1 % (35763 ms, in system calls and faults 0 ms), ticks user 0 kernel 3540, 0 syscalls/s, 2173 switches/s
+[sched-stat]   t27: ran 36.1 % (35763 ms, in system calls and faults 0 ms), ticks user 2135 kernel 0, 0 syscalls/s, 2117 switches/s
+[sched-stat]   t0 (kernel task): ran 11.9 % (11759 ms, in system calls and faults 0 ms), ticks user 0 kernel 2023, 0 syscalls/s, 26 switches/s
+[sched-stat]   t14 (kernel task): ran 3.0 % (2938 ms, in system calls and faults 0 ms), ticks user 0 kernel 285, 0 syscalls/s, 44 switches/s
+[sched-stat]   t9: ran 1.3 % (1257 ms, in system calls and faults 0 ms), ticks user 238 kernel 0, 0 syscalls/s, 2 switches/s
+== x-n10
+[renice] task 27: nice 0 -> -10
+[renice] task 22: nice -5 -> -10
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 12454, "err": 0, "p50_ms": 13.4, "p99_ms": 75.2, "max_ms": 6576.3}
+churn proc 8 (ms): 2659ms 2630ms 2698ms 2626ms 2645ms 2611ms 2613ms 2672ms 2554ms 2567ms 2630ms 2523ms 2484ms 2453ms 2722ms 
+[sched-stat] 50.4 s: 5036 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 2771 switches/s, 80 syscalls/s
+[sched-stat]   t0 (kernel task): ran 23.2 % (11697 ms, in system calls and faults 0 ms), ticks user 0 kernel 1898, 0 syscalls/s, 47 switches/s
+[sched-stat]   t27: ran 23.2 % (11677 ms, in system calls and faults 0 ms), ticks user 474 kernel 0, 0 syscalls/s, 1284 switches/s
+[sched-stat]   t22 (kernel task): ran 23.1 % (11647 ms, in system calls and faults 0 ms), ticks user 0 kernel 696, 0 syscalls/s, 1360 switches/s
+[sched-stat]   t14 (kernel task): ran 5.9 % (2991 ms, in system calls and faults 0 ms), ticks user 0 kernel 270, 0 syscalls/s, 43 switches/s
+[sched-stat]   t8: ran 2.5 % (1254 ms, in system calls and faults 0 ms), ticks user 202 kernel 0, 0 syscalls/s, 4 switches/s
+== x-n10g
+[schedtune] gran scaled by the woken task weight: true
+[renice] task 27: nice 0 -> -10
+[renice] task 22: nice -5 -> -10
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 12814, "err": 0, "p50_ms": 12.7, "p99_ms": 75.3, "max_ms": 7157.2}
+churn proc 8 (ms): 2568ms 2539ms 2570ms 2647ms 2607ms 2625ms 2633ms 2665ms 2605ms 2674ms 2589ms 2616ms 2579ms 2544ms 2554ms 
+[sched-stat] 50.2 s: 5023 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 2782 switches/s, 81 syscalls/s
+[sched-stat]   t0 (kernel task): ran 23.2 % (11665 ms, in system calls and faults 0 ms), ticks user 0 kernel 1877, 0 syscalls/s, 46 switches/s
+[sched-stat]   t27: ran 23.1 % (11622 ms, in system calls and faults 0 ms), ticks user 417 kernel 0, 0 syscalls/s, 1290 switches/s
+[sched-stat]   t22 (kernel task): ran 23.1 % (11622 ms, in system calls and faults 0 ms), ticks user 0 kernel 761, 0 syscalls/s, 1366 switches/s
+[sched-stat]   t14 (kernel task): ran 5.9 % (2970 ms, in system calls and faults 0 ms), ticks user 0 kernel 269, 0 syscalls/s, 43 switches/s
+[sched-stat]   t10: ran 2.5 % (1249 ms, in system calls and faults 0 ms), ticks user 206 kernel 0, 0 syscalls/s, 4 switches/s
+== x-drv
+[renice] task 27: nice 0 -> -15
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 24353, "err": 0, "p50_ms": 4.7, "p99_ms": 48.7, "max_ms": 7069.2}
+churn proc 8 (ms): 2934ms 2983ms 3206ms 2990ms 2615ms 2947ms 2977ms 3030ms 2474ms 2987ms 2951ms 2841ms 2345ms 2591ms 2382ms 
+[sched-stat] 54.3 s: 5429 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 891 switches/s, 75 syscalls/s
+[sched-stat]   t27: ran 43.6 % (23655 ms, in system calls and faults 0 ms), ticks user 1615 kernel 0, 0 syscalls/s, 424 switches/s
+[sched-stat]   t0 (kernel task): ran 21.3 % (11579 ms, in system calls and faults 0 ms), ticks user 0 kernel 1869, 0 syscalls/s, 71 switches/s
+[sched-stat]   t22 (kernel task): ran 6.9 % (3772 ms, in system calls and faults 0 ms), ticks user 0 kernel 14, 0 syscalls/s, 299 switches/s
+[sched-stat]   t14 (kernel task): ran 5.4 % (2955 ms, in system calls and faults 0 ms), ticks user 0 kernel 267, 0 syscalls/s, 45 switches/s
+[sched-stat]   t11: ran 2.3 % (1239 ms, in system calls and faults 0 ms), ticks user 210 kernel 0, 0 syscalls/s, 8 switches/s
+== x-n5g
+[schedtune] gran scaled by the woken task weight: true
+[renice] task 27: nice 0 -> -5
+[renice] task 22: nice -5 -> -5
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 4006, "err": 0, "p50_ms": 29.3, "p99_ms": 236.5, "max_ms": 6145.3}
+churn proc 8 (ms): 1650ms 1674ms 1634ms 1584ms 1663ms 1667ms 1663ms 1656ms 1701ms 1775ms 1664ms 1636ms 1643ms 1652ms 1655ms 
+[sched-stat] 34.6 s: 3456 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 1285 switches/s, 117 syscalls/s
+[sched-stat]   t0 (kernel task): ran 34.0 % (11738 ms, in system calls and faults 0 ms), ticks user 0 kernel 1523, 0 syscalls/s, 55 switches/s
+[sched-stat]   t27: ran 11.1 % (3838 ms, in system calls and faults 0 ms), ticks user 102 kernel 0, 0 syscalls/s, 530 switches/s
+[sched-stat]   t22 (kernel task): ran 11.0 % (3818 ms, in system calls and faults 0 ms), ticks user 0 kernel 116, 0 syscalls/s, 612 switches/s
+[sched-stat]   t14 (kernel task): ran 8.8 % (3052 ms, in system calls and faults 0 ms), ticks user 0 kernel 244, 0 syscalls/s, 41 switches/s
+[sched-stat]   t10: ran 3.6 % (1259 ms, in system calls and faults 0 ms), ticks user 168 kernel 0, 0 syscalls/s, 5 switches/s
+== x-both
+[schedtune] gran scaled by the woken task weight: true
+[renice] task 27: nice 0 -> -15
+[renice] task 22: nice -5 -> -15
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 38289, "err": 0, "p50_ms": 7.6, "p99_ms": 36.7, "max_ms": 6119.0, "busy_windows": 15, "busy_s": 80, "busy": {"ok": 33368, "err": 0, "p50_ms": 7.6, "p99_ms": 25.0, "max_ms": 1077.7}, "idle": {"ok": 4921, "err": 0, "p50_ms": 7.7, "p99_ms": 155.0, "max_ms": 6119.0}}
+churn proc 8 (ms): 5383ms 5379ms 5393ms 5408ms 5467ms 5361ms 5237ms 5206ms 5307ms 5232ms 5226ms 5240ms 5320ms 5235ms 5344ms 
+[sched-stat] 95.9 s: 9588 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 4467 switches/s, 42 syscalls/s
+[sched-stat]   t27: ran 36.0 % (34537 ms, in system calls and faults 0 ms), ticks user 2118 kernel 0, 0 syscalls/s, 2159 switches/s
+[sched-stat]   t22 (kernel task): ran 36.0 % (34537 ms, in system calls and faults 0 ms), ticks user 0 kernel 3361, 0 syscalls/s, 2216 switches/s
+[sched-stat]   t0 (kernel task): ran 11.8 % (11354 ms, in system calls and faults 0 ms), ticks user 0 kernel 1985, 0 syscalls/s, 27 switches/s
+[sched-stat]   t14 (kernel task): ran 3.0 % (2893 ms, in system calls and faults 0 ms), ticks user 0 kernel 273, 0 syscalls/s, 44 switches/s
+[sched-stat]   t11: ran 1.3 % (1217 ms, in system calls and faults 0 ms), ticks user 224 kernel 0, 0 syscalls/s, 2 switches/s
+== b1-hb
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 27040, "err": 0, "p50_ms": 4.7, "p99_ms": 49.8, "max_ms": 6521.1}
+churn proc 8 (ms): 2773ms 2890ms 3244ms 3188ms 3226ms 2841ms 3218ms 3188ms 2721ms 3106ms 3201ms 3241ms 3260ms 2861ms 3367ms 
+[sched-stat] 57.3 s: 5734 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 1037 switches/s, 71 syscalls/s
+[sched-stat]   t27: ran 44.9 % (25729 ms, in system calls and faults 0 ms), ticks user 1696 kernel 0, 0 syscalls/s, 496 switches/s
+[sched-stat]   t0 (kernel task): ran 21.3 % (12220 ms, in system calls and faults 0 ms), ticks user 0 kernel 2038, 0 syscalls/s, 92 switches/s
+[sched-stat]   t22 (kernel task): ran 7.0 % (3987 ms, in system calls and faults 0 ms), ticks user 0 kernel 28, 0 syscalls/s, 333 switches/s
+[sched-stat]   t14 (kernel task): ran 4.7 % (2719 ms, in system calls and faults 0 ms), ticks user 0 kernel 234, 0 syscalls/s, 48 switches/s
+[sched-stat]   t8: ran 2.3 % (1311 ms, in system calls and faults 0 ms), ticks user 201 kernel 0, 0 syscalls/s, 9 switches/s
