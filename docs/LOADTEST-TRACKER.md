@@ -2659,6 +2659,15 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     `sched-stat` during a hammer window: which task serves the requests, its share and its wake waits; whether the
   network worker (nice -5) and the httpd path need a weight of their own or the desktop task's console work should not run at -10.
 
+### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
+- **Actual:**   TCG storage/combined (1 GiB, `storage.nvme=user`) on `feature/d2` `b6eb05d`: `renprobe` cannot write 3 x 1 MiB
+  (errno 1), `[rename]`, `[rename-disk]`, `[app-policy]` FAILED; `[ramfiles] a RAM file may not grow ...: 31 MiB of kernel memory
+  left, 32 MiB stay for the kernel (ENOSPC)`. KVM, same configuration: 45 MiB left at the first limit line on each branch alone
+  (sched-d1, small, kbugs, mem), 37 MiB on sched-d1 + small (`fc0b105`), 36 MiB on the full merge (`proof/d2/integration/`).
+- **Next:**     heaptrace image of `fc0b105` against sched-d1: which allocation site holds the 8 MiB at that point (a
+  boot-time path of small that runs at a different moment under the S1 scheduler is the first suspect).
+
 ### BUG-240 — sysinfo() wrote 256 MiB into loads[2] and 128 MiB into totalram; /proc/meminfo said 256 MiB ✅ FIXED
 - **Status:**   FIXED (`4c0467d`; test `685af41`) · **Severity:** MEDIUM (Chromium sizes caches and memory-pressure levels from it)
 - **Actual:**   syscall 99 wrote `totalram` at offset 24 (that is `loads[2]`) and `freeram` at offset 32 (that is `totalram`):

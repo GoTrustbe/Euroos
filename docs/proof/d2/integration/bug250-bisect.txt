@@ -1,0 +1,7 @@
+# BUG-250: kernel memory left at the [ramfiles] 16 MiB test, KVM 1 GiB 4 vCPU, storage config (tcgboot.sh with KVM: storage.nvme=user, NVMe 64 MiB, IOMMU)
+stor-d1 (sched-d1): 45 MiB of kernel memory left  rename: → OK ✓
+stor-small (small-2026-11e): 45 MiB of kernel memory left  rename: 
+stor-kbugs (kbugs-2026-11e): 45 MiB of kernel memory left  rename: → OK ✓
+stor-mem (mem-2026-11e): 45 MiB of kernel memory left  rename: → OK ✓
+stor-fc0 (fc0b105 (sched-d1 + small)): 37 MiB of kernel memory left  rename: 
+stor-m3 (b6eb05d (all three merges)): 36 MiB of kernel memory left  rename: → FAILED

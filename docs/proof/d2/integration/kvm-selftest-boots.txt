@@ -1,0 +1,1031 @@
+# KVM self-test boots of the integration merge (b6eb05d), R630, 2 vCPU, -nic none, intel-hda (kboot-hda.sh); 1, 2, 4, 8 GiB
+k-1g end=marker after 247s failed-lines=3 crash-lines=0
+k-2g end=marker after 271s failed-lines=1 crash-lines=0
+k-4g end=marker after 261s failed-lines=1 crash-lines=0
+k-8g end=marker after 264s failed-lines=1 crash-lines=0
+
+== 1 GiB
+[cow] holder counts for 1022 MiB of RAM: 511 KiB
+[smp] core APIC-id 1 online
+[smp] 1/1 AP core(s) online (BSP = APIC-id 0, 2 cores total)
+[smp] parallel sum 0..2000000 over 2 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=2 worker-B=2 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 3 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=193
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 204 (DMA running → audio plays ✓)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 184522 us in the parent, 356 kB of frames
+[memt]   cowfork: info demand pool 149200 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 604268 kB, freeram 304848 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 604268, MemFree 304848, MemAvailable 304848, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 107422 free (was 107422), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: start pid=1 mode=quick
+[linux-rand]   musl#1 randprobe: at_random=c925ff1926859f592e91901aef8e1ff5
+[linux-rand]   musl#1 randprobe: stack_guard=c900ff1926859f59 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=141440789bfa1277812bed9e289a4cdad2c71eff03ad590b2abed9122352cb39 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=b0cc8652dc39af687e38cd5f156adaf4e8f137e7d47164d957dc8f52244aa48c
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=06e31e887aa94ba4776230e7a2fb5442c263658b3875305d47ae7bbd940073bb ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=6907eb03d57000d53f6c49251b36da230d5a9c652026b3834abbf0955854f650 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=311931fcffe1820d968a0d59f9e658dc7107b911a2d1dc9874c3f58245a67556 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: short_reads_le_256=0
+[linux-rand]   musl#1 randprobe: urandom=42aae45d1efd61fe5dffdc945fec317e60e754fb1c9ed49fee6d5c80a6be4d11 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=465c00733c9314dce33a0ba332634a7c7aba6a8be3bb717022032ae9f94aa1d6 again=d5c8fc81d6d389b152df6252b9cf99f5c2b0503a82abb0911f5138c359b53133
+[linux-rand]   musl#1 randprobe: random=9b0160efafec28cf06bb0a63c87ee83655a6be83aac5d254d071df151fa92bdd ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=feb071ef45b251bf57e256ba8a9702c690f07e173321eaaa798ff58fe890a5a7 again=726f5a64e728ba229c6e8328c5619d589d6937f225531f7182bcde7b89045b8d
+[linux-rand]   musl#1 randprobe: PASS
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: start pid=1 mode=stat
+[linux-rand]   musl#2 randprobe: at_random=02bbf42929e6dc1a9dc2237d4c773785
+[linux-rand]   musl#2 randprobe: stack_guard=0200f42929e6dc1a fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=d746cc46cd70b9878db5941206e7373129ef3dee1807fc655126d4ec5bce3714 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=2c3d459ea407eb2244d464148df1a78ee08c4f78e2d65dee9dd1092a5148b044
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=caa26269b3895043a5a465d5b2e8c8a360a533bfa894dd22b17ac96d3566361f ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=0d05b55df2622a4b25d265e703901d458bc5d2d95716c0627cb13f49bdfe7096 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=7cdabb747c679baa8a1c40d8a7b6f7aa9ca0ce4016ccf10078d8d910a3716e12 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: short_reads_le_256=0
+[linux-rand]   musl#2 randprobe: urandom=1853be2e71eea258905cd8cde4400d25a06a6be2abcf24828fa9c8d0b995f001 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=e0135847cc86fa753d47e5c0a366972b387b131bbe015519b2f1d7068f360735 again=23bedaf3dc55b2cebd082f6dbfc0d6e9d42894ca6b7c6763e36827ef231b14da
+[linux-rand]   musl#2 randprobe: random=565a2cdd8c898c296219d4b18d048a80b5406af8678c7b08e1ac2355fdf58879 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=64c2f7d5f4d65aabec4faf03b949c038f3f88e9796c1453453871812eaad48d0 again=14b6c381fdfd526d4f4110d584055439c714bda8331bb1e03bc7671f2278b005
+[linux-rand]   musl#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1047710 of 2097152 (off by 866, limit 3622) worst-bit-position-off=383 (limit 1280) chi2=244 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048506 of 2097152 (off by 70, limit 3622) worst-bit-position-off=306 (limit 1280) chi2=238 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: PASS
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: start pid=1 mode=quick
+[linux-rand]   glibc#1 randprobe: at_random=fdd70905266381d3274ec336b4745603
+[linux-rand]   glibc#1 randprobe: stack_guard=00d70905266381d3 fs30=274ec336b4745603
+[linux-rand]   glibc#1 randprobe: getrandom=37f3ca7a40155173300f67e4ec57a74f58fac1e4b4dd731303e762b2eb957156 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=5bde80c93d204db9d29f7848f2c85466668751d1280f487d55206054b5b6b2c0
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=a473e4ab816305435706534406a9a693c97ebfba3bd1555c30b7d669502afa4e ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=3d16664735fdf4709e9cf4cd09b435c5b77bab54379070d16e67e2712803ec64 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=06d7a83673249a1c11b1105841281aca2bfd49d4f4854f59a07ae46674f48011 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#1 randprobe: urandom=cb99ab486c3c2068f55ead5107405e81ada8e85be34dbb96390bb3cfd3f36828 ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=686438613e3a8c77258b947fca7a849d8792738198a76c9e9b5a220f5c907922 again=844b45609f0dcf12f6d2628037e863f016f555724c79f0ea74f3ef5f509b4047
+[linux-rand]   glibc#1 randprobe: random=d3deb96e6904ce08dcce8a0e2753db48ce22f38c0e3e41c44a0537d9a698747e ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=aa2e44b073f61d46d4d6c3e404bbe02cc8c236de7f581b98129a2ba58cd8f885 again=ad71236ad24adb87038c4c1d5b5c2a2f1b4cd433c1a4f8af4dfb11238da2a9b1
+[linux-rand]   glibc#1 randprobe: PASS
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: start pid=1 mode=stat
+[linux-rand]   glibc#2 randprobe: at_random=cc9a35593ed3fe1942739cc4fedf31e5
+[linux-rand]   glibc#2 randprobe: stack_guard=009a35593ed3fe19 fs30=42739cc4fedf31e5
+[linux-rand]   glibc#2 randprobe: getrandom=d66d3380f66fd2caa9ae5ff1f7717adaaf2a17bd80a3cd1955fc532c9fcf7b0e ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=768cd691f6a7500f7e8a25241dc78bc5765f67d9b0c05040a15c91c628031648
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=455e74248221e12c677744cc9f21150c52b0841faf96f4ec72f2d9573c900a76 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=16fe4e2e9c8fda0fa99e90f81d8f82ac114f1027d7173657fc2a9f022eb63394 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=698098f1e830f97ee96e8234d44f00f68573f92e136b41af220c319af66de5de ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#2 randprobe: urandom=aa51126e525d307e6fad80cb5efe763da7922e579b5533cbeb9f8fc2fa83267d ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=5be6446fad56a2507147fec6d98735647b03380fad099ebcc8be8b8a5c6d0a03 again=74bff72348fec85122ef890213152b0c4dc9ade14792980ce0c13217d44f8eb6
+[linux-rand]   glibc#2 randprobe: random=28826b0eabe8607816786c269db6cd63b28b1e641b025a0b7330caa25cc4a34d ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=d2c56a8aa7e50571a87b83649a01d9114840c56cf3ab70c94c1d019663a3d624 again=748e29bc94ded5184bb56d1570c1b7333c46c1bc4805e4a1ae44b8df4b1b5f10
+[linux-rand]   glibc#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4192886 of 8388608 (off by 1418, limit 7242) worst-bit-position-off=988 (limit 2560) chi2=290 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4193672 of 8388608 (off by 632, limit 7242) worst-bit-position-off=1095 (limit 2560) chi2=215 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: PASS
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: start pid=1 mode=closed
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=b223f245821fa40b371dbe6219f33c71c004cd4e2cf3d3f8bc5340691f0f34d6
+[linux-rand]   musl#closed randprobe: PASS
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard d
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path ok
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path ok
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path ok
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file ok
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path ok
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path ok
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path ok
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: PASS
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename]   glibc renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   glibc renprobe: before every file by its path ok
+[rename]   glibc renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A1 the temporary name is gone ok
+[rename]   glibc renprobe: A1 every file by its path ok
+[rename]   glibc renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 the shared mapping of f12 ok
+[rename]   glibc renprobe: A1 the mapping of big1, pages first touched after the rename ok
+[rename]   glibc renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   glibc renprobe: A2 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A2 the temporary name is gone ok
+[rename]   glibc renprobe: A2 every file by its path ok
+[rename]   glibc renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A2 the shared mapping of f12 ok
+[rename]   glibc renprobe: A3 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A3 the temporary name is gone ok
+[rename]   glibc renprobe: A3 every file by its path ok
+[rename]   glibc renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A3 the shared mapping of f12 ok
+[rename]   glibc renprobe: B a new file renamed over an OPEN file ok
+[rename]   glibc renprobe: B the open descriptor still reads the replaced file ok
+[rename]   glibc renprobe: B the path gives the new file ok
+[rename]   glibc renprobe: B every file by its path ok
+[rename]   glibc renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   glibc renprobe: C unlink of f04 and of the backup ok
+[rename]   glibc renprobe: C every file by its path ok
+[rename]   glibc renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C the shared mapping of f12 ok
+[rename]   glibc renprobe: C the mapping of big1, all of it ok
+[rename]   glibc renprobe: D big0 and big2 mapped, descriptors closed, first page read ok
+[rename]   glibc renprobe: D a new file renamed over the mapped big0 ok
+[rename]   glibc renprobe: D the mapping of the replaced file keeps its bytes ok
+[rename]   glibc renprobe: D the path big0 gives the new file ok
+[rename]   glibc renprobe: D unlink of the mapped big2 ok
+[rename]   glibc renprobe: D the mapping of the unlinked file keeps its bytes ok
+[rename]   glibc renprobe: D every file by its path ok
+[rename]   glibc renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: PASS
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B)
+[rename-disk]   save 2: exit 0 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 2" b="document 
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 0 write-back []
+[rename-disk] a Linux program's save (create; rename over, unlink + rename, unlink) on EuroFS: save 1 ok, save 2 ok, seen by the next boot ok → OK ✓
+[aslr]   exe      first 0x00000be010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x00000c600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01006a1d7100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x000017c4fd34  varying bits  8  distinct 56/64
+[aslr]   brk      first 0x00000deff000  varying bits  8  distinct 56/64
+[aslr]   mmap     first 0x00000fe42000  varying bits  9  distinct 60/64
+[aslr]   mmapbig  first 0x01006a389000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 34→34 · process-pool 40960→40960 · demand-pool 0→0 · frames 107422→107422 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 34→34 · thread-kstacks 0→0 · process-pool 40960→40960
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[ap-tss] 1 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x36154ac0 own-stack=true → OK ✓ (own TSS, own IST stack)
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total vfs.mount (per-mount): acq=44130 contended=1 (0.00%) spins=46 max-wait=46 try-fail=0 hold-max=30854us hold-avg=18us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=2713081 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=888us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1031421 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1031412 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3024us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=798916 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=798872 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=505810 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=113890us hold-avg=3us
+[lk] boot-total heap (linked-list allocator): acq=270089 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=44224 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.FILES (syscall file table): acq=27310 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3959us hold-avg=88us
+[lk] boot-total class Fs: acq=44130 contended=1 (0.00%) spins=46 max-wait=46 try-fail=0 hold-max=30854us hold-avg=18us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=4us hold-avg=1us
+[lk] boot-total class Sched: acq=2713081 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=888us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1031421 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1031412 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3024us hold-avg=0us
+[lk] boot-total class UnixTable: acq=799035 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=5us hold-avg=0us
+[lk] boot-total class UnixConn: acq=798872 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80us hold-avg=0us
+[lk] boot-total class Process: acq=567665 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=113890us hold-avg=8us
+[lk] boot-total class FsMountTable: acq=44224 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=15950 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=2867005 refills=2478 flushes=2247 parked=159 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+[lk] boot-total longest-held ring3.BG (background processes): acq=505810 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=113890us hold-avg=3us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=44130 contended=1 (0.00%) spins=46 max-wait=46 try-fail=0 hold-max=30854us hold-avg=18us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=27310 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3959us hold-avg=88us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=26977 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3714us hold-avg=8us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1031412 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3024us hold-avg=0us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=286 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1802us hold-avg=30us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=2713081 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=888us hold-avg=0us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=7282 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=707us hold-avg=0us
+[lk] boot-total longest-held unix.conn (per-connection): acq=798872 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=80us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15932 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29us hold-avg=0us
+-- FAILED lines:
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BU
+-- crash lines: 0 lock inversions: 0
+
+== 2 GiB
+[cow] holder counts for 2046 MiB of RAM: 1023 KiB
+[smp] core APIC-id 1 online
+[smp] 1/1 AP core(s) online (BSP = APIC-id 0, 2 cores total)
+[smp] parallel sum 0..2000000 over 2 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=763 worker-B=777 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=147
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 204 (DMA running → audio plays ✓)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 214307 us in the parent, 356 kB of frames
+[memt]   cowfork: info demand pool 476880 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 1390700 kB, freeram 763600 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 1390700, MemFree 763600, MemAvailable 763600, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 271262 free (was 271262), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: start pid=1 mode=quick
+[linux-rand]   musl#1 randprobe: at_random=a5803c60ace12ffcc7ab01f61273552d
+[linux-rand]   musl#1 randprobe: stack_guard=a5003c60ace12ffc fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=82dc54439f4c1e0eb196b5428f17f31756f40a0b0f7aeaa17db193ab62cee288 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=00357585ebb47d0170b2be2cda93a571c19e5c6388e3e0a6101d6570c2eacef0
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=f3e65b177d382c4cc1ab659f26bbbb07028d855557e8a0f60ddb6ef93ab581a5 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=3027bfae6eaf706cf0778753fec901313bc66e8ebfe36e65eb346cf0ae46620e ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=89d67077eb9c77432aab7bdad8ddc76a61eeb93db935ed1ff72568c3fc935e73 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: short_reads_le_256=0
+[linux-rand]   musl#1 randprobe: urandom=098c4190e78bbd34bbb3b3e91c261b494cf5faf5f178a288ef6772356185e123 ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=a7927ac97c8637e8c9d431f11b241f0f4b4d63e1c1458950956b28168331e3d2 again=53018b95bb5359b8917ac05095b75eb269d23de29a65b57f4d3d99288c824616
+[linux-rand]   musl#1 randprobe: random=b8068b6d13e130903b336dbfd8f8ca0afdc18578156bb5b485a75b4790f408c1 ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=662d2c634ac44a5977e63b98c0c0f97ceb71f90264b738ea62d46c816d1e6b09 again=7bec919afa310acf6becdd7f515570469fcba5aef67a4963025b25ac0c36f675
+[linux-rand]   musl#1 randprobe: PASS
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: start pid=1 mode=stat
+[linux-rand]   musl#2 randprobe: at_random=f7a00c75bfed36dfeb0528a5385d6947
+[linux-rand]   musl#2 randprobe: stack_guard=f7000c75bfed36df fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=d4ace22e891b5e2360175067f837e0bb8ad557a5d5ce420d1c0ba9848016c35f ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=e2c75c758b7aeffadc6d60de37b8a157e6c62799af53d117197272487b5fa7b5
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=b616736d723208275c26d94aaf20f183faa61aa0ce0bc017fa7f83061b7a5e66 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=373137bbb34bf68da2e236fb8d6525feecbf7d3ff0450b4b851799277ba2c501 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=b6af0b0e6ecc15b6cab56650b51fe3c2492e2a32483abca35a09c4e6f7898cc6 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: short_reads_le_256=0
+[linux-rand]   musl#2 randprobe: urandom=a8214979d7d927189bb21f1ac1c143a50218b298eb85b237c138d16cdfd4b819 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=7b7c9400bc36e1d2a57739f5b23e6deb331b096eab8750b326f2598a31c9d8f7 again=74dc3550f7105cc5eef77321cc287ab32c28ec3af67d0134b9f57ca4aa6b08a8
+[linux-rand]   musl#2 randprobe: random=5ce402b77158717bd8c2c1b503fd5c0e7aef391d26e92429d319554d9c8f3682 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=0f08d25122234a6f66203be63520212d5a043c6004f67b87a31490f9daa857c0 again=583882f862015126b332e5f2a624798277262c803a0f6e13fca21fdff19df363
+[linux-rand]   musl#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048964 of 2097152 (off by 388, limit 3622) worst-bit-position-off=381 (limit 1280) chi2=281 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1049671 of 2097152 (off by 1095, limit 3622) worst-bit-position-off=594 (limit 1280) chi2=281 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: PASS
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: start pid=1 mode=quick
+[linux-rand]   glibc#1 randprobe: at_random=4015e7615a1778e18fdeaab790ca9665
+[linux-rand]   glibc#1 randprobe: stack_guard=0015e7615a1778e1 fs30=8fdeaab790ca9665
+[linux-rand]   glibc#1 randprobe: getrandom=8f9f321bd917d5b767b8117f41f4212ff86b931673c9fe51eacfb8b779fc0341 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=12eaf43a352993800b7cd130af0c1b034fd7c2a2eb893e5b86f1b06251d8141a
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=c28fe994b3673e6d5e02ff6ed7abf0a424611966db56b1d93b19c237ebf33f56 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=dbafd85af56bfa8091a6b1a8874b3d49ae929fc28fd8564f1f097d772e99dd88 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=0ed30e65906cef42519b2ccde13df349c49621ecd0e788422f9de485fa5b5d79 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#1 randprobe: urandom=ff2c0e074a546ccb6c125a16e730697fc55286e52697465b756a02bcc297ae7f ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=43a809e0e4b7eea7ed3ba08cbc4c9101579a995e4bd648ae8c07c754d044b64f again=027f8d049d527279457819fa983650f0669708b64559b7136062b481cbcb552c
+[linux-rand]   glibc#1 randprobe: random=18ec59aa9679fd42b758768e4eba766f7e45b1cc31cc59ff1f108140abfa8543 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=6fbba32f8b8e42b3ea2ab78eac579c0c5ecf3dc05db1142c1f755d3683f134c9 again=92541da1c655d6046c344485efe354c6499816f9afe4a34d8e0dc84e3e8aeea3
+[linux-rand]   glibc#1 randprobe: PASS
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: start pid=1 mode=stat
+[linux-rand]   glibc#2 randprobe: at_random=16472753599bf57c5cc904cd27546b33
+[linux-rand]   glibc#2 randprobe: stack_guard=00472753599bf57c fs30=5cc904cd27546b33
+[linux-rand]   glibc#2 randprobe: getrandom=2957401b9783e0f94b1f067eb834708bb07f3193d5eb1075ae41f4e3e423b19d ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=c76a1167d76c4d371afc920553673121ce93e9168eb0bc3fb73b8ca410fccce1
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=7c9093eecef9633f48e569f45fb3d44f6b9505d4a99986db0910a44cc93675cd ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=31c917b18b3a7db4c0b6b21fe6e6b92747864549515c8adc72a89ac651148f06 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=31c471c10c43501c5c1de5416360de11a7b3e1ca46b45bfbfceecfc6da075639 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#2 randprobe: urandom=f5ae03d9ca9a623202bba043423b002cc65353f6e804ba2596e93f9e4f481153 ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=d671a88ff3573fd14ece2bd3ff11d75bb7ef40a1046d3033016841cbaa3f50d3 again=e7cdf1a0dd4d2a7de414a50052882df7ccbf20688a8d771a774b23eeef94f972
+[linux-rand]   glibc#2 randprobe: random=81fc8782970ad6168bebe87002f28def36a5e48e66d1f6c9169b71b8060f36c4 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=645386593a216e236c1e5acfd7fee638067c8f2c797c43bcafcf2a0e1eb42f76 again=cdf66decccb8670b27a69ebb5ece36fad7d58e069eb49092df2a0bc45c82da96
+[linux-rand]   glibc#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4192222 of 8388608 (off by 2082, limit 7242) worst-bit-position-off=1363 (limit 2560) chi2=269 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4193613 of 8388608 (off by 691, limit 7242) worst-bit-position-off=1144 (limit 2560) chi2=236 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: PASS
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: start pid=1 mode=closed
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=54134298393558b76d9e8b42e5b2b7fe131ba2591cdafaa7d52f8a9fd6dc01cc
+[linux-rand]   musl#closed randprobe: PASS
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard d
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path ok
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path ok
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path ok
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file ok
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path ok
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path ok
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path ok
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: PASS
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename]   glibc renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   glibc renprobe: before every file by its path ok
+[rename]   glibc renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A1 the temporary name is gone ok
+[rename]   glibc renprobe: A1 every file by its path ok
+[rename]   glibc renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 the shared mapping of f12 ok
+[rename]   glibc renprobe: A1 the mapping of big1, pages first touched after the rename ok
+[rename]   glibc renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   glibc renprobe: A2 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A2 the temporary name is gone ok
+[rename]   glibc renprobe: A2 every file by its path ok
+[rename]   glibc renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A2 the shared mapping of f12 ok
+[rename]   glibc renprobe: A3 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A3 the temporary name is gone ok
+[rename]   glibc renprobe: A3 every file by its path ok
+[rename]   glibc renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A3 the shared mapping of f12 ok
+[rename]   glibc renprobe: B a new file renamed over an OPEN file ok
+[rename]   glibc renprobe: B the open descriptor still reads the replaced file ok
+[rename]   glibc renprobe: B the path gives the new file ok
+[rename]   glibc renprobe: B every file by its path ok
+[rename]   glibc renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   glibc renprobe: C unlink of f04 and of the backup ok
+[rename]   glibc renprobe: C every file by its path ok
+[rename]   glibc renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C the shared mapping of f12 ok
+[rename]   glibc renprobe: C the mapping of big1, all of it ok
+[rename]   glibc renprobe: D big0 and big2 mapped, descriptors closed, first page read ok
+[rename]   glibc renprobe: D a new file renamed over the mapped big0 ok
+[rename]   glibc renprobe: D the mapping of the replaced file keeps its bytes ok
+[rename]   glibc renprobe: D the path big0 gives the new file ok
+[rename]   glibc renprobe: D unlink of the mapped big2 ok
+[rename]   glibc renprobe: D the mapping of the unlinked file keeps its bytes ok
+[rename]   glibc renprobe: D every file by its path ok
+[rename]   glibc renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: PASS
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B)
+[rename-disk]   save 2: exit 0 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 2" b="document 
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 0 write-back []
+[rename-disk] a Linux program's save (create; rename over, unlink + rename, unlink) on EuroFS: save 1 ok, save 2 ok, seen by the next boot ok → OK ✓
+[aslr]   exe      first 0x000013e010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000014600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01007388f100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x00002bc13d34  varying bits  8  distinct 56/64
+[aslr]   brk      first 0x000015e31000  varying bits  8  distinct 59/64
+[aslr]   mmap     first 0x000017f6b000  varying bits 16  distinct 62/64
+[aslr]   mmapbig  first 0x010073a41000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 16 (4 KiB 16, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 50→50 · process-pool 73728→73728 · demand-pool 0→0 · frames 271262→271262 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 50→50 · thread-kstacks 0→0 · process-pool 73728→73728
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[ap-tss] 1 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x76154ac0 own-stack=true → OK ✓ (own TSS, own IST stack)
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total vfs.mount (per-mount): acq=48850 contended=1 (0.00%) spins=221 max-wait=221 try-fail=0 hold-max=20207us hold-avg=17us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=3828326 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1008us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1055516 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1055507 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=92us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=1038106 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=1038062 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1458us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=634421 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=135686us hold-avg=3us
+[lk] boot-total heap (linked-list allocator): acq=294101 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=48944 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=32194 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3693us hold-avg=10us
+[lk] boot-total class Fs: acq=48850 contended=1 (0.00%) spins=221 max-wait=221 try-fail=0 hold-max=20207us hold-avg=17us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=5us hold-avg=1us
+[lk] boot-total class Sched: acq=3828326 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1008us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1055516 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1055507 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=92us hold-avg=0us
+[lk] boot-total class UnixTable: acq=1038225 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+[lk] boot-total class UnixConn: acq=1038062 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1458us hold-avg=0us
+[lk] boot-total class Process: acq=701410 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=135686us hold-avg=7us
+[lk] boot-total class FsMountTable: acq=48944 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=16034 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=17us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=3119125 refills=2479 flushes=2247 parked=162 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+[lk] boot-total longest-held ring3.BG (background processes): acq=634421 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=135686us hold-avg=3us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=48850 contended=1 (0.00%) spins=221 max-wait=221 try-fail=0 hold-max=20207us hold-avg=17us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=27435 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=7070us hold-avg=93us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=32194 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3693us hold-avg=10us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=170 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2300us hold-avg=65us
+[lk] boot-total longest-held unix.conn (per-connection): acq=1038062 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1458us hold-avg=0us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=3828326 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1008us hold-avg=0us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=7190 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=918us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1055507 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=92us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=16016 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=17us hold-avg=0us
+-- FAILED lines:
+[aslr] 64 starts of a glibc PIE: varying bits mmap 16 (4 KiB 16, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: 
+-- crash lines: 0 lock inversions: 0
+
+== 4 GiB
+[cow] holder counts for 6144 MiB of RAM: 3072 KiB
+[smp] core APIC-id 1 online
+[smp] 1/1 AP core(s) online (BSP = APIC-id 0, 2 cores total)
+[smp] parallel sum 0..2000000 over 2 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=990 worker-B=1009 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=161
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 213578 us in the parent, 360 kB of frames
+[memt]   cowfork: info demand pool 755872 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 3427340 kB, freeram 2455712 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 3427340, MemFree 2455712, MemAvailable 2455712, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 410758 free (was 410758), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: start pid=1 mode=quick
+[linux-rand]   musl#1 randprobe: at_random=fe9a0569d2c95c1624dff340d78b1183
+[linux-rand]   musl#1 randprobe: stack_guard=fe000569d2c95c16 fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=3bcebcca1eb28d3d176c5279d0952d856343a0acf1906b5239973089f556c86b ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=1890e1f1f86f7aea0e90bf4ed8c209706c7cf12544cb7e07e319c8e55d74ba1d
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=38abbe2bc2894ab9da2173e32a89567ba4b72d7a3087f98a76b77dc51f968ba1 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=440510821a264f7567a45e1723b0ebba3efcb6ffeee957b2597301caae7c12c0 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=e9230ef9e753b3b82f73d6737bf508ea2934d9f9b1ca8118eeb2b23077c31e06 ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: short_reads_le_256=0
+[linux-rand]   musl#1 randprobe: urandom=2d1708eb63428d1dc0e61d87f0b07891c8dfd87c827d96499367abadf2004eea ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=fcc56acb9f6522ed388e268c817ea82c74d4b5861190af88fc32681e05baedde again=08ff0ac48c54ca430a6d76064d8b315cfb2aa89d0209d01e33d9750be6727db8
+[linux-rand]   musl#1 randprobe: random=c141b2ddba50d3cf7e812d7535ac1b513e6c068be528fa3e7eb7d612590cbdbf ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=63ae92c7c5050618c782040651c795a80285b18abbe8b8b44182a35c8e429c55 again=8461bd4bbe328dc2d2676dde12e8abd8db0d4c13d5ca82845de6fce7b51e09ae
+[linux-rand]   musl#1 randprobe: PASS
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: start pid=1 mode=stat
+[linux-rand]   musl#2 randprobe: at_random=0ab76a3b44061761e0d2aebe06e2af77
+[linux-rand]   musl#2 randprobe: stack_guard=0a006a3b44061761 fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=0eaa7a328c6e1415ad5ac7be388b3df66a842af52cd42e32d88e170b6219c7f6 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=b6cdb5c63d5534c94e020e8f8a8b4f9d38dc0bc1d7eedae4a6114e9f4a23bf15
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=4fe84d668ab7e9d549026633b669296c6fb0af3ad9b5ebe90794740e7148ec1d ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=6bffebdacd62387e8be85955e688afb93f9d3d73b8f36612c602fd66c4407164 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=f83b2b03e5c18c48158fba17e0c3492adbc69b89488b088a2bef6dcec4e0a4d8 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: short_reads_le_256=0
+[linux-rand]   musl#2 randprobe: urandom=027720a07d9b3c69d12119ac655f4f2284af14fe5eaa46deea01be1d0a9d6202 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=03258eabd27cbdb23248b748f2b2b4fb6360bda0488396ed8ea185b37357ea67 again=4f997811e38a753f198a360b1d8a4300efb0f16099c1a52e4090ca6e5bb24f84
+[linux-rand]   musl#2 randprobe: random=a1641763e3588827fb2b7f91122676aa7414dd0ed0cadd0f4c5dc36a02aa48d4 ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=fa284ed0d605331d6dbdd643b3c6603a8b76267c7581934e39d8b66ee5e99adf again=8ea72ae60dc7456416b18eae5a91d737961f16114a7c7e4e9a40b77b3539ae95
+[linux-rand]   musl#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1049378 of 2097152 (off by 802, limit 3622) worst-bit-position-off=414 (limit 1280) chi2=251 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1048118 of 2097152 (off by 458, limit 3622) worst-bit-position-off=385 (limit 1280) chi2=224 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: PASS
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: start pid=1 mode=quick
+[linux-rand]   glibc#1 randprobe: at_random=906a04247aeb43cf7edb8914fd1dcf99
+[linux-rand]   glibc#1 randprobe: stack_guard=006a04247aeb43cf fs30=7edb8914fd1dcf99
+[linux-rand]   glibc#1 randprobe: getrandom=9e40477acc012eadf02b69e0279f012c3910ddce459ffcb5e6f772cc3d3f1ed7 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=f174bafab671a485ff12e3e55af7470f7d51839ee03ff465c0d4befeac045f61
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=f6db75310e3442d7567f304e0fbe029d3bde9f632434c986049dbdd97d3d066a ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=9c4aae6c66b37ab6448adbab9dd9271ffd457bcb28f5c6d61a20c34d4c065372 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=e907a9fa78594568a045ba097f12d237c14ea3feeb3512eb095a11390f89b52d ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#1 randprobe: urandom=417990daf44dba38350537343ad1eeed4197316501eaa47c6c0157678bed17aa ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=365ffaa6cd818cd435e5ae370e907da19a54c3354bdb8a39d303fd352d2aba59 again=2c37d68180300d29f21bab398e5db5eb2fb5b35f7e0f694b9af64e231a5981eb
+[linux-rand]   glibc#1 randprobe: random=2f716cb77a8c8d6b8cf7bce37e090769bda0f33059ad6ea7c3757c150df5abc8 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=04539e7ff81474b50150f2e686146ac1bd7fac95c3b55df45b6575d3302180a1 again=eeb261dfa12c9d9cd815317340b0119b9a0c1f1787ce6dde145dcd6f6e5c6d67
+[linux-rand]   glibc#1 randprobe: PASS
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: start pid=1 mode=stat
+[linux-rand]   glibc#2 randprobe: at_random=9a44d222efb566454e6d2b374484cfc7
+[linux-rand]   glibc#2 randprobe: stack_guard=0044d222efb56645 fs30=4e6d2b374484cfc7
+[linux-rand]   glibc#2 randprobe: getrandom=7173b3c945d40aaa560f1b9248b486f7a21974aaa3222abcfba510f215aa5760 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=e1d886d6c436d9d7c74d69ae08e791645415440cc233789279f52b488d22d57a
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=15d6460e522993348a36820dd6afe877e40afda564ee93509a950cae40ef794e ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=da8835aa67445306e9aa9b752e4de888b06d5ddaaaae67c5481c3baff6e067d6 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=aa3c0194c5a359e540059cfcae119bb3f9511e7269d5251038b7b878bcb50b95 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#2 randprobe: urandom=feb2028bedaed0825f6dc1e238cf394e00ebfdda7cc63a425e6c8e06258ec7cb ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=c9341b4967cbc42090a2cc94dfea526e14de54e6cb9bea4ba6a4af1b78af5d65 again=f5930faacce3a4e67d09751f1d6d30685c2f23887b9448fb09ecdc2498ec0ab3
+[linux-rand]   glibc#2 randprobe: random=2bca8b567d920d3ab48374a781a04548e8f267d81a4c17ab7d23952ea19bb8b5 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=071ad03978b3248288afd62bc929f7a367e48bd5b4cff9b5f17da6285cb65385 again=2a5e11e6e282756d7e7c2302151ad9e055dff486a2aade2c98c7fe9fa4a31203
+[linux-rand]   glibc#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4196311 of 8388608 (off by 2007, limit 7242) worst-bit-position-off=880 (limit 2560) chi2=268 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4193835 of 8388608 (off by 469, limit 7242) worst-bit-position-off=948 (limit 2560) chi2=283 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: PASS
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: start pid=1 mode=closed
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=8e3bd1c43618e957b6504415eab731d0a47585f645b00d9455161ed51ff77489
+[linux-rand]   musl#closed randprobe: PASS
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard d
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path ok
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path ok
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path ok
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file ok
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path ok
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path ok
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path ok
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: PASS
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename]   glibc renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   glibc renprobe: before every file by its path ok
+[rename]   glibc renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A1 the temporary name is gone ok
+[rename]   glibc renprobe: A1 every file by its path ok
+[rename]   glibc renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 the shared mapping of f12 ok
+[rename]   glibc renprobe: A1 the mapping of big1, pages first touched after the rename ok
+[rename]   glibc renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   glibc renprobe: A2 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A2 the temporary name is gone ok
+[rename]   glibc renprobe: A2 every file by its path ok
+[rename]   glibc renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A2 the shared mapping of f12 ok
+[rename]   glibc renprobe: A3 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A3 the temporary name is gone ok
+[rename]   glibc renprobe: A3 every file by its path ok
+[rename]   glibc renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A3 the shared mapping of f12 ok
+[rename]   glibc renprobe: B a new file renamed over an OPEN file ok
+[rename]   glibc renprobe: B the open descriptor still reads the replaced file ok
+[rename]   glibc renprobe: B the path gives the new file ok
+[rename]   glibc renprobe: B every file by its path ok
+[rename]   glibc renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   glibc renprobe: C unlink of f04 and of the backup ok
+[rename]   glibc renprobe: C every file by its path ok
+[rename]   glibc renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C the shared mapping of f12 ok
+[rename]   glibc renprobe: C the mapping of big1, all of it ok
+[rename]   glibc renprobe: D big0 and big2 mapped, descriptors closed, first page read ok
+[rename]   glibc renprobe: D a new file renamed over the mapped big0 ok
+[rename]   glibc renprobe: D the mapping of the replaced file keeps its bytes ok
+[rename]   glibc renprobe: D the path big0 gives the new file ok
+[rename]   glibc renprobe: D unlink of the mapped big2 ok
+[rename]   glibc renprobe: D the mapping of the unlinked file keeps its bytes ok
+[rename]   glibc renprobe: D every file by its path ok
+[rename]   glibc renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: PASS
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B)
+[rename-disk]   save 2: exit 0 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 2" b="document 
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 0 write-back []
+[rename-disk] a Linux program's save (create; rename over, unlink + rename, unlink) on EuroFS: save 1 ok, save 2 ok, seen by the next boot ok → OK ✓
+[aslr]   exe      first 0x0001204010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000120c00000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01005a024100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x0001382bdd34  varying bits  8  distinct 58/64
+[aslr]   brk      first 0x0001224ab000  varying bits  8  distinct 59/64
+[aslr]   mmap     first 0x00012448e000  varying bits 10  distinct 58/64
+[aslr]   mmapbig  first 0x01005a1d6000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 10 (4 KiB 10, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 427008→427008 · demand-pool 0→0 · frames 410758→410758 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 427008→4270
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[ap-tss] 1 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x76154ac0 own-stack=true → OK ✓ (own TSS, own IST stack)
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total vfs.mount (per-mount): acq=52724 contended=1 (0.00%) spins=179 max-wait=179 try-fail=0 hold-max=30037us hold-avg=13us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=4150013 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1004us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1281044 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1281035 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=1016812 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=1016768 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=648712 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119834us hold-avg=3us
+[lk] boot-total heap (linked-list allocator): acq=313498 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=52818 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=36648 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4618us hold-avg=10us
+[lk] boot-total class Fs: acq=52724 contended=1 (0.00%) spins=179 max-wait=179 try-fail=0 hold-max=30037us hold-avg=13us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=5us hold-avg=1us
+[lk] boot-total class Sched: acq=4150013 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1004us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1281044 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1281035 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total class UnixTable: acq=1016931 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=6us hold-avg=0us
+[lk] boot-total class UnixConn: acq=1016768 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total class Process: acq=719578 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119834us hold-avg=6us
+[lk] boot-total class FsMountTable: acq=52818 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=15994 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=3242060 refills=2510 flushes=2282 parked=160 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+[lk] boot-total longest-held ring3.BG (background processes): acq=648712 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119834us hold-avg=3us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=52724 contended=1 (0.00%) spins=179 max-wait=179 try-fail=0 hold-max=30037us hold-avg=13us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=27474 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=5553us hold-avg=89us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=6492 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=5194us hold-avg=2us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=36648 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4618us hold-avg=10us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=252 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2102us hold-avg=39us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=4150014 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1004us hold-avg=0us
+[lk] boot-total longest-held unix.conn (per-connection): acq=1016768 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1281035 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=66us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15976 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+-- FAILED lines:
+[aslr] 64 starts of a glibc PIE: varying bits mmap 10 (4 KiB 10, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: 
+-- crash lines: 0 lock inversions: 0
+
+== 8 GiB
+[cow] holder counts for 10240 MiB of RAM: 5120 KiB
+[smp] core APIC-id 1 online
+[smp] 1/1 AP core(s) online (BSP = APIC-id 0, 2 cores total)
+[smp] parallel sum 0..2000000 over 2 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=68 worker-B=2 (own run queue)
+[smp] core APIC-id 1 cross-CPU: 5 ping IPIs received, 1 TLB shootdown(s)
+[smp] load-balance: extra task placed on least-loaded core APIC-id 1
+[smp] core APIC-id 1 runs the balanced task: worker-C=1
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 208 (DMA running → audio plays ✓)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 190268 us in the parent, 360 kB of frames
+[memt]   cowfork: info demand pool 1703072 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 7621644 kB, freeram 5244064 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 7621644, MemFree 5244064, MemAvailable 5244064, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 884358 free (was 884358), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+[linux-rand] musl#1 exit=0
+[linux-rand]   musl#1 randprobe: start pid=1 mode=quick
+[linux-rand]   musl#1 randprobe: at_random=dd90bcc4882cc95a04085a13a416e2c3
+[linux-rand]   musl#1 randprobe: stack_guard=dd00bcc4882cc95a fs30=0100000000000000
+[linux-rand]   musl#1 randprobe: getrandom=6cda2fd2bec900213a0e277f469649b21ce6098fff98311aace4dca0b1f3f744 ret=32
+[linux-rand]   musl#1 randprobe: getrandom2=499c5dd21d0ae3f4ab062a83adc003446fe8aa113d154b1bea34375e412af90b
+[linux-rand]   musl#1 randprobe: getrandom_nonblock=30a8f21484c356f5f528f45d61e1c8d4989713a00fe722b6307a8effe0df30fa ret=32
+[linux-rand]   musl#1 randprobe: getrandom_random=c717416ff5612c25aac8ae871e2259f4f540e46669f0506a4b5853b741ccbbde ret=32
+[linux-rand]   musl#1 randprobe: getrandom_insecure=a4fd5a9064dd8380dd13a22980d4ac9c96d4f5f483b80a40ad00c33189be78cc ret=32
+[linux-rand]   musl#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#1 randprobe: short_reads_le_256=0
+[linux-rand]   musl#1 randprobe: urandom=8a640b6831eaa904c7b5662f1f3f68711d1651379df1ae5e65871ce27fa2089a ret=32
+[linux-rand]   musl#1 randprobe: urandom_pread0=96d32b4a7442f2f722c7a379d62d116240fa853709d3b29f136d046cf66bd4a3 again=74025fd7ac01311faeb8d9eb0475b7ac879844a8cfcc03b53c1e1988e7b57af7
+[linux-rand]   musl#1 randprobe: random=a747de27e38c07daeccc7eac3c207e4ea8ebe95d0c4ccc793bedb9fe49c1f3db ret=32
+[linux-rand]   musl#1 randprobe: random_pread0=f6a1d3bb5e495da98c01333d56f88adbee7196e4d552868ded25da9fc7de7034 again=858d9f72da4ce01e037a687c5b8c98b26641d12439682425d86cb0056cf584f4
+[linux-rand]   musl#1 randprobe: PASS
+[linux-rand] musl#2 exit=0
+[linux-rand]   musl#2 randprobe: start pid=1 mode=stat
+[linux-rand]   musl#2 randprobe: at_random=dc2bf63cc363bb1c5938104387c7f9ec
+[linux-rand]   musl#2 randprobe: stack_guard=dc00f63cc363bb1c fs30=0100000000000000
+[linux-rand]   musl#2 randprobe: getrandom=a9bb8527d0591db8816a2f419d94e6f9bd318f14ad3c51171fdba2eb972d9ca8 ret=32
+[linux-rand]   musl#2 randprobe: getrandom2=3dbccb124dcfa82a1984e5be18587aa2b495894385d945e5ff93a7d9e31adedd
+[linux-rand]   musl#2 randprobe: getrandom_nonblock=96193a3753c70d44ae09d2992caa39bfa3240b4dd29504107e61b8d1b850b6ba ret=32
+[linux-rand]   musl#2 randprobe: getrandom_random=b106800e77ef3a7f88b496cf6dca4b26d4bf3842503507d2d81118323f312088 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_insecure=94b4eaee3a6a9813079a30135a6d78cccd6bfc346240ff3fbc6b3e411c5a21e3 ret=32
+[linux-rand]   musl#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   musl#2 randprobe: short_reads_le_256=0
+[linux-rand]   musl#2 randprobe: urandom=2a606342f88046d473b445c309fc1503a3d9081fb4ea9c9759af60d9f6307f82 ret=32
+[linux-rand]   musl#2 randprobe: urandom_pread0=b8d279dfdcfb203c50c38090f376d38f8b0355748fa3e0e23a2320ba6cd592a1 again=d69ff7711bb729d1f85afbd4ec6c16d5370a118f666623f72acc4ec233514029
+[linux-rand]   musl#2 randprobe: random=0ce0dc4539646be5776322e1dcf5aa464cf2c23d0b6bb693dba0bcddd30695da ret=32
+[linux-rand]   musl#2 randprobe: random_pread0=7924bd2f3983c6984cd7680d3f133c2c2bf2b935ebe90d48fea67392396fa584 again=d3239c038e94dcd4608ec692a3d7aeb6476a70bf685fd25b79f1d7c250b325da
+[linux-rand]   musl#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   musl#2 randprobe: stat getrandom bytes=262144 ones=1048019 of 2097152 (off by 557, limit 3622) worst-bit-position-off=393 (limit 1280) chi2=277 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: stat urandom bytes=262144 ones=1049130 of 2097152 (off by 554, limit 3622) worst-bit-position-off=366 (limit 1280) chi2=245 (140..370) blocks16=16384 repeated=0 ok
+[linux-rand]   musl#2 randprobe: PASS
+[linux-rand] glibc#1 exit=0
+[linux-rand]   glibc#1 randprobe: start pid=1 mode=quick
+[linux-rand]   glibc#1 randprobe: at_random=9483620fbffb11cba2d13127e94e7914
+[linux-rand]   glibc#1 randprobe: stack_guard=0083620fbffb11cb fs30=a2d13127e94e7914
+[linux-rand]   glibc#1 randprobe: getrandom=adc17cf50a97ca71fa74bee6e921f6d5ab467c5e687257f33f818a38bb32b9c9 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom2=d0550cce787a211e8f965cc26970b53e92f2335f3406c465fe9670a9186256f9
+[linux-rand]   glibc#1 randprobe: getrandom_nonblock=b50aeaf5405c9ec3af3b0eb3b675df1f85207dfcc4ae52c010b42c497d29963c ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_random=159fedf4d83c820035b19c8327e29c5800cf2e6e631c5728899cc49dde02c1de ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_insecure=326d30c952ab106c4312f9a164738e5a3ba1dc6fe6c2e10fbc56dccf86a65101 ret=32
+[linux-rand]   glibc#1 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#1 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#1 randprobe: urandom=3ae4806baa0ac26aa69d5fd1749a2bd5025b20aea0b071a9ffcdac9c6c6ccf8c ret=32
+[linux-rand]   glibc#1 randprobe: urandom_pread0=b632c694fe320dc6816c5aeb8b28b56ac0b57493b0a70e03d1551c7af6c8b76c again=a5fb465a1e57688051f05a1e58b8dd048c3f33fa8c26b15b1f69c8d447e6ba35
+[linux-rand]   glibc#1 randprobe: random=3b9a7d68a9fe75860d2205bb1e599a51322ed18bd6052b2619d7bf88347d8194 ret=32
+[linux-rand]   glibc#1 randprobe: random_pread0=9b76f3026e07f3a69d529c273327165f00cf1a7d55b93e2ad5aceaa3bd764a19 again=cb24447e7f9eacfae07169373f05c240985ed03ef5def2a36f33e074abbe5ecd
+[linux-rand]   glibc#1 randprobe: PASS
+[linux-rand] glibc#2 exit=0
+[linux-rand]   glibc#2 randprobe: start pid=1 mode=stat
+[linux-rand]   glibc#2 randprobe: at_random=74b1de85278004b7a8d8a680de027798
+[linux-rand]   glibc#2 randprobe: stack_guard=00b1de85278004b7 fs30=a8d8a680de027798
+[linux-rand]   glibc#2 randprobe: getrandom=1af1cefeb6574f3cef776721af6fa2e2c61bfb2a55a1d14eea7058d4a9099075 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom2=187613ea67257c6b05ed8aafe3ff3c5a7af0bced57e2df3b4b2e645d94858b20
+[linux-rand]   glibc#2 randprobe: getrandom_nonblock=517dd2db5fab05544382b131fbb2edbf609a130978a411cc881888db74393665 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_random=b4828e90ddeb2fe8babde6f9d1aa6322c68c3e6ae088c452d11d8067c2e1f496 ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_insecure=67d882b7161206f13e5d7c6a1058a9e3270dcfc56ac442610d801f036c46b5de ret=32
+[linux-rand]   glibc#2 randprobe: getrandom_errors unknown-flag=-1/22 random+insecure=-1/22 bad-pointer=-1/14
+[linux-rand]   glibc#2 randprobe: short_reads_le_256=0
+[linux-rand]   glibc#2 randprobe: urandom=180d3f710c6639639df93f5028674a7f5ada87970d08b3e48427e6298bb1f638 ret=32
+[linux-rand]   glibc#2 randprobe: urandom_pread0=287a27a5e399cbae8f2e0e8a8497f5d1a7dd3e107ce1c3a09f95604762b98e74 again=33c512eb75623bccee19412c7d96f2a61ccc880960b8a89c1aea1e457724bef4
+[linux-rand]   glibc#2 randprobe: random=989e2bd07bc21bcded37c8e1d7b486103b3aa01573e3a56f4220b2a02e6c3322 ret=32
+[linux-rand]   glibc#2 randprobe: random_pread0=e7af5f640186bbd7a1f3ade3859792cc44890c6da5032de1eb5f5bd62a0d36a8 again=4390e6f3059789d3dfe624786f8920db58ab1094d52df3be9b1db43669cef59b
+[linux-rand]   glibc#2 randprobe: stream getrandom short-calls-of-32768=0
+[linux-rand]   glibc#2 randprobe: stat getrandom bytes=1048576 ones=4193228 of 8388608 (off by 1076, limit 7242) worst-bit-position-off=1121 (limit 2560) chi2=277 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: stat urandom bytes=1048576 ones=4192942 of 8388608 (off by 1362, limit 7242) worst-bit-position-off=1246 (limit 2560) chi2=250 (140..370) blocks16=65536 repeated=0 ok
+[linux-rand]   glibc#2 randprobe: PASS
+[linux-rand] musl#closed exit=0
+[linux-rand]   musl#closed randprobe: start pid=1 mode=closed
+[linux-rand]   musl#closed randprobe: closed nonblock ret=-1 errno=11 (EAGAIN) buffer-untouched=1
+[linux-rand]   musl#closed randprobe: closed blocking ret=32 bytes=85af0f75b4632f32ebadf7248f45f0fc9cf281a77ef6ade23e2ab3c27039bbde
+[linux-rand]   musl#closed randprobe: PASS
+[linux-rand] getrandom, /dev/urandom, /dev/random and AT_RANDOM of Linux-ABI programs (2 musl processes, 2 glibc processes): every check of every run passed=true, AT_RANDOM differs per process and is not the old constant=true, stack guard d
+[rename] freestanding exit=0
+[rename]   freestanding renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   freestanding renprobe: setup mappings shared=1 big=0 big-bytes=1060964
+[rename]   freestanding renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   freestanding renprobe: before every file by its path ok
+[rename]   freestanding renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A1 the temporary name is gone ok
+[rename]   freestanding renprobe: A1 every file by its path ok
+[rename]   freestanding renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A1 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   freestanding renprobe: A2 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A2 the temporary name is gone ok
+[rename]   freestanding renprobe: A2 every file by its path ok
+[rename]   freestanding renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A2 the shared mapping of f12 ok
+[rename]   freestanding renprobe: A3 a new file renamed over an earlier file ok
+[rename]   freestanding renprobe: A3 the temporary name is gone ok
+[rename]   freestanding renprobe: A3 every file by its path ok
+[rename]   freestanding renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: A3 the shared mapping of f12 ok
+[rename]   freestanding renprobe: B a new file renamed over an OPEN file ok
+[rename]   freestanding renprobe: B the open descriptor still reads the replaced file ok
+[rename]   freestanding renprobe: B the path gives the new file ok
+[rename]   freestanding renprobe: B every file by its path ok
+[rename]   freestanding renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   freestanding renprobe: C unlink of f04 and of the backup ok
+[rename]   freestanding renprobe: C every file by its path ok
+[rename]   freestanding renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: C the shared mapping of f12 ok
+[rename]   freestanding renprobe: D not run: no mapping of 1 MiB here (errno 12)
+[rename]   freestanding renprobe: D every file by its path ok
+[rename]   freestanding renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   freestanding renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   freestanding renprobe: PASS
+[rename] glibc exit=0
+[rename]   glibc renprobe: setup 16 small files and 3 of 1 MiB written ok
+[rename]   glibc renprobe: setup mappings shared=1 big=1 big-bytes=1060964
+[rename]   glibc renprobe: setup descriptors held on f08..f15, mappings read their files ok
+[rename]   glibc renprobe: before every file by its path ok
+[rename]   glibc renprobe: before every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: before a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A1 the temporary name is gone ok
+[rename]   glibc renprobe: A1 every file by its path ok
+[rename]   glibc renprobe: A1 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A1 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A1 the shared mapping of f12 ok
+[rename]   glibc renprobe: A1 the mapping of big1, pages first touched after the rename ok
+[rename]   glibc renprobe: A1 a new mapping through a held descriptor (f13) ok
+[rename]   glibc renprobe: A2 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A2 the temporary name is gone ok
+[rename]   glibc renprobe: A2 every file by its path ok
+[rename]   glibc renprobe: A2 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A2 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A2 the shared mapping of f12 ok
+[rename]   glibc renprobe: A3 a new file renamed over an earlier file ok
+[rename]   glibc renprobe: A3 the temporary name is gone ok
+[rename]   glibc renprobe: A3 every file by its path ok
+[rename]   glibc renprobe: A3 every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: A3 a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: A3 the shared mapping of f12 ok
+[rename]   glibc renprobe: B a new file renamed over an OPEN file ok
+[rename]   glibc renprobe: B the open descriptor still reads the replaced file ok
+[rename]   glibc renprobe: B the path gives the new file ok
+[rename]   glibc renprobe: B every file by its path ok
+[rename]   glibc renprobe: B every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: B a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C six saves with a backup (unlink, rename, rename) ok
+[rename]   glibc renprobe: C unlink of f04 and of the backup ok
+[rename]   glibc renprobe: C every file by its path ok
+[rename]   glibc renprobe: C every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: C a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: C the shared mapping of f12 ok
+[rename]   glibc renprobe: C the mapping of big1, all of it ok
+[rename]   glibc renprobe: D big0 and big2 mapped, descriptors closed, first page read ok
+[rename]   glibc renprobe: D a new file renamed over the mapped big0 ok
+[rename]   glibc renprobe: D the mapping of the replaced file keeps its bytes ok
+[rename]   glibc renprobe: D the path big0 gives the new file ok
+[rename]   glibc renprobe: D unlink of the mapped big2 ok
+[rename]   glibc renprobe: D the mapping of the unlinked file keeps its bytes ok
+[rename]   glibc renprobe: D every file by its path ok
+[rename]   glibc renprobe: D every held descriptor (bytes, offset, size) ok
+[rename]   glibc renprobe: D a write through a held descriptor lands in its own file ok
+[rename]   glibc renprobe: PASS
+[rename] rename over an existing file, unlink + rename, held descriptors and mappings (freestanding: 39 checks ok, 0 failed; glibc with demand paging: 47 checks ok, 0 failed, lazily filled mapping and step D ran) → OK ✓
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B)
+[rename-disk]   save 2: exit 0 write-back ["[fs] /tmp/rendisk/c.txt -> removed from EuroFS", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 2" b="document 
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 0 write-back []
+[rename-disk] a Linux program's save (create; rename over, unlink + rename, unlink) on EuroFS: save 1 ok, save 2 ok, seen by the next boot ok → OK ✓
+[aslr]   exe      first 0x0001c82010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x0001c8a00000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x01003c6cb100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x0001e0058d34  varying bits  8  distinct 60/64
+[aslr]   brk      first 0x0001ca254000  varying bits  8  distinct 52/64
+[aslr]   mmap     first 0x0001cc32c000  varying bits  9  distinct 59/64
+[aslr]   mmapbig  first 0x01003c87d000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 887296→887296 · demand-pool 0→0 · frames 884358→884358 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 887296→8872
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[ap-tss] 1 AP(s), an NMI to each through the shared IDT's IST gate: cpu1: tr=0x28 nmi-rsp=0x76154ac0 own-stack=true → OK ✓ (own TSS, own IST stack)
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total heap (linked-list allocator): acq=304012 contended=1 (0.00%) spins=29833 max-wait=29833 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=46497 contended=1 (0.00%) spins=77 max-wait=77 try-fail=0 hold-max=20075us hold-avg=16us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=4060128 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1049us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1046976 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1046967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=47us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=729886 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=729842 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=63us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=648371 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=121505us hold-avg=3us
+[lk] boot-total ring3.OPEN_FDS: acq=51448 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3951us hold-avg=11us
+[lk] boot-total vfs.mount_table: acq=46591 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Fs: acq=46497 contended=1 (0.00%) spins=77 max-wait=77 try-fail=0 hold-max=20075us hold-avg=16us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=4us hold-avg=1us
+[lk] boot-total class Sched: acq=4060128 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1049us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1046976 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1046967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=47us hold-avg=0us
+[lk] boot-total class Process: acq=733182 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=121505us hold-avg=6us
+[lk] boot-total class UnixTable: acq=730005 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=5us hold-avg=0us
+[lk] boot-total class UnixConn: acq=729842 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=63us hold-avg=0us
+[lk] boot-total class FsMountTable: acq=46591 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=15926 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=32us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=2877364 refills=2767 flushes=2538 parked=161 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+[lk] boot-total longest-held ring3.BG (background processes): acq=648371 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=121505us hold-avg=3us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=46497 contended=1 (0.00%) spins=77 max-wait=77 try-fail=0 hold-max=20075us hold-avg=16us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=27510 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=7780us hold-avg=88us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=5640 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=6862us hold-avg=9us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=51448 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3951us hold-avg=11us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=213 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2008us hold-avg=42us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=4060128 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1049us hold-avg=0us
+[lk] boot-total longest-held unix.conn (per-connection): acq=729842 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=63us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1046967 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=47us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15908 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=32us hold-avg=0us
+-- FAILED lines:
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BU
+-- crash lines: 0 lock inversions: 0
