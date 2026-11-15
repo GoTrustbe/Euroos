@@ -1,0 +1,43 @@
+# chrome-smoke --only sites3, browser image of 8fe1de9, KVM
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 15.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 9.0), 18 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.5 s, load finished 4.2 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 133 ms; fds: 5 processes, 311 descriptors, 282 objects, 188/4096 file objects; RAM files: 260 files, 12 MiB of bytes, 0 MiB of holes; kernel s
+[gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.5 s, load finished 9.3 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 79 ms; fds: 7 processes, 397 descriptors, 354 objects, 226/4096 file objects; RAM files: 265 files, 12 MiB of bytes
+[gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.4 s, load finished 24.3 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 137 ms; fds: 8 processes, 460 descriptors, 403 objects, 257/4096 file objects; RAM files: 271 files, 13 MiB of by
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False), ('reject all', False), (
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 13.1 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 169 ms; fds: 10 processes, 615 descriptors, 533 objects, 341/4096 file objects; RAM files: 410 files, 16 MiB of bytes, 0 MiB of holes;
+[gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.8 s, load finished 4.3 s later; content 2286 colours, commonest 36%; desktop loop: slowest console answer 165 ms; fds: 9 processes, 565 descriptors, 489 objects, 314/4096 file objects; RAM files: 412 files, 16 MiB of bytes
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.4 s, load finished 3.4 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 116 ms; fds: 13 processes, 730 descriptors, 6
+[gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.8 s, load finished 3.6 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 174 ms; fds: 11 processes, 655 descriptors, 561 objects, 358/4096 file objects; RAM files: 419 files, 16 MiB of bytes, 0 MiB of holes; kernel 
+[gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.2 s, load finished 4.5 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 137 ms; fds: 11 processes, 651 descriptors, 560 objects, 356/4096 file objects; RAM files: 419 files, 17 MiB of byt
+[gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.1 s, load finished 21.7 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 220 ms; fds: 11 processes, 656 descriptors, 562 objects, 360/4096 file objects; RAM files: 419 files, 18 MiB of b
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 15.5 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 183 ms; fds: 11 processes, 698 descriptors, 597 objects, 384/4096 file objects; RAM files: 422 files, 18 MiB of bytes, 0 MiB of holes;
+[gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.2 s, load finished 3.7 s later; content 2286 colours, commonest 36%; desktop loop: slowest console answer 168 ms; fds: 10 processes, 631 descriptors, 537 objects, 352/4096 file objects; RAM files: 421 files, 19 MiB of byte
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.5 s, load finished 2.8 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 221 ms; fds: 13 processes, 724 descriptors, 6
+[gui-smoke] ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.5 s, load finished 2.7 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 176 ms; fds: 10 processes, 631 descriptors, 540 objects, 349/4096 file objects; RAM files: 421 files, 19 MiB of bytes, 0 MiB of holes; kernel 
+[gui-smoke] ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.8 s, load finished 4.5 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 151 ms; fds: 10 processes, 627 descriptors, 539 objects, 347/4096 file objects; RAM files: 421 files, 20 MiB of byt
+[gui-smoke] ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.5 s, load finished 21.1 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 124 ms; fds: 10 processes, 633 descriptors, 542 objects, 351/4096 file objects; RAM files: 421 files, 21 MiB of b
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 15.2 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 125 ms; fds: 11 processes, 696 descriptors, 595 objects, 384/4096 file objects; RAM files: 424 files, 22 MiB of bytes, 0 MiB of holes;
+[gui-smoke] ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.9 s, load finished 4.2 s later; content 2286 colours, commonest 36%; desktop loop: slowest console answer 91 ms; fds: 10 processes, 630 descriptors, 536 objects, 352/4096 file objects; RAM files: 423 files, 22 MiB of bytes
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.4 s, load finished 2.6 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 55 ms; fds: 13 processes, 737 descriptors, 63
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /srv/euroos/sched-runs/runs/sites3
+aborts=0 spawn-refused=0 oom=0 timer-frozen=0 nmi-probes=0 lock-inversions=0 if0-windows=10
+      2 cause=kernel 
+      4 cause=syscall 157 
+      3 cause=syscall 42 
+      1 cause=syscall 9 

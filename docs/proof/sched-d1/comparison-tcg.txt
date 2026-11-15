@@ -1,0 +1,81 @@
+# markers-compare.py: validate-2026-11d tcg-*.markers -> 8fe1de9
+
+== user-smp4-iommu
+== /srv/euroos/sched-runs/base/tcg-user-smp4-iommu.markers  vs  /srv/euroos/sched-runs/out/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp4-noiommu
+== /srv/euroos/sched-runs/base/tcg-user-smp4-noiommu.markers  vs  /srv/euroos/sched-runs/out/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== kernel-smp4
+== /srv/euroos/sched-runs/base/tcg-kernel-smp4.markers  vs  /srv/euroos/sched-runs/out/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== storage-smp4-iommu-1g
+== /srv/euroos/sched-runs/base/tcg-storage-smp4-iommu-1g.markers  vs  /srv/euroos/sched-runs/out/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== combined-smp4-iommu-1g
+== /srv/euroos/sched-runs/base/tcg-combined-smp4-iommu-1g.markers  vs  /srv/euroos/sched-runs/out/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp1-iommu
+== /srv/euroos/sched-runs/base/tcg-user-smp1-iommu.markers  vs  /srv/euroos/sched-runs/out/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp1-noiommu
+== /srv/euroos/sched-runs/base/tcg-user-smp1-noiommu.markers  vs  /srv/euroos/sched-runs/out/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== kernel-smp1
+== /srv/euroos/sched-runs/base/tcg-kernel-smp1.markers  vs  /srv/euroos/sched-runs/out/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== storage-smp1-iommu-1g
+== /srv/euroos/sched-runs/base/tcg-storage-smp1-iommu-1g.markers  vs  /srv/euroos/sched-runs/out/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== combined-smp1-iommu-1g
+== /srv/euroos/sched-runs/base/tcg-combined-smp1-iommu-1g.markers  vs  /srv/euroos/sched-runs/out/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1

@@ -1,0 +1,126 @@
+# keylat: chrome-smoke --only perf, browser image, KVM smp 4 (sched-stat and keylat over the same 30 keys)
+
+== perf-s0
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 360 ms, p90 545 ms, max 1461 ms over 29 keys (30 characters arrived); one screendump takes 21 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Contr
+[scon] [sched-stat] 23.8 s: 2290 ticks (847 with the desktop loop idle), desktop loop halted 6635 ms, 1972 switches/s, 2592 syscalls/s
+[scon] [sched-stat]   t0 (kernel task): ran 48.5 % (8335 ms, in system calls and faults 0 ms), ticks user 0 kernel 432, 0 syscalls/s, 75 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 14.8 % (2549 ms, in system calls and faults 0 ms), ticks user 0 kernel 75, 0 syscalls/s, 36 switches/s
+[scon] [sched-stat]   t68: ran 8.2 % (1403 ms, in system calls and faults 160 ms), ticks user 155 kernel 0, 726 syscalls/s, 26 switches/s
+[scon] [sched-stat]   t86: ran 6.5 % (1119 ms, in system calls and faults 93 ms), ticks user 116 kernel 0, 622 syscalls/s, 33 switches/s
+[scon] [sched-stat]   t31: ran 5.3 % (905 ms, in system calls and faults 202 ms), ticks user 51 kernel 0, 352 syscalls/s, 61 switches/s
+[scon] [sched-stat]   t1: ran 5.2 % (890 ms, in system calls and faults 97 ms), ticks user 48 kernel 0, 341 syscalls/s, 64 switches/s
+[scon] [sched-stat]   t15: ran 4.2 % (718 ms, in system calls and faults 501 ms), ticks user 22 kernel 0, 107 syscalls/s, 36 switches/s
+[scon] [sched-stat]   t135: ran 1.2 % (204 ms, in system calls and faults 12 ms), ticks user 28 kernel 0, 166 syscalls/s, 1 switches/s
+[scon] [sched-stat]   t82: ran 1.1 % (190 ms, in system calls and faults 33 ms), ticks user 16 kernel 0, 96 syscalls/s, 35 switches/s
+[scon] [sched-stat]   t39: ran 0.5 % (83 ms, in system calls and faults 63 ms), ticks user 2 kernel 0, 11 syscalls/s, 34 switches/s
+[scon] [sched-stat]   t116: ran 0.3 % (45 ms, in system calls and faults 3 ms), ticks user 5 kernel 0, 32 syscalls/s, 0 switches/s
+[scon] [sched-stat]   t25: ran 0.2 % (34 ms, in system calls and faults 2 ms), ticks user 5 kernel 0, 4 syscalls/s, 1 switches/s
+[scon] [sched-stat] ring-3 tasks (101 ran): run 6295 ms, of it in system calls and demand faults 1651 ms: kernel share 26 % (ticks: user 474, kernel 0; a system call runs with IF=0 and is never sampled)
+[scon] [t0-yield] kernel/src/main.rs:7528 x643 (27/s)
+[scon] [keylat] last 29 keys (medians, max):
+[scon] [keylat]   ring to X client: median 3527 us, max 77670 us
+[scon] [keylat]   X queue to client read: median 4940 us, max 28987 us
+[scon] [keylat]   read to first draw: median 149731 us, max 785453 us
+[scon] [keylat]   draw to screen: median 20377 us, max 285129 us
+[scon] [keylat]   total: median 196277 us, max 1108094 us
+[scon] [keylat] woken tasks waited for the CPU (ms; wake hand-off off): <0.1 1 <1 108 <5 224 <10 58 <20 33 <50 23 <100 8 >=100 2
+
+== perf-s0b
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 367 ms, p90 727 ms, max 1029 ms over 30 keys (30 characters arrived); one screendump takes 22 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Contr
+[scon] [sched-stat] 21.6 s: 2087 ticks (813 with the desktop loop idle), desktop loop halted 6430 ms, 2203 switches/s, 3139 syscalls/s
+[scon] [sched-stat]   t0 (kernel task): ran 52.9 % (8048 ms, in system calls and faults 0 ms), ticks user 0 kernel 423, 0 syscalls/s, 82 switches/s
+[scon] [sched-stat]   t68: ran 8.1 % (1238 ms, in system calls and faults 138 ms), ticks user 137 kernel 0, 814 syscalls/s, 29 switches/s
+[scon] [sched-stat]   t85: ran 6.7 % (1023 ms, in system calls and faults 90 ms), ticks user 86 kernel 0, 737 syscalls/s, 38 switches/s
+[scon] [sched-stat]   t30: ran 5.6 % (849 ms, in system calls and faults 202 ms), ticks user 41 kernel 0, 402 syscalls/s, 66 switches/s
+[scon] [sched-stat]   t1: ran 5.5 % (836 ms, in system calls and faults 114 ms), ticks user 40 kernel 0, 374 syscalls/s, 68 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 5.2 % (791 ms, in system calls and faults 0 ms), ticks user 0 kernel 50, 0 syscalls/s, 39 switches/s
+[scon] [sched-stat]   t170: ran 2.9 % (434 ms, in system calls and faults 313 ms), ticks user 48 kernel 2, 84 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t15: ran 2.4 % (362 ms, in system calls and faults 162 ms), ticks user 7 kernel 0, 127 syscalls/s, 40 switches/s
+[scon] [sched-stat]   t31: ran 1.4 % (220 ms, in system calls and faults 213 ms), ticks user 1 kernel 19, 5 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t136: ran 1.4 % (213 ms, in system calls and faults 12 ms), ticks user 34 kernel 0, 175 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t82: ran 1.1 % (168 ms, in system calls and faults 28 ms), ticks user 7 kernel 0, 113 syscalls/s, 38 switches/s
+[scon] [sched-stat]   t16: ran 0.3 % (48 ms, in system calls and faults 4 ms), ticks user 6 kernel 0, 15 syscalls/s, 1 switches/s
+[scon] [sched-stat] ring-3 tasks (119 ran): run 6374 ms, of it in system calls and demand faults 1807 ms: kernel share 28 % (ticks: user 465, kernel 21; a system call runs with IF=0 and is never sampled)
+[scon] [t0-yield] kernel/src/main.rs:7528 x683 (32/s)
+[scon] [keylat] last 29 keys (medians, max):
+[scon] [keylat]   ring to X client: median 9855 us, max 637380 us
+[scon] [keylat]   X queue to client read: median 4476 us, max 52826 us
+[scon] [keylat]   read to first draw: median 141921 us, max 713943 us
+[scon] [keylat]   draw to screen: median 19830 us, max 258839 us
+[scon] [keylat]   total: median 192354 us, max 977223 us
+[scon] [keylat] woken tasks waited for the CPU (ms; wake hand-off off): <0.1 4 <1 194 <5 228 <10 43 <20 23 <50 20 <100 5 >=100 3
+
+== perf-s1
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 385 ms, p90 600 ms, max 1052 ms over 30 keys (30 characters arrived); one screendump takes 21 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Contr
+[scon] [sched-stat] 22.2 s: 2150 ticks (883 with the desktop loop idle), desktop loop halted 7086 ms, 2413 switches/s, 2582 syscalls/s
+[scon] [sched-stat]   t0 (kernel task): ran 58.5 % (8821 ms, in system calls and faults 0 ms), ticks user 0 kernel 507, 0 syscalls/s, 111 switches/s
+[scon] [sched-stat]   t67: ran 9.6 % (1441 ms, in system calls and faults 152 ms), ticks user 180 kernel 0, 742 syscalls/s, 26 switches/s
+[scon] [sched-stat]   t84: ran 7.9 % (1199 ms, in system calls and faults 103 ms), ticks user 112 kernel 0, 704 syscalls/s, 38 switches/s
+[scon] [sched-stat]   t30: ran 6.5 % (986 ms, in system calls and faults 220 ms), ticks user 81 kernel 0, 375 syscalls/s, 69 switches/s
+[scon] [sched-stat]   t1: ran 6.5 % (974 ms, in system calls and faults 90 ms), ticks user 56 kernel 0, 361 syscalls/s, 67 switches/s
+[scon] [sched-stat]   t15: ran 2.8 % (418 ms, in system calls and faults 167 ms), ticks user 14 kernel 0, 120 syscalls/s, 43 switches/s
+[scon] [sched-stat]   t82: ran 1.1 % (159 ms, in system calls and faults 30 ms), ticks user 9 kernel 0, 85 syscalls/s, 44 switches/s
+[scon] [sched-stat]   t39: ran 1.0 % (144 ms, in system calls and faults 140 ms), ticks user 1 kernel 0, 2 syscalls/s, 42 switches/s
+[scon] [sched-stat]   t102: ran 0.6 % (95 ms, in system calls and faults 5 ms), ticks user 13 kernel 0, 66 syscalls/s, 1 switches/s
+[scon] [sched-stat]   t25: ran 0.2 % (37 ms, in system calls and faults 3 ms), ticks user 5 kernel 0, 4 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t5: ran 0.2 % (36 ms, in system calls and faults 34 ms), ticks user 0 kernel 0, 1 syscalls/s, 80 switches/s
+[scon] [sched-stat]   t79: ran 0.2 % (30 ms, in system calls and faults 3 ms), ticks user 1 kernel 0, 13 syscalls/s, 2 switches/s
+[scon] [sched-stat] ring-3 tasks (85 ran): run 6264 ms, of it in system calls and demand faults 1488 ms: kernel share 23 % (ticks: user 486, kernel 0; a system call runs with IF=0 and is never sampled)
+[scon] [t0-yield] kernel/src/main.rs:7528 x1129 (51/s)
+[scon] [keylat] last 30 keys (medians, max):
+[scon] [keylat]   ring to X client: median 83 us, max 64361 us
+[scon] [keylat]   X queue to client read: median 4821 us, max 28931 us
+[scon] [keylat]   read to first draw: median 179976 us, max 694643 us
+[scon] [keylat]   draw to screen: median 20952 us, max 107291 us
+[scon] [keylat]   total: median 209919 us, max 732060 us
+[scon] [keylat] woken tasks waited for the CPU (ms; wake hand-off off): <0.1 1 <1 68 <5 130 <10 27 <20 26 <50 15 <100 4 >=100 7
+
+== perf-s2
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 395 ms, p90 646 ms, max 719 ms over 30 keys (30 characters arrived); one screendump takes 19 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Contro
+[scon] [sched-stat] 21.6 s: 2078 ticks (770 with the desktop loop idle), desktop loop halted 6136 ms, 2636 switches/s, 2935 syscalls/s
+[scon] [sched-stat]   t0 (kernel task): ran 44.9 % (6943 ms, in system calls and faults 0 ms), ticks user 0 kernel 457, 0 syscalls/s, 107 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 13.5 % (2084 ms, in system calls and faults 0 ms), ticks user 0 kernel 158, 0 syscalls/s, 47 switches/s
+[scon] [sched-stat]   t62: ran 8.5 % (1313 ms, in system calls and faults 106 ms), ticks user 160 kernel 0, 790 syscalls/s, 33 switches/s
+[scon] [sched-stat]   t80: ran 7.2 % (1113 ms, in system calls and faults 95 ms), ticks user 113 kernel 0, 685 syscalls/s, 50 switches/s
+[scon] [sched-stat]   t31: ran 5.7 % (884 ms, in system calls and faults 200 ms), ticks user 66 kernel 0, 384 syscalls/s, 65 switches/s
+[scon] [sched-stat]   t1: ran 5.4 % (843 ms, in system calls and faults 102 ms), ticks user 58 kernel 0, 366 syscalls/s, 70 switches/s
+[scon] [sched-stat]   t15: ran 2.9 % (449 ms, in system calls and faults 201 ms), ticks user 24 kernel 0, 122 syscalls/s, 44 switches/s
+[scon] [sched-stat]   t103: ran 2.5 % (383 ms, in system calls and faults 271 ms), ticks user 41 kernel 1, 86 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t129: ran 1.4 % (221 ms, in system calls and faults 13 ms), ticks user 28 kernel 0, 178 syscalls/s, 4 switches/s
+[scon] [sched-stat]   t77: ran 1.0 % (156 ms, in system calls and faults 29 ms), ticks user 6 kernel 0, 94 syscalls/s, 45 switches/s
+[scon] [sched-stat]   t30: ran 0.6 % (90 ms, in system calls and faults 88 ms), ticks user 1 kernel 10, 3 syscalls/s, 1 switches/s
+[scon] [sched-stat]   t39: ran 0.5 % (71 ms, in system calls and faults 51 ms), ticks user 3 kernel 0, 12 syscalls/s, 44 switches/s
+[scon] [sched-stat] ring-3 tasks (101 ran): run 6437 ms, of it in system calls and demand faults 1759 ms: kernel share 27 % (ticks: user 531, kernel 11; a system call runs with IF=0 and is never sampled)
+[scon] [t0-yield] kernel/src/main.rs:7528 x1138 (53/s)
+[scon] [keylat] last 30 keys (medians, max):
+[scon] [keylat]   ring to X client: median 86 us, max 28695 us
+[scon] [keylat]   X queue to client read: median 6137 us, max 163031 us
+[scon] [keylat]   read to first draw: median 166846 us, max 322241 us
+[scon] [keylat]   draw to screen: median 20524 us, max 225601 us
+[scon] [keylat]   total: median 211959 us, max 442685 us
+[scon] [keylat] woken tasks waited for the CPU (ms; wake preemption, 9337 reschedule IPIs): <0.1 518 <1 145 <5 73 <10 33 <20 13 <50 18 <100 9 >=100 7
+
+== perf-s2b
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 413 ms, p90 632 ms, max 811 ms over 26 keys (30 characters arrived); one screendump takes 22 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Contro
+[scon] [sched-stat] 28.5 s: 2719 ticks (743 with the desktop loop idle), desktop loop halted 5830 ms, 2026 switches/s, 2231 syscalls/s
+[scon] [sched-stat]   t0 (kernel task): ran 39.1 % (8845 ms, in system calls and faults 0 ms), ticks user 0 kernel 496, 0 syscalls/s, 80 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 14.9 % (3379 ms, in system calls and faults 0 ms), ticks user 0 kernel 120, 0 syscalls/s, 34 switches/s
+[scon] [sched-stat]   t62: ran 6.8 % (1533 ms, in system calls and faults 127 ms), ticks user 177 kernel 0, 563 syscalls/s, 22 switches/s
+[scon] [sched-stat]   t80: ran 5.7 % (1285 ms, in system calls and faults 93 ms), ticks user 78 kernel 0, 513 syscalls/s, 37 switches/s
+[scon] [sched-stat]   t31: ran 5.1 % (1151 ms, in system calls and faults 208 ms), ticks user 54 kernel 0, 289 syscalls/s, 52 switches/s
+[scon] [sched-stat]   t1: ran 4.1 % (918 ms, in system calls and faults 81 ms), ticks user 79 kernel 0, 262 syscalls/s, 52 switches/s
+[scon] [sched-stat]   t142: ran 3.1 % (712 ms, in system calls and faults 0 ms), ticks user 1 kernel 0, 1 syscalls/s, 0 switches/s
+[scon] [sched-stat]   t98: ran 3.1 % (693 ms, in system calls and faults 0 ms), ticks user 1 kernel 0, 1 syscalls/s, 0 switches/s
+[scon] [sched-stat]   t15: ran 2.5 % (572 ms, in system calls and faults 160 ms), ticks user 11 kernel 0, 91 syscalls/s, 33 switches/s
+[scon] [sched-stat]   t141: ran 2.1 % (477 ms, in system calls and faults 344 ms), ticks user 43 kernel 1, 65 syscalls/s, 2 switches/s
+[scon] [sched-stat]   t30: ran 1.3 % (302 ms, in system calls and faults 287 ms), ticks user 2 kernel 17, 2 syscalls/s, 1 switches/s
+[scon] [sched-stat]   t77: ran 1.3 % (289 ms, in system calls and faults 30 ms), ticks user 6 kernel 0, 68 syscalls/s, 33 switches/s
+[scon] [sched-stat] ring-3 tasks (101 ran): run 10401 ms, of it in system calls and demand faults 2059 ms: kernel share 19 % (ticks: user 555, kernel 18; a system call runs with IF=0 and is never sampled)
+[scon] [t0-yield] kernel/src/main.rs:7528 x1071 (38/s)
+[scon] [keylat] last 29 keys (medians, max):
+[scon] [keylat]   ring to X client: median 792 us, max 203403 us
+[scon] [keylat]   X queue to client read: median 6204 us, max 82080 us
+[scon] [keylat]   read to first draw: median 175008 us, max 1891591 us
+[scon] [keylat]   draw to screen: median 20953 us, max 378247 us
+[scon] [keylat]   total: median 219594 us, max 2092919 us
+[scon] [keylat] woken tasks waited for the CPU (ms; wake preemption, 9301 reschedule IPIs): <0.1 529 <1 146 <5 61 <10 27 <20 17 <50 18 <100 5 >=100 3

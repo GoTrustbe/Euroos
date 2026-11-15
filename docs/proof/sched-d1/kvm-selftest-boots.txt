@@ -1,0 +1,235 @@
+# KVM self-test boots of 8fe1de9, R630, 2 vCPU, -nic none, intel-hda (kboot-hda.sh); 1, 2, 4, 8 GiB
+k-1g end=marker after 245s failed-lines=2 crash-lines=0
+k-2g end=marker after 272s failed-lines=0 crash-lines=0
+k-4g end=marker after 281s failed-lines=0 crash-lines=0
+k-8g end=marker after 287s failed-lines=0 crash-lines=0
+
+== 1 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107463 free (was 107463), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 34→34 · process-pool 40960→40960 · demand-pool 0→0 · frames 107463→107463 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 34→34 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 →
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total sched.SCHED (BSP scheduler): acq=2895343 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=115us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1169891 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1169882 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=69us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=790144 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=790100 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3030us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=523256 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=120948us hold-avg=3us
+[lk] boot-total heap (linked-list allocator): acq=253293 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=41257 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=41163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20093us hold-avg=17us
+[lk] boot-total ring3.OPEN_FDS: acq=21623 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3432us hold-avg=8us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=0us hold-avg=0us
+[lk] boot-total class Sched: acq=2895343 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=115us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1169891 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1169882 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=69us hold-avg=0us
+[lk] boot-total class UnixTable: acq=790263 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29us hold-avg=0us
+[lk] boot-total class UnixConn: acq=790100 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3030us hold-avg=0us
+[lk] boot-total class Process: acq=569954 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=120948us hold-avg=8us
+[lk] boot-total class FsMountTable: acq=41257 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Fs: acq=41163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20093us hold-avg=17us
+[lk] boot-total class Net: acq=15915 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=2844374 refills=3084 flushes=2808 parked=157 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held ring3.BG (background processes): acq=523256 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=120948us hold-avg=3us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=41163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20093us hold-avg=17us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=5273 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=7233us hold-avg=13us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=19530 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3874us hold-avg=119us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=21623 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3432us hold-avg=8us
+[lk] boot-total longest-held unix.conn (per-connection): acq=790100 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3030us hold-avg=0us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=272 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1934us hold-avg=32us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=2895343 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=115us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1169882 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=69us hold-avg=0us
+[lk] boot-total longest-held unix.listeners: acq=119 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=29us hold-avg=0us
+-- FAILED lines:
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+-- crash lines: 0 lock inversions: 0
+
+== 2 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 271303 free (was 271303), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 50→50 · process-pool 73728→73728 · demand-pool 0→0 · frames 271303→271303 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 50→50 · thread-kstacks 0→0 · process-pool 73728→73728 · demand-pool 0→0 →
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total vfs.mount (per-mount): acq=50825 contended=1 (0.00%) spins=244 max-wait=244 try-fail=0 hold-max=20048us hold-avg=12us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=6944061 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=865us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1283328 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1283319 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=61us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=941752 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=941708 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=64us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=920095 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119070us hold-avg=2us
+[lk] boot-total heap (linked-list allocator): acq=291947 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=50919 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=21812 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4121us hold-avg=8us
+[lk] boot-total class Fs: acq=50825 contended=1 (0.00%) spins=244 max-wait=244 try-fail=0 hold-max=20048us hold-avg=12us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=0us hold-avg=0us
+[lk] boot-total class Sched: acq=6944061 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=865us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1283328 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1283319 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=61us hold-avg=0us
+[lk] boot-total class Process: acq=966279 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119070us hold-avg=4us
+[lk] boot-total class UnixTable: acq=941871 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=7us hold-avg=0us
+[lk] boot-total class UnixConn: acq=941708 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=64us hold-avg=0us
+[lk] boot-total class FsMountTable: acq=50919 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=15931 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=15us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=3195511 refills=3084 flushes=2808 parked=160 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held ring3.BG (background processes): acq=920095 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=119070us hold-avg=2us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=50825 contended=1 (0.00%) spins=244 max-wait=244 try-fail=0 hold-max=20048us hold-avg=12us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=21812 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4121us hold-avg=8us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=19711 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3888us hold-avg=118us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=4383 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3665us hold-avg=1us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=278 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1861us hold-avg=31us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=6944061 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=865us hold-avg=0us
+[lk] boot-total longest-held unix.conn (per-connection): acq=941708 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=64us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1283319 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=61us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15913 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=15us hold-avg=0us
+-- FAILED lines:
+-- crash lines: 0 lock inversions: 0
+
+== 4 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 192 (DMA running → audio plays ✓)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410813 free (was 410813), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 427008→427008 · demand-pool 0→0 · frames 410813→410813 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 427008→427008 · demand-pool 0→0
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total sched.SCHED (BSP scheduler): acq=7997274 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=614us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=1024512 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=122512us hold-avg=2us
+[lk] boot-total unix.conn_table: acq=733198 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=733154 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3080us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=714107 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=714098 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1056us hold-avg=0us
+[lk] boot-total heap (linked-list allocator): acq=180803 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=23257 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=23163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20318us hold-avg=28us
+[lk] boot-total ring3.OPEN_FDS: acq=21868 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4098us hold-avg=8us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=0us hold-avg=0us
+[lk] boot-total class Sched: acq=7997274 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=614us hold-avg=0us
+[lk] boot-total class Process: acq=1072584 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=122512us hold-avg=4us
+[lk] boot-total class UnixTable: acq=733317 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=6us hold-avg=0us
+[lk] boot-total class UnixConn: acq=733154 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3080us hold-avg=0us
+[lk] boot-total class IpcTable: acq=714107 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=714098 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1056us hold-avg=0us
+[lk] boot-total class FsMountTable: acq=23257 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Fs: acq=23163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20318us hold-avg=28us
+[lk] boot-total class Net: acq=15982 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=18us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=2369158 refills=3039 flushes=2763 parked=162 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held ring3.BG (background processes): acq=1024512 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=122512us hold-avg=2us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=23163 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=20318us hold-avg=28us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=6154 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=6897us hold-avg=7us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=19739 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4387us hold-avg=122us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=21868 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4098us hold-avg=8us
+[lk] boot-total longest-held unix.conn (per-connection): acq=733154 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3080us hold-avg=0us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=311 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1939us hold-avg=28us
+[lk] boot-total longest-held ipc.channel (per-port): acq=714098 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1056us hold-avg=0us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=7997274 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=614us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15964 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=18us hold-avg=0us
+-- FAILED lines:
+-- crash lines: 0 lock inversions: 0
+
+== 8 GiB
+[hda] controller @ 0x81010000 — GCAP=0x4401 (in=4 out=4 bidir=0), STATESTS=0x1
+[hda] codec #0: vendor-id=0x1af40022, 1 function-group(s) from node 1
+[hda] output path: DAC=node 2, pin=node 3
+[hda] stream started (tag 1, 48 kHz/16-bit/stereo, 32 KiB) — SDCTL=0x2 SDSTS=0x20 LPIB 0 → 196 (DMA running → audio plays ✓)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓
+[fdsem] descriptor tables per process: glibc with fork PASS 49/49 (exit 171, want 171) | musl libc PASS 25/25 (exit 171, want 171) | background path with fork and exec PASS 16/16 (ended=true) | tables/descriptors/objects 2/6/0 -> 2/6/0 → OK ✓
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 884413 free (was 884413), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 7 modes → OK ✓
+[churn-fork] 6 fork/exit/wait cycles: exit=66 (want 66) · every-child-reaped-with-its-status=true · tasks 54→54 · process-pool 887296→887296 · demand-pool 0→0 · frames 884413→884413 → OK ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 54→54 · thread-kstacks 0→0 · process-pool 887296→887296 · demand-pool 0→0
+[syncsock] socketpair end + memfd to a fork child over SCM_RIGHTS, sender closes, 4-byte signals both ways: 17 of 17 -> PASS (exit 77) → OK ✓
+[pcmch] ALSA device with 6, 1 and 2 channels, downmix to the stereo ring: GPCM: 15 of 15 -> PASS (exit 77); ring: 6 ch -> (7899, -5556) want (7899, -5556) 1 ch -> (5000, 5000) want (5000, 5000) 2 ch -> (1234, -4321) want (1234, -4321) → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[hda] out of memory: 11 frames needed, 0 free — audio skipped
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[lk] boot-total vfs.mount (per-mount): acq=47425 contended=1 (0.00%) spins=53 max-wait=53 try-fail=0 hold-max=30019us hold-avg=14us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=7910810 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=104us hold-avg=0us
+[lk] boot-total ipc.channel_table: acq=1131134 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ipc.channel (per-port): acq=1131125 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=71us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=1020451 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=196527us hold-avg=2us
+[lk] boot-total unix.conn_table: acq=765600 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=765556 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=551us hold-avg=0us
+[lk] boot-total heap (linked-list allocator): acq=277459 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total vfs.mount_table: acq=47519 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=21869 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3725us hold-avg=9us
+[lk] boot-total class Fs: acq=47425 contended=1 (0.00%) spins=53 max-wait=53 try-fail=0 hold-max=30019us hold-avg=14us
+[lk] boot-total class TestInner: acq=5 contended=1 (20.00%) spins=0 max-wait=0 try-fail=1 hold-max=0us hold-avg=0us
+[lk] boot-total class Sched: acq=7910810 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=104us hold-avg=0us
+[lk] boot-total class IpcTable: acq=1131134 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class IpcChannel: acq=1131125 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=71us hold-avg=0us
+[lk] boot-total class Process: acq=1068501 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=196527us hold-avg=5us
+[lk] boot-total class UnixTable: acq=765719 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=17us hold-avg=0us
+[lk] boot-total class UnixConn: acq=765556 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=551us hold-avg=0us
+[lk] boot-total class FsMountTable: acq=47519 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class Net: acq=15878 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=17us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=2974268 refills=2833 flushes=2557 parked=161 KiB
+[lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+[lk] boot-total longest-held ring3.BG (background processes): acq=1020451 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=196527us hold-avg=2us
+[lk] boot-total longest-held vfs.mount (per-mount): acq=47425 contended=1 (0.00%) spins=53 max-wait=53 try-fail=0 hold-max=30019us hold-avg=14us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=19693 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4032us hold-avg=122us
+[lk] boot-total longest-held ring3.FUTEX_QUEUE: acq=6247 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3840us hold-avg=2us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=21869 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=3725us hold-avg=9us
+[lk] boot-total longest-held ring3.CHILD_EXITS: acq=241 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2256us hold-avg=40us
+[lk] boot-total longest-held unix.conn (per-connection): acq=765556 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=551us hold-avg=0us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=7910810 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=104us hold-avg=0us
+[lk] boot-total longest-held ipc.channel (per-port): acq=1131125 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=71us hold-avg=0us
+[lk] boot-total longest-held net.UNIX_FDS: acq=15860 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=17us hold-avg=0us
+-- FAILED lines:
+-- crash lines: 0 lock inversions: 0

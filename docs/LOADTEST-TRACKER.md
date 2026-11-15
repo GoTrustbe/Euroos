@@ -2157,6 +2157,13 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   window drew.
 - **Next:** the browser runs on one CPU (ring 3 only on the BSP), with thirty ready threads and 10 ms slices.
 
+- **Scheduler round (sched-d1, `proof/sched-d1/`):** S1 (time-based fairness) and S2 (reschedule IPI, wake
+  preemption; `wakeyield` removed). `[wakelat]` wake to run p50 3.07 -> 0.05 ms, p99 3.12 -> 0.10 ms. In the browser
+  (chrome-smoke perf, smp 4) woken tasks within 1 ms: 24 % and 43 % (S0) -> 81 %. The key to screen did not move:
+  harness median 360/367 ms (S0), 385 ms (S1), 395 and 413 ms (S2), 370 ms (S8) beside 334 ms (S0) in the same hour; about 10 % slower; kernel `total` 192-212 ms in every build. One CPU for
+  ring 3 is still the limit; the kernel share of the browser's run time is 23-28 % (S7 gate: below 40 %, S7 not pulled
+  before S5). Still OPEN.
+
 ### BUG-147 — live tasks come close to the 256 slots in one session ✅ FIXED
 - **Status:**   FIXED (`95a3bf2`, test `e5990d5`) · **Severity:** MEDIUM
 - **Measured:** after BUG-140 no slot is held by an ended task, but the browser keeps up to 16 processes (back/forward
@@ -2267,6 +2274,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Seen again (validation of `feature/chrome-final`):** once in 60 fresh browser starts (start 3 of the first 20-start run) and not in the
   other 59, nor in 3 two-hour sessions' worth of rounds so far. The new FROZEN line shows `ISR` bit 0x4B only (the handler that prints it),
   `IRR` 0x20 pending, PPR 0x40, `2315 Mcycles` since the last tick taken, `halted-at rip=0x100802fe9db` in user mode with IF=true.
+
+- **Attribution and fix of H1 (sched-d1, `proof/sched-d1/`):** `[if0-window]` names the cause of every tick that
+  comes 50 ms or more late (KVM steal time, a disk wait with IF=0, demand faults, the system call). With a throttled
+  disk (`throttling.iops-total=4`) H1 is reproduced on demand: `[if0-window] 239 ms cause=blk`, `if0test` 241 ms.
+  S8: a disk wait with IF=0 waits for the MSI-X completion with interrupts on (the caller keeps the CPU): longest
+  window 10 ms. Host steal (H2) was 0 ms in every window seen. Other windows found by the same lines: BUG-230.
+  In the 2 h soak of `8fe1de9`: 16 windows of 50 ms or more, causes `syscall` 12 and `kernel` 4, none `blk` or `steal`,
+  0 FROZEN. The rarer FROZEN of the browser starts was not seen in this round; the attribution is in place for the next one.
 
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
@@ -2461,7 +2476,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   hostname, user and EuroID back from the write-back cache: true), after `Installation FAILED: the disk refused 40867
   write(s) of the boot files (first at sector 0)`.
 
-### BUG-192 — in the soak, `churn proc 8` takes 32 to 44 s about every 27 minutes ⬜ OPEN
+### BUG-192 — in the soak, `churn proc 8` takes 32 to 44 s about every 27 minutes ✅ FIXED (sched-d1 S1)
 - **Status:**   OPEN · **Severity:** LOW (the soak finished clean: 3 513 commands ok, no fault, heap +0.23 kB/min)
 - **Actual:**   R630 soak of the final self-test image, 125 min: `churn proc 8` median 6.6 s as before (6.2 s), but four rounds took
   32.5, 32.4, 34.1 and 31.6 s (t = 1 359, 2 986, 4 717, 6 360 s) and the slowest was 43.9 s; the soak of `f98da76` (validate-2026-11c)
@@ -2478,6 +2493,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   do not wait for a lock: the task that runs them gets about 2 % of its CPU while five runnable tasks share it.
   Next: where t7 to t11 run (all on the BSP?) and why the scheduler gives the desktop task no larger share; the 27-minute
   period was not seen in this shorter run.
+
+- **Fixed in sched-d1 (S1, `proof/sched-d1/`):** the five tasks were the counter demo tasks of the self-test image
+  (ring-3 spinners at nice 0, `sched-stat`: ten equal user-mode spinners with the five hogs of `hogtest`); the desktop
+  task lost because vruntime counted turns and a yield gave away the rest of the tick. `[fair]` (hogtest 5 + churn proc 8,
+  self-test image, 16 GiB, 30 rounds): S0 median 7.1 s, task 0 share 9 %; S1 median 1.5 s (smp 1 and smp 4), share
+  43-47 % (the share against ten busy nice-0 tasks; entitled 48 %). Public image: 28 % -> median 53 %. `churn proc 8`
+  alone on the self-test image: 3.9 s -> 1.1 s. Soak 2 h (`8fe1de9`, same options as before): 11 729 commands ok, `churn proc` median 1.3 s, **worst 3.3 s** (was 6.6 s and
+  43.9 s), one desktop gap over 10 s. FIXED by S1.
 
 ### BUG-200 — the install check "after remount" on virtio disk 0 reads the write-back cache, not the disk ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (since BUG-191 a refused write or flush fails the install before this check)
@@ -2503,5 +2526,21 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   overflow of task 4. Not related to the fix190 changes (BUG-157 probe of `feature/chrome-mem2`).
 - **Next:**     bound the scan by the top of the interrupted task stack (or the end of its page), with a test that probes a
   task whose RSP is within 2 KiB of its stack top.
+
+### BUG-230 — a system call `madvise` (28) runs 80-130 ms with IF=0 at boot of the self-test image ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (no tick, no input for that long; the same class as BUG-182)
+- **Actual:**   `[if0-window] 113 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms ...) task 30`, eleven windows of
+  81-131 ms in one boot of the self-test image (16 GiB, KVM), all ending in user mode after `madvise`; three more of
+  110-218 ms with task 0 in kernel code (`cause=kernel`). Seen with the `[if0-window]` lines of sched-d1 (`proof/sched-d1/if0-window.txt`).
+- **Next:**     which advice and range (likely MADV_DONTNEED over a large range, cleared with IF=0); clear in chunks with a
+  tick allowed in between, or out of the system call.
+
+### BUG-231 — the inbound HTTP hammer of the soak is 11 times slower after S1/S2 (p50 5.4 -> 60.9 ms) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (0 errors, but half the requests in the same 2 h)
+- **Actual:**   loadtest soak of `feature/sched-d1` `8fe1de9` (16 GiB, 4 vCPU, hammer 4): 440 262 requests, p50 60.9 ms, p99 362.9 ms;
+  validate-2026-11d 827 487 requests, p50 5.4 ms, p99 161.8 ms. The console commands of the same soak ran 3.3 times as many
+  per hour (churn proc 6.6 -> 1.3 s), with the desktop task at nice -10 (`proof/sched-d1/r630-soak-summary.txt`).
+- **Next:**     `sched-stat` during a hammer window: which task serves the requests, its share and its wake waits; whether the
+  network worker (nice -5) and the httpd path need a weight of their own or the desktop task's console work should not run at -10.
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->
