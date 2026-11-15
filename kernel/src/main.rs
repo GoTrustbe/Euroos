@@ -1187,6 +1187,18 @@ fn main() -> Status {
             f
         }
     };
+    // BUG-250: the live RAM root is held once in the kernel heap (a copy of it
+    // costs a 1 GiB guest 8 MiB of the kernel memory its RAM files live in).
+    if !on_disk {
+        let alive = rootblk::ram_backing_bytes();
+        let root = (2048 * 4096) as usize;
+        serial_println!(
+            "[root-heap] RAM root of {} KiB: {} KiB of RAM-root backing alive in the kernel heap → {}",
+            root / 1024,
+            alive / 1024,
+            if alive <= root { "OK (held once) ✓" } else { "FAILED (the RAM root is held more than once)" }
+        );
+    }
 
     boottime::phase("storage-rootfs");
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.

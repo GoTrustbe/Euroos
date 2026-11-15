@@ -130,7 +130,16 @@ pub(crate) enum Backend {
     Ahci(usize),
 }
 
-#[derive(Clone)]
+/// Bytes of RAM-root backing alive in the kernel heap (every `RootBlk` in RAM
+/// mode, clones included): `[root-heap]` (BUG-250) checks that the live RAM
+/// root is held once.
+static RAM_BYTES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Bytes of RAM-root backing alive in the kernel heap (see `RAM_BYTES`).
+pub fn ram_backing_bytes() -> usize {
+    RAM_BYTES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct RootBlk {
     data: Vec<u8>,   // RAM backing (empty in disk mode)
     part_start: u64, // disk mode: first 512-byte sector of the EuroFS partition
@@ -142,8 +151,22 @@ pub struct RootBlk {
     direct: bool,
 }
 
+impl Clone for RootBlk {
+    fn clone(&self) -> Self {
+        RAM_BYTES.fetch_add(self.data.len(), core::sync::atomic::Ordering::Relaxed);
+        Self { data: self.data.clone(), part_start: self.part_start, on_disk: self.on_disk, blocks: self.blocks, backend: self.backend, direct: self.direct }
+    }
+}
+
+impl Drop for RootBlk {
+    fn drop(&mut self) {
+        RAM_BYTES.fetch_sub(self.data.len(), core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl RootBlk {
     pub fn ram(blocks: u64) -> Self {
+        RAM_BYTES.fetch_add((blocks * BS as u64) as usize, core::sync::atomic::Ordering::Relaxed);
         Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, backend: Backend::Virtio(0), direct: false }
     }
     pub fn disk(part_start: u64, blocks: u64) -> Self {
