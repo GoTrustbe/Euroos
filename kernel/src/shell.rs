@@ -544,7 +544,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 if q { "quiet" } else { "everything" }, muted / 1024),
                 format!(
                 "desktop loop output: {} ({} KiB sent through the queue, {waiting} bytes waiting, queue full {full} times)",
-                if d { "deferred" } else { "direct" }, sent / 1024)]
+                if d { "deferred" } else { "direct" }, sent / 1024),
+                {
+                    let (busy, load_us) = crate::serial::take_tx_stats();
+                    format!("[serial-tx] sender found the transmitter busy {busy} times (slept, did not poll); longest load with interrupts off {load_us} us since the last look")
+                }]
         }
         "ramfiles" => {
             let out = crate::ring3::ram_files_census();
