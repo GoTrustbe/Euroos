@@ -173,8 +173,14 @@ pub fn parallel(n: usize, f: Arc<dyn Fn(usize) + Send + Sync>) -> usize {
 /// general kernel code), and one AP steals a job queued behind a busy one.
 pub fn selftest() {
     let aps = online_aps();
-    if aps.is_empty() || !ACCEPTING.load(Ordering::Acquire) {
+    if aps.is_empty() {
         crate::serial_println!("[kwork] no APs accepting work (single core) — per-CPU queues idle");
+        return;
+    }
+    if !ACCEPTING.load(Ordering::Acquire) {
+        // BUG-271: APs are online but `smp::init` never opened their queues (the
+        // demo workers did not park): the per-CPU queues sit idle on every boot.
+        crate::serial_println!("[kwork] {} AP(s) online but not accepting work (demo workers not parked) -> FAILED", aps.len());
         return;
     }
     let hits = Arc::new(AtomicU64::new(0));
