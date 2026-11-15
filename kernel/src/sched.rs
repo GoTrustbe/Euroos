@@ -203,7 +203,25 @@ pub fn driver_stats() -> (alloc::vec::Vec<usize>, u64) {
 
 /// The nice value a turn of task `idx` is charged at: its own, except for a
 /// driver past its budget in this window.
+/// BUG-274: the desktop loop hosts an X client's window (chrome) and spends its
+/// passes serving it (events, the hosted window, compositing its frames).
+static DESK_HOSTS_CLIENT: AtomicBool = AtomicBool::new(false);
+
+/// Set by the desktop loop once a pass: does a hosted X client window exist?
+pub fn desktop_hosts_client(on: bool) {
+    DESK_HOSTS_CLIENT.store(on, Ordering::Relaxed);
+}
+
 fn charge_nice(s: &Scheduler, idx: usize) -> i8 {
+    // BUG-274: S1 gave the desktop loop the weight of nice -10 so that its own
+    // work (the shell, menus, a foreground command: BUG-192) keeps 65 % against
+    // busy tasks. While it hosts an X client the busy tasks are mostly that
+    // client, and the loop's passes are work for it: at 9x the client's weight
+    // the loop took 47 % of the CPU while chrome waited for its turn, and key to
+    // screen went from 320 to 400 ms. Then it is charged like its client.
+    if idx == 0 && DESK_HOSTS_CLIENT.load(Ordering::Relaxed) {
+        return 0;
+    }
     let n = s.tasks[idx].nice;
     if n >= DRIVER_OVER_NICE {
         return n;

@@ -7635,6 +7635,7 @@ fn main() -> Status {
         loop_iters += 1;
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         serial::kick();
+        sched::desktop_hosts_client(xserver::front_window_size().is_some());
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();
