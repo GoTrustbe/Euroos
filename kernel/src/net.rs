@@ -136,10 +136,17 @@ pub fn may_sleep() -> bool {
         && (x86_64::instructions::interrupts::are_enabled() || crate::ring3::net_may_block())
 }
 
-/// Should a wait for a frame sleep instead of spin? Only when the frames come
-/// from the userspace driver and the context may sleep.
+/// Should a wait for a frame sleep instead of spin? Whenever the context may
+/// sleep, whatever drives the NIC. BUG-182: with the in-kernel NIC this used to
+/// be "never" (only the userspace driver's frames needed the CPU given away), so
+/// a system call spun with interrupts off for the whole bound of its wait: the
+/// first connect of chrome held the CPU 1.0 s without a timer tick when its
+/// SYN-ACK was late (`[timer-probe] FROZEN`), an ARP lookup 1 s, a receive up to
+/// 3 s. A sleeping waiter still polls the ring itself (`rx_route`) after
+/// `RX_BURST` tries a tick; the receive interrupt wakes it early
+/// (`wake_rx_waiters_irq`).
 fn rx_should_block() -> bool {
-    crate::nic::frames_from_process() && may_sleep()
+    may_sleep()
 }
 
 /// Sleep one tick (or until the driver delivers a frame), keeping the caller's
@@ -171,6 +178,21 @@ pub fn wake_rx_waiters() {
             RX_WAITING.fetch_sub(1, Ordering::AcqRel);
             RX_WAKEUPS.fetch_add(1, Ordering::Relaxed);
             crate::sched::unblock_any(t);
+        }
+    }
+}
+
+/// [`wake_rx_waiters`] from the receive interrupt of the in-kernel NIC: never
+/// waits for the scheduler lock (a waiter it cannot wake now ends its one-tick
+/// sleep on its own).
+fn wake_rx_waiters_irq() {
+    if RX_WAITING.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    for t in 0..crate::sched::MAX_TASKS {
+        if RX_WAITER[t].load(Ordering::Acquire) && crate::sched::try_unblock_any(t) && RX_WAITER[t].swap(false, Ordering::AcqRel) {
+            RX_WAITING.fetch_sub(1, Ordering::AcqRel);
+            RX_WAKEUPS.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -545,6 +567,7 @@ pub fn rx_route_irq() {
     // The network worker handles what came in, also while task 0 is busy.
     if moved > 0 {
         worker::kick_irq();
+        wake_rx_waiters_irq();
     }
 }
 
