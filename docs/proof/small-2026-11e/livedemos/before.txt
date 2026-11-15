@@ -1,0 +1,15 @@
+## ld1 (before)
+[glibc] ggtk live on task 28
+[app]   ggtk: error while loading shared libraries: libc.so.6: failed to map segment from shared object
+mm-fail lines: 112
+## ldb2 (before)
+[glibc] ggtk live on task 28
+[app]   ggtk: error while loading shared libraries: libgmodule-2.0.so.0: failed to map segment from shared object
+mm-fail lines: 112
+## ldb3 (before)
+[glibc] ggtk live on task 28
+[app]   ggtk: error while loading shared libraries: libgdk-3.so.0: failed to map segment from shared object
+mm-fail lines: 112
+## ldb4 (before)
+[glibc] ggtk live on task 28
+mm-fail lines: 114

@@ -404,6 +404,36 @@ pub static NMI_TEST: core::sync::atomic::AtomicBool = core::sync::atomic::Atomic
 pub static NMI_TEST_RSP: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 pub static NMI_TEST_TR: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
+/// How far the NMI probe may scan the interrupted stack upward from `rsp`: the
+/// most 2 KiB, never past `stack_top` when the interrupted stack is known, and
+/// when it is not (boot stack, AP stack, an IST stack) never out of the page
+/// `rsp` is in (BUG-202).
+pub fn nmi_scan_end(rsp: u64, stack_top: Option<u64>) -> u64 {
+    let wanted = rsp.saturating_add(0x800);
+    let limit = match stack_top {
+        Some(top) if top > rsp => top,
+        // The page of RSP is mapped (the CPU was just using it); the next one may be a guard.
+        _ => (rsp | 0xFFF).saturating_add(1),
+    };
+    wanted.min(limit) & !0x7
+}
+
+/// **[nmi-bound]** (BUG-202): the probe scan of a stack with RSP within 2 KiB of
+/// its top, and of an unknown stack near the end of a page, stays inside.
+pub fn selftest_nmi_bound() {
+    let top = 0x80_0001_9000u64; // page aligned top, like task 4 of the report
+    let rsp = top - 0x1e0; // 0x...18e20 in the report: 480 bytes below the top
+    let a = nmi_scan_end(rsp, Some(top));
+    let b = nmi_scan_end(top - 0x40, Some(top));
+    let c = nmi_scan_end(0x7000_0fe0, None); // unknown stack, 32 bytes below a page end
+    let d = nmi_scan_end(0x7000_0100, Some(0x7000_4000)); // far from the top: the full 2 KiB
+    let ok = a <= top && b <= top && c <= 0x7000_1000 && d == 0x7000_0900 && a > rsp && c > 0x7000_0fe0;
+    crate::serial_println!(
+        "[nmi-bound] probe scan end: near top {a:#x} (top {top:#x}), unknown stack near page end {c:#x}, far from top {d:#x} → {}",
+        if ok { "OK (scan stays inside the stack) ✓" } else { "FAILED (scan reads past the top)" }
+    );
+}
+
 extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     if NMI_TEST.load(Ordering::Acquire) {
         let cpu = (crate::apic::lapic_id() & 7) as usize;
@@ -500,7 +530,9 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     serial_println!("[nmi] stack scan (return addresses):");
     let mut printed = 0;
     let mut p = rsp & !0x7;
-    let end = (rsp + 0x800) & !0x7; // scan 2 KiB of the interrupted stack
+    // At most 2 KiB, and never past the top of the interrupted stack: above it lies the
+    // guard page of the next stack, and reading that is a stack overflow to the #PF handler (BUG-202).
+    let end = nmi_scan_end(rsp, crate::sched::task_stack_top_containing(rsp));
     // A ring-3 stack holds no kernel return addresses (and is user memory).
     while cs & 3 != 3 && p < end && printed < 24 {
         let v = unsafe { (p as *const u64).read_volatile() };

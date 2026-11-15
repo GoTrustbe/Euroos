@@ -1635,6 +1635,29 @@ fn init_stack(index: usize, entry: extern "C" fn() -> !) -> u64 {
     ctx
 }
 
+/// The top of the scheduler-task kernel stack that contains `addr`, or `None` when `addr`
+/// is on no such stack (boot stack, AP stacks, IST stacks, a ring-3 address). Lock-free:
+/// the NMI probe calls it (BUG-202) and the scheduler lock may be what is wedged.
+pub fn task_stack_top_containing(addr: u64) -> Option<u64> {
+    for i in 0..MAX_TASKS {
+        let g = TASK_GUARDED_TOP[i].load(Ordering::Acquire);
+        if g != 0 {
+            let top = g & !0xF;
+            if addr >= top - STACK_SIZE as u64 && addr <= top {
+                return Some(top);
+            }
+        }
+    }
+    // SAFETY: only the address of the static is taken.
+    let base = unsafe { core::ptr::addr_of!(STACKS) as u64 };
+    let end = base + (MAX_TASKS * STACK_SIZE) as u64;
+    if addr >= base && addr < end {
+        let slot = (addr - base) / STACK_SIZE as u64;
+        return Some((base + (slot + 1) * STACK_SIZE as u64) & !0xF);
+    }
+    None
+}
+
 /// The stack bottom (canary location / lowest address) of task slot `index` —
 /// guarded base if set, otherwise the BSS `STACKS`. Must match `init_stack`.
 fn task_stack_bottom(index: usize) -> u64 {

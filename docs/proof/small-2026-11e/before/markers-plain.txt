@@ -1,0 +1,5 @@
+[q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-pc'=true user='anke'=true euroid-store=true → OK (bootable + provisioned installation from own media; boots standalone)
+[randid] dhcp xid: FAILED (draws repeat or equal an old constant: 4e555021 4e555021)
+[randid] smb client challenge: FAILED (draws repeat or carry the fixed tail: [a5, df, f8, 6a, 45, 55, 52, 4f] [a5, df, f8, 6a, 45, 55, 52, 4f])
+[wizard-targets] virtio disk 1 (2048 MiB) is read-only: selectable=true → FAILED (a disk that refuses writes is offered)
+[nmi-bound] probe scan end: near top 0x8000019620 (top 0x8000019000), unknown stack near page end 0x700017e0, far from top 0x70000900 → FAILED (scan reads past the top)

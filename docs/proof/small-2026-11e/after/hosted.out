@@ -1,0 +1,11 @@
+[hosted-end] desktop=True
+[hosted-end] PASS: first start: launched in a window
+[hosted-end] PASS: the app ended after its key
+[hosted-end] PASS: kernel closed the frame: '[hosted] the app ended by itself'
+[hosted-end] PASS: second start NOT refused
+[hosted-end] PASS: second start: launched in a window
+    [app] installed hello-x11 v1.0.0 (app, caps 'console,file,proc', profile utility, display x11)
+    [app] app install: hello-x11 v1.0.0 installed (app; caps 'console,file,proc'; profile utility; display x11) — verified: Ed25519 + sha256
+    [e2e] $ app run hello-x11
+    [hosted] the app ended by itself: frame closed, free RAM 1224 -> 1608 MiB
+    [e2e] $ app run hello-x11

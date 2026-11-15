@@ -235,7 +235,7 @@ pub fn install_to_disk(dev: usize, cfg: &Config, progress: &dyn Fn(&str)) -> boo
         |lba, bytes| crate::virtio_blk::write_io_dev(dev, lba, bytes),
         |lba, buf| crate::virtio_blk::read_io_dev(dev, lba, buf),
         || crate::virtio_blk::flush_dev(dev),
-        |first, blocks| crate::rootblk::RootBlk::disk_on(dev, first, blocks),
+        |first, blocks| crate::rootblk::RootBlk::disk_on_direct(dev, first, blocks),
     )
 }
 

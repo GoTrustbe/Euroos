@@ -1,0 +1,4 @@
+[q1x3] target virtio disk 0: installation FAILED: the partition table or the ESP did not read back
+[q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-pc'=true user='anke'=true euroid-store=true → FAILED
+[randid] dhcp xid: FAILED (draws repeat or equal an old constant: 4e555021 4e555021)
+[randid] smb client challenge: FAILED (draws repeat or carry the fixed tail: [59, e1, f8, 6a, 45, 55, 52, 4f] [59, e1, f8, 6a, 45, 55, 52, 4f])

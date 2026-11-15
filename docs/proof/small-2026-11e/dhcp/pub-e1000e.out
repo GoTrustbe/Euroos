@@ -1,0 +1,11 @@
+pub-e1000e (e1000e) end=timeout
+[net] NIC: e1000 left to the userspace driver e1000d (net.driver=user); network bring-up and the network tests run after the scheduler starts ([udrv-*], [net-late])
+[linux-abi]   Linux uname.sysname = [linux-abi] Linux[linux-abi]   release = [linux-abi] 6.6.0-euroos[linux-abi] 
+[linux-abi]   [linux-abi] /etc/os-release[linux-abi] : [linux-abi] NAME="EuroOS"[linux-abi] 
+[linux-abi]     [f] [linux-abi] os-release[linux-abi] 
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net] network over e1000d: DHCP + ARP done, netstack configured
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+[boot-time] desktop after 961 ms since kernel entry (HPET, release build): firmware-exit=146 cpu-mm=9 storage-rootfs=50 storage-checks=8 identity-config=54 net=27 userland-demos=193 sched-init=12 acpi-pci-tpm=49 smp-timer=47 devic
+[udrv-net]   DHCP ACK: lease 10.0.2.15 (router 10.0.2.2, dns 10.0.2.3, 86400s)
+[udrv-net] network over e1000d: DHCP + ARP done, netstack configured

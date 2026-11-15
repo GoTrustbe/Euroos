@@ -767,7 +767,7 @@ pub fn late_bring_up() {
 
     let any = Ipv4Addr([0, 0, 0, 0]);
     let bcast = Ipv4Addr([255, 255, 255, 255]);
-    let xid = 0x4C41_5445u32; // "LATE"
+    let xid = dhcp_xid();
     let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
         let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
         let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
@@ -789,7 +789,7 @@ pub fn late_bring_up() {
                                 let dport = u16::from_be_bytes([ipl[2], ipl[3]]);
                                 if dport == 68 {
                                     if let Some(info) = dhcp::parse(&ipl[8..]) {
-                                        if info.msg_type == want {
+                                        if info.msg_type == want && info.answers(xid, my_mac.0) {
                                             return Some(info);
                                         }
                                     }
@@ -1958,6 +1958,37 @@ fn rdrand64() -> Option<u64> {
 /// rather than return anything else; safe with interrupts off.
 pub fn rand_u64() -> u64 {
     u64::from_le_bytes(crate::entropy::draw_wait::<8>())
+}
+
+/// Transaction id of one DHCP exchange (BUG-086): 32 bits from the CSPRNG per
+/// exchange. A reply is accepted only with this id and our own hardware address
+/// (`DhcpInfo::answers`), so a host that answers faster than the DHCP server has
+/// to guess the id instead of reading it from a constant.
+pub fn dhcp_xid() -> u32 {
+    rand_u64() as u32
+}
+
+/// **[randid]** (BUG-086, BUG-087): the DHCP transaction id and the SMB client
+/// challenge must be fresh per use. Sixteen draws of each: all different, and
+/// none the constant or the RTC-derived pattern the senders used before.
+#[cfg(feature = "selftest")]
+pub fn selftest_randid() {
+    const OLD_XIDS: [u32; 5] = [0x4505_5201, 0x4E55_5021, 0x4C41_5445, 0x4555_0001, 0x4555_0002];
+    let xids: alloc::vec::Vec<u32> = (0..16).map(|_| dhcp_xid()).collect();
+    let chs: alloc::vec::Vec<[u8; 8]> = (0..16).map(|_| crate::smbfs::client_challenge()).collect();
+    let distinct = |n: usize, f: &dyn Fn(usize, usize) -> bool| (0..n).all(|i| (i + 1..n).all(|j| !f(i, j)));
+    let xid_ok = distinct(16, &|i, j| xids[i] == xids[j]) && xids.iter().all(|x| !OLD_XIDS.contains(x));
+    let ch_ok = distinct(16, &|i, j| chs[i] == chs[j]) && chs.iter().all(|c| c[4..] != *b"EURO".as_slice());
+    if xid_ok {
+        crate::serial_println!("[randid] dhcp xid: 16 draws, all different, none of the old constants ✓");
+    } else {
+        crate::serial_println!("[randid] dhcp xid: FAILED (draws repeat or equal an old constant: {:08x} {:08x})", xids[0], xids[1]);
+    }
+    if ch_ok {
+        crate::serial_println!("[randid] smb client challenge: 16 draws, all different, no RTC/EURO pattern ✓");
+    } else {
+        crate::serial_println!("[randid] smb client challenge: FAILED (draws repeat or carry the fixed tail: {:02x?} {:02x?})", chs[0], chs[1]);
+    }
 }
 
 /// 32 random bytes for a TLS key/nonce. `domain` separates

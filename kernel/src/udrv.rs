@@ -951,7 +951,7 @@ fn net_roundtrip(falloc: &mut FrameAllocator, xid: u32, probe: bool) -> (bool, V
                             if let Ok((iph, ipl)) = Ipv4Header::parse(p) {
                                 if iph.protocol == Protocol::Udp && ipl.len() > 8 && u16::from_be_bytes([ipl[2], ipl[3]]) == 68 {
                                     if let Some(info) = dhcp::parse(&ipl[8..]) {
-                                        if info.msg_type == want {
+                                        if info.msg_type == want && info.answers(xid, my_mac.0) {
                                             return Some(info);
                                         }
                                     }
@@ -1104,7 +1104,7 @@ pub fn boot(falloc: &mut FrameAllocator) {
         mac_str(),
         crate::nic::kind()
     );
-    let (ok, lines) = net_roundtrip(falloc, 0x4555_0001, cfg!(feature = "selftest"));
+    let (ok, lines) = net_roundtrip(falloc, crate::net::dhcp_xid(), cfg!(feature = "selftest"));
     for l in &lines {
         crate::serial_println!("[udrv-net]   {l}");
     }
@@ -1276,7 +1276,7 @@ fn selftest_crash(falloc: &mut FrameAllocator, pid: u64) {
         crate::serial_println!("[udrv-crash] driver died={died}, sends refused while dead={link_was_down}, came back={back} → FAILED");
         return;
     }
-    let (ok, lines) = net_roundtrip(falloc, 0x4555_0002, true);
+    let (ok, lines) = net_roundtrip(falloc, crate::net::dhcp_xid(), true);
     for l in &lines {
         crate::serial_println!("[udrv-crash]   {l}");
     }
