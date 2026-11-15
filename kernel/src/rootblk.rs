@@ -165,6 +165,17 @@ impl Drop for RootBlk {
 }
 
 impl RootBlk {
+    /// The device for the root file system's block cache. A disk device is
+    /// copied (the copy holds no data); a RAM root is moved out and `self` keeps
+    /// an empty one: a copy of a RAM root is a second 8 MiB in the kernel heap
+    /// for as long as the boot runs (BUG-250).
+    pub fn for_cache(&mut self) -> Self {
+        if self.on_disk {
+            self.clone()
+        } else {
+            core::mem::replace(self, Self::ram(0))
+        }
+    }
     pub fn ram(blocks: u64) -> Self {
         RAM_BYTES.fetch_add((blocks * BS as u64) as usize, core::sync::atomic::Ordering::Relaxed);
         Self { data: vec![0u8; (blocks * BS as u64) as usize], part_start: 0, on_disk: false, blocks, backend: Backend::Virtio(0), direct: false }

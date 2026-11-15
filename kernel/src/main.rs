@@ -1166,7 +1166,7 @@ fn main() -> Status {
             // BUG-220: a disk root that can be neither mounted nor formatted (a read-only disk 0 after a
             // failed install, a disk that refuses writes) is not a reason to panic: the boot goes on
             // with a RAM root and says so, on the serial line and on the screen.
-            let mut f = match EuroFs::format(BlockCache::new(rootdev.clone(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch()) {
+            let mut f = match EuroFs::format(BlockCache::new(rootdev.for_cache(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch()) {
                 Ok(f) => f,
                 Err(e) if on_disk => {
                     serial_println!("[euro] the install on disk 0 failed or the disk root cannot be formatted ({e:?}): booting a RAM root, nothing is saved on the disk");
@@ -1174,7 +1174,7 @@ fn main() -> Status {
                     on_disk = false;
                     rootdev = rootblk::RootBlk::ram(2048);
                     rootdev.register_as_boot_disk();
-                    EuroFs::format(BlockCache::new(rootdev.clone(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
+                    EuroFs::format(BlockCache::new(rootdev.for_cache(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
                         .expect("EuroFS format (RAM root)")
                 }
                 Err(e) => panic!("EuroFS format: {e:?}"),
