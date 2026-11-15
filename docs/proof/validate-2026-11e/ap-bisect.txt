@@ -1,0 +1,31 @@
+# [smp] lines of self-test images at -smp 2 (kj/: boots stopped at the J1 line); images: y1 eedd5bf, y2 875eb9e (S3), y3 0018719 (S5), y4 80c028d (S6)
+== y1
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=776 worker-B=781 (own run queue)
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+== y2
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=767 worker-B=778 (own run queue)
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+== y3
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=702 worker-B=761 (own run queue)
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+== y4
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] J1: demo workers parked on 0/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+
+# the same lines from the full serial logs: validate-2026-11d, d2 9cbebe8, 48dfd05 (KVM 4 GiB boots, 2 vCPU)
+== ../final-runs/kvm/k-4g.log
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=375 worker-B=416 (own run queue)
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+== ../d2-runs/kvm/b8/k-4g.log
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] J1: demo workers parked on 0/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+== kvm/v1/k-4g.log
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] J1: demo workers parked on 0/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[kwork] no APs accepting work (single core) — per-CPU queues idle
+
+# public images: [smp] AP line: download 2026.11.14 and 48dfd05
+runs/gs-rel/serial.log:[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+runs/gs-pub/serial.log:[smp] 0/3 AP(s) idle in hlt, taking kernel work from per-CPU queues

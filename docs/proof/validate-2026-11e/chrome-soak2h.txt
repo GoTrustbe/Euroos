@@ -1,0 +1,26 @@
+# chrome-mem-soak.py --no-video --free-video-seconds 0 --hours 2 --local-video-dir (vp9.webm: VP9+Opus) --local-seconds 60, browser image of 48dfd05, 8 GiB, 2 vCPU, KVM, CPUs 0-1 (SMT siblings idle)
+[chrome-mem-soak] round 1 done after 650 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 41); files 43 MiB; demand 2498 MiB free
+[chrome-smoke] running - 19/19 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 2 done after 1326 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 49); files 43 MiB; demand 2498 MiB free
+[chrome-smoke] running - 35/35 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 3 done after 1994 s: heap 123 MiB used, 388 MiB free; big 36/475 MiB (peak 49); files 43 MiB; demand 2490 MiB free
+[chrome-smoke] running - 51/51 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 4 done after 2665 s: heap 123 MiB used, 388 MiB free; big 40/471 MiB (peak 49); files 43 MiB; demand 2481 MiB free
+[chrome-smoke] running - 67/67 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 5 done after 3339 s: heap 123 MiB used, 388 MiB free; big 40/471 MiB (peak 49); files 43 MiB; demand 2477 MiB free
+[chrome-smoke] running - 83/83 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 6 done after 4010 s: heap 124 MiB used, 387 MiB free; big 36/475 MiB (peak 49); files 43 MiB; demand 2478 MiB free
+[chrome-smoke] running - 99/99 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 7 done after 4679 s: heap 124 MiB used, 387 MiB free; big 38/473 MiB (peak 49); files 43 MiB; demand 2476 MiB free
+[chrome-smoke] running - 115/115 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 8 done after 5348 s: heap 124 MiB used, 387 MiB free; big 39/472 MiB (peak 49); files 43 MiB; demand 2466 MiB free
+[chrome-smoke] running - 131/131 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 9 done after 6028 s: heap 124 MiB used, 387 MiB free; big 41/470 MiB (peak 49); files 43 MiB; demand 2466 MiB free
+[chrome-smoke] running - 147/147 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 10 done after 6706 s: heap 124 MiB used, 387 MiB free; big 42/469 MiB (peak 49); files 43 MiB; demand 2468 MiB free
+[chrome-smoke] running - 163/163 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] round 11 done after 7372 s: heap 124 MiB used, 387 MiB free; big 41/470 MiB (peak 49); files 43 MiB; demand 2466 MiB free
+[chrome-smoke] running - 179/179 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-smoke] PASS - 179/179 steps ok, report and screenshots in /dev/shm/val/soak2h
+[chrome-mem-soak] PASS: 11 rounds in 7373 s
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0 mm-fail=708

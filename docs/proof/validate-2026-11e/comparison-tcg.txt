@@ -1,0 +1,172 @@
+# markers-compare.py: validate-2026-11d tcg-*.markers -> 48dfd05
+
+== user-smp4-iommu
+== base/tcg-user-smp4-iommu.markers  vs  /srv/euroos/val-runs/out/final/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 10
+   ap-parity: OKx1
+   ap-user: FAILx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== user-smp4-noiommu
+== base/tcg-user-smp4-noiommu.markers  vs  /srv/euroos/val-runs/out/final/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 10
+   ap-parity: OKx1
+   ap-user: FAILx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== kernel-smp4
+== base/tcg-kernel-smp4.markers  vs  /srv/euroos/val-runs/out/final/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 10
+   ap-parity: OKx1
+   ap-user: FAILx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== storage-smp4-iommu-1g
+== base/tcg-storage-smp4-iommu-1g.markers  vs  /srv/euroos/val-runs/out/final/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 10
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== combined-smp4-iommu-1g
+== base/tcg-combined-smp4-iommu-1g.markers  vs  /srv/euroos/val-runs/out/final/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 10
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== user-smp1-iommu
+== base/tcg-user-smp1-iommu.markers  vs  /srv/euroos/val-runs/out/final/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-user: SKIPx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== user-smp1-noiommu
+== base/tcg-user-smp1-noiommu.markers  vs  /srv/euroos/val-runs/out/final/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-user: SKIPx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== kernel-smp1
+== base/tcg-kernel-smp1.markers  vs  /srv/euroos/val-runs/out/final/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-user: SKIPx1
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== storage-smp1-iommu-1g
+== base/tcg-storage-smp1-iommu-1g.markers  vs  /srv/euroos/val-runs/out/final/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-user: SKIPx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== combined-smp1-iommu-1g
+== base/tcg-combined-smp1-iommu-1g.markers  vs  /srv/euroos/val-runs/out/final/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 1
+   churn-forkthreads: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-user: SKIPx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1

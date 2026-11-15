@@ -1,0 +1,29 @@
+# keylat: chrome-smoke --only perf (30 keys), 3ecde9e (b0) against 48dfd05 (v1), four runs at a time, tmpfs work directories, smp 4 and smp 2
+## round 1
+== kv1-b0-4 median 281 ms  t4   kern   faults faults-total=478889
+== kv1-v1-4 median 376 ms  t4   kern   faults faults-total=515294
+== kv1-b0-2 median 300 ms  t4   kern   faults faults-total=502735
+== kv1-v1-2 median 374 ms  t4   kern   faults faults-total=521223
+## round 2
+== kv2-b0-4 median 326 ms  t4   kern   faults faults-total=488501
+== kv2-v1-4 median 391 ms  t4   kern   faults faults-total=555293
+== kv2-b0-2 median 326 ms  t4   kern   faults faults-total=536266
+## round 3
+== kv3-b0-4 median 260 ms  t4   kern   faults faults-total=461280
+== kv3-v1-4 median 363 ms  t4   kern   faults faults-total=515003
+== kv3-b0-2 median 327 ms  t4   kern   faults faults-total=516898
+== kv3-v1-2 median 341 ms  t4   kern   faults faults-total=536992
+## quiet round 1 (soak and browser session finished)
+== kq1-b0-4 median 327 ms  t4   kern   faults faults-total=490320
+== kq1-v1-4 median 410 ms  t4   kern   faults faults-total=546729
+== kq1-b0-2 median 289 ms  t4   kern   faults faults-total=529273
+## quiet round 2 (soak and browser session finished)
+== kq2-b0-4 median 307 ms  t4   kern   faults faults-total=496108
+== kq2-v1-4 median 409 ms  t4   kern   faults faults-total=597226
+== kq2-b0-2 median 278 ms  t4   kern   faults faults-total=485283
+== kq2-v1-2 median 416 ms  t4   kern   faults faults-total=561516
+## quiet round 3 (soak and browser session finished)
+== kq3-b0-4 median 327 ms  t4   kern   faults faults-total=523855
+== kq3-v1-4 median 428 ms  t4   kern   faults faults-total=588678
+== kq3-b0-2 median 322 ms  t4   kern   faults faults-total=532948
+== kq3-v1-2 median 398 ms  t4   kern   faults faults-total=533388

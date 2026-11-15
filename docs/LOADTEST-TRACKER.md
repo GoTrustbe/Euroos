@@ -2372,6 +2372,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   In the 2 h soak of `8fe1de9`: 16 windows of 50 ms or more, causes `syscall` 12 and `kernel` 4, none `blk` or `steal`,
   0 FROZEN. The rarer FROZEN of the browser starts was not seen in this round; the attribution is in place for the next one.
 
+- **Seen again (validation of `48dfd05`, 2026-11e):** 3 times in about 55 browser boots of `48dfd05` (start 19 of the first 20-start run, `kv2-v1-2`,
+  `kq1-v1-2`, the last one on a quiet machine) and in none of the about 30 of the release code `3ecde9e` on the same host and hours. Every time the same
+  signature: right after `TCP established to 142.250.x.x:443` the first connect of the browser, `[if0-window] 1009-1036 ms cause=syscall 42` (connect), `2214-2280 Mcycles`
+  without a tick, `IRR 0x20`, `halted-at rip=0x100...9db`. The `[if0-window]` attribution of sched-d1 names the system call: `connect` keeps the CPU with
+  interrupts off for about a second. `proof/validate-2026-11e/chrome-starts20.txt`, `starts19-frozen.txt`.
+
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
 - **Actual:**   `do_glibc_fork` returned from four places (no thread kernel stack, no task slot, no frame for the copy of
@@ -2664,6 +2670,71 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   until the next tick, at every frame. Userspace drivers now run at nice -15 (`sched::DRIVER_NICE`). Busy desktop (15 rounds
   of `spawn worker 32` + `churn proc 8`), 4 hammer clients: p50 79.5 -> 4.7 ms (S0 5.6 ms), `[fair]` worst 1.5/1.6 s,
   `[wakelat]` p50 0.05 ms unchanged.
+
+### BUG-270 — the q35 `power` leg fails since BUG-251: the shutdown lines never reach the serial port
+- **Status:**   OPEN (found by the validation of `48dfd05`) · **Severity:** LOW (the guest does power off; the proof lines are lost, and so is any other line queued at that moment)
+- **Actual:**   `run-metal-matrix.py --legs power` (KVM, restrict=on, 1 vCPU, self-test image): `FAIL: power button did not trigger a clean ACPI S5 shutdown`
+  (q35 matrix 12/13). QEMU exits by itself within 1 s of `system_powerdown`, but `[acpi] power button pressed` and `[power] shutting
+  down system` are not in the serial log.
+- **Reproduce:** `EK_RESTRICT=1 EK_ACCEL=kvm python3 scripts/run-metal-matrix.py IMG.raw --legs power` (or `proof/validate-2026-11e/drivers/power-direct.sh`).
+  Bisect over self-test images, 2 boots each: `c70dddf` (BUG-250) PASS 2/2, `0cf75e6` (BUG-251) FAIL 2/2, `f42be2a` FAIL 2/2,
+  `48dfd05` FAIL 3/3; `9cbebe8` (d2) PASS 2/2, validate-2026-11d PASS 2/2.
+- **Cause:**    (code reading, not fixed) since `0cf75e6` every print goes into the deferred queue once the desktop loop runs;
+  `power::shutdown()` prints and then writes PM1a without calling `serial::emergency()`, which the comment of `serial.rs` says a
+  shutdown does. The guest is off before the sender task has a turn; the queue is lost.
+- **Proof:**    `proof/validate-2026-11e/power-leg.txt`.
+
+### BUG-271 — the APs no longer take kernel work: `[smp] J1: demo workers parked on 0/N`, `[kwork] no APs accepting work` (since S6)
+- **Status:**   OPEN · **Severity:** MEDIUM (self-test coverage of `[kwork]` and the per-CPU scheduler is gone; per-CPU kernel work queues idle on every release image)
+- **Actual:**   self-test image, KVM or TCG, smp >= 2: `[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0`, `[smp] J1: demo
+  workers parked on 0/1 AP(s)`, `[kwork] no APs accepting work (single core) — per-CPU queues idle` (validate-2026-11d: worker-A=375,
+  parked 1/1, `[kwork] ... 2 ok -> OK`). Public image, 4 vCPU: `[smp] 0/3 AP(s) idle in hlt, taking kernel work from per-CPU queues`
+  (download 2026.11.14: 3/3). `markers-compare` lists it as "only in base: kwork OK", not as worse.
+- **Reproduce:** boot any image with `-smp 2` and grep `J1: demo` (about 5 s). Bisect, self-test images at `-smp 2`:
+  `eedd5bf`, `875eb9e` (S3), `0018719` (S5) parked 1/1; **`80c028d` (S6, tickless AP idle) 0/1**; `9cbebe8`, `72976f7`, `48dfd05` 0/1;
+  integration `b6eb05d` 3/3 on the public image.
+- **Cause:**    (code reading) `sched::ap_park_demo_workers` sets `AP_PARK` and waits up to 500 x 1 ms for `AP_PARKED`; with the
+  tickless AP idle of S6 the AP never gets a tick to switch to the demo worker that would park itself, so the wait runs out and
+  `kwork::start_accepting()` is never called. Same cause as BUG-272.
+- **Proof:**    `proof/validate-2026-11e/ap-bisect.txt`.
+
+### BUG-272 — boot time +0.3 to 0.4 s: the `smp-timer` phase takes 551 ms instead of 47 ms (since S6)
+- **Status:**   OPEN · **Severity:** MEDIUM (the release criterion of a median of at most 2.8 s to the desktop is missed)
+- **Actual:**   `boot-time.py`, public image, KVM, pin 38-39, 10 pairs alternating on a quiet machine: 48dfd05 median 3.00 s
+  (2.70-3.39), download 2026.11.14 median 2.68 s (2.23-2.93). `[boot-time] phase smp-timer: 551 ms (at 989 ms)` against 47 ms.
+- **Cause:**    the 500 ms wait of BUG-271 (`ap_park_demo_workers` runs out on every boot with APs).
+- **Proof:**    `proof/validate-2026-11e/boot-time.txt`.
+
+### BUG-273 — the self-test syscall fuzzer runs into its 30 s limit on a loaded host: `[fuzz] ... kernel-survived=false` (D2 family, not validate-2026-11d)
+- **Status:**   OPEN · **Severity:** LOW (self-test marker; the process hit `[glibc] TIMEOUT waiting for the process to exit`, the kernel is fine)
+- **Actual:**   100 short boots of the self-test image of `48dfd05` (6 lanes of 2 vCPU beside other guests): 108 boots, **21 with `[fuzz] ... FAILED`**,
+  no other FAILED line. gfuzz stops after 15 000 of 20 000 calls at the run deadline (3 000 ticks, `exit=0 (want 171)`); its deterministic
+  sequence reaches the 5 000-call mark at tick ~4 100-4 350 instead of ~3 250.
+- **Reproduce:** `scripts/short-boots.sh IMG OUT TAG 16 CPUS kvm host "[fuzz] Linux-ABI" 600 2` in lanes of two CPUs whose SMT siblings run other guests.
+  Same hour, same lanes, images side by side (fuzz FAILED / boots): validate-2026-11d **0/88**; `9cbebe8` (d2) 3/72; `f42be2a` 3/60;
+  `0cf75e6` 0/44; `c70dddf` 3/44; `48dfd05` 14/88. With a busy loop (not a guest) on every SMT sibling nothing fails in 16 boots per image. Quiet machine: all pass (the KVM boots of the matrix).
+- **Cause:**    not found; the D2 family needs a larger share of the 30 s than validate-2026-11d when a core is shared. The limit is
+  in `run_glibc` (`ring3.rs`), the test is `main.rs` `[fuzz]`.
+- **Proof:**    `proof/validate-2026-11e/short-boots.txt`, `fuzz-ab.txt`.
+
+### BUG-274 — key to screen on the browser 80 to 120 ms slower than the release (3ecde9e), the kernel own numbers are not
+- **Status:**   OPEN (needs a decision) · **Severity:** MEDIUM
+- **Actual:**   `chrome-smoke --only perf` (30 keys), release code `3ecde9e` against `48dfd05`, same host, tmpfs work directories, four runs at a time, medians:
+  quiet machine (3 rounds) smp 4: 327 / 307 / 327 ms against 410 / 409 / 428 ms; smp 2: 289 / 278 / 322 against (FROZEN) / 416 / 398;
+  with other load (3 rounds): smp 4 281 / 326 / 260 against 376 / 391 / 363; smp 2 300 / 326 / 327 against 374 / (FROZEN) / 341.
+  `48dfd05` is slower in every pair, by 60 to 130 ms (about 30 %). The d2-reg proof compared with sched-d1 (360-396 against 363-386 ms), not with the release.
+- **Reading:**  the kernel own `[keylat]` lines do not show it: median total per key 40-43 ms on `48dfd05` against 48-49 ms on `3ecde9e`
+  (ring to client 0.1 ms, read to first draw 29 against 35 ms, draw to screen 5 against 7 ms). The extra time is between the
+  kernel "draw to screen" and what the screendump of the harness sees. d2-reg blamed the desktop-sized chrome of BUG-240; that does not
+  explain it, since read to first draw got shorter. Cause not found.
+- **Reproduce:** `scripts/chrome-smoke.py --only perf --kvm --smp 4 --workdir /dev/shm/X` with the browser image (`ui.tour=off;update.check=off`), both images at the same time (`proof/validate-2026-11e/drivers/klatq.sh`).
+- **Proof:**    `proof/validate-2026-11e/keylat.txt`.
+
+### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once
+- **Status:**   OPEN (intermittent) · **Severity:** LOW
+- **Actual:**   TCG matrix of `48dfd05`, `combined-smp1-iommu-1g`: `[churn-forkthreads] ... (no result line) (exit 0)` FAILED (validate-2026-11d: 40 of 40 rounds PASS).
+  The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. Not reproduced, so no cause.
+- **Proof:**    `proof/validate-2026-11e/tcg-summary.txt`, `comparison-tcg.txt`.
 
 ### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ✅ FIXED
 - **Status:**   FIXED (`c70dddf`; test `8a6f333`) · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)

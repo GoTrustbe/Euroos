@@ -1,0 +1,22 @@
+# power leg alone (pw.sh: run-metal-matrix.py --legs power, KVM, restrict=on), one line per boot
+v1-1 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [euroupdate] no slot partitions on the boot disk: automatic updates are off (install EuroOS to enable them)
+v1-2 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [euroupdate] no slot partitions on the boot disk: automatic updates are off (install EuroOS to enable them)
+v1-3 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [desk] #3 the desktop loop was away 110 ms: its pass took 90 ms (network and DevTools 0, devices and windows 0, menus 0,
+d11-1 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+d11-2 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+b8-1 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+b8-2 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+x1-1 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+x1-2 |  [power] PASS ✓ | serial: power-button-pressed=1 shutting-down=1 last line: [power] shutting down system (ACPI S5, PM1a=0x2000 from \_S5-AML)...
+x2-1 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [   80.00 INF] [init] service ticker stopped — no restart (ceiling/policy)
+x2-2 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [desk] #4 the desktop loop was away 170 ms: its pass took 160 ms (network and DevTools 0, devices and windows 0, menus 0
+x3-1 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [desk] #4 the desktop loop was away 210 ms: its pass took 200 ms (network and DevTools 0, devices and windows 0, menus 0
+x3-2 |  [power] FAIL: power button did not trigger a clean ACPI S5 shutdown | serial: power-button-pressed=0 shutting-down=0 last line: [desk] #4 the desktop loop was away 229 ms: its pass took 219 ms (network and DevTools 0, devices and windows 0, menus 0
+
+# power-direct.sh: boot 1 vCPU 512 MiB, wait for the desktop loop, 8 s, QMP system_powerdown, 40 s for QEMU to exit
+== v1 (48dfd05 self-test)
+qemu exited by itself after ~1s
+lines in serial log: power-button-pressed=0 shutting-down=0
+== d11 (validate-2026-11d self-test)
+qemu exited by itself after ~1s
+lines in serial log: power-button-pressed=1 shutting-down=1

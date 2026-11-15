@@ -1,0 +1,7 @@
+# wmvideo.py: Wikimedia Big Buck Bunny 480p VP9 + 6-channel Opus, 2 x 90 s, --smp 2, 6 GiB
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 15.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.8), 18 colours in the content area
+[gui-smoke] ok   site video-play: round 1: 90 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm after 1.0 s; picture: 22 of 22 c
+[gui-smoke] ok   site video-play: round 2: 90 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm after 0.6 s; picture: 22 of 22 c
+[chrome-smoke] PASS - 4/4 steps ok, report and screenshots in /dev/shm/val/wm480
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0

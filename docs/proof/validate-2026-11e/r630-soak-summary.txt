@@ -1,0 +1,45 @@
+# Soak, R630 KVM, self-test image of 48dfd05: loadtest.py --kvm --smp 4 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hostfwd ... --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 7500; pinned to CPUs 30-33, their SMT siblings (10-13) idle
+48dfd05: 10668 commands over 125.0 min = 5119 per hour; by status {'ok': 10668}
+   churn proc    n=1367  median     1370 ms  mean     1297 ms  p10      777  p90     1617  max     3345
+   spawn worker  n=1025  median      645 ms  mean      647 ms  p10      588  p90      708  max      860
+   churn fs      n= 342  median     9365 ms  mean     9380 ms  p10     8343  p90    10304  max    11505
+   churn net     n= 341  median       76 ms  mean       87 ms  p10       55  p90      116  max      939
+   sha256sum     n=1025  median      421 ms  mean      428 ms  p10      362  p90      472  max     2368
+   fetch         n=1025  median      292 ms  mean      284 ms  p10      116  p90      446  max      583
+d2-reg-r2: 10866 commands over 125.0 min = 5217 per hour; by status {'ok': 10866}
+   churn proc    n=1392  median     1514 ms  mean     1482 ms  p10      857  p90     1939  max     4017
+   spawn worker  n=1044  median      594 ms  mean      607 ms  p10      560  p90      679  max      856
+   churn fs      n= 348  median     8276 ms  mean     8452 ms  p10     7863  p90     9245  max    10605
+   churn net     n= 348  median       70 ms  mean       97 ms  p10       49  p90      107  max     1027
+   sha256sum     n=1044  median      420 ms  mean      416 ms  p10      350  p90      460  max     1502
+   fetch         n=1044  median      272 ms  mean      280 ms  p10      112  p90      451  max      585
+validate-2026-11d: 3513 commands over 125.0 min = 1686 per hour; by status {'ok': 3513}
+   churn proc    n= 450  median     6564 ms  mean    12529 ms  p10     4557  p90    33040  max    43942
+   spawn worker  n= 337  median      398 ms  mean      401 ms  p10      329  p90      474  max      566
+   churn fs      n= 112  median     9726 ms  mean     9922 ms  p10     8720  p90    11461  max    14565
+   churn net     n= 112  median      112 ms  mean      351 ms  p10       93  p90      835  max     2688
+   sha256sum     n= 337  median      501 ms  mean      494 ms  p10      421  p90      559  max      661
+   fetch         n= 337  median      253 ms  mean      253 ms  p10      174  p90      293  max     1083
+serial: loadtest-serial-20261115-132223.log 12494614 bytes
+  'GLIBC-DYNAMIC-OK': 24
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  'WATCHDOG TRIPPED': 0
+  'refused to free': 0
+  'timer-probe] FROZEN': 0
+  '[spawn-refused]': 3
+  '[oom]': 3
+  'LOCK ORDER INVERSION': 0
+  '200M spins': 0
+  'FROZEN': 0
+  [churn-proc] verdict lines: 7866, with FAILED: 0
+--- end of the harness output:
+  [10600/?] ✓ ok          8099ms t= 7459.8s  churn fs 1
+  [10625/?] ✓ ok           566ms t= 7471.0s  spawn worker 32
+  [10650/?] ✓ ok            19ms t= 7488.6s  rm /home/euro/lt-soak/big1
+[loadtest] completed clean · results → /srv/euroos/val-runs/soakv2/w/loadtest-results.csv · ltstat samples → /srv/euroos/val-runs/soakv2/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 735589, "err": 0, "p50_ms": 5.5, "p99_ms": 439.3, "max_ms": 6421.9, "busy_windows": 342, "busy_s": 3208, "busy": {"ok": 331549, "err": 0, "p50_ms": 5.5, "p99_ms": 428.3, "max_ms": 2461.3}, "idle": {"ok": 404040, "err": 0, "p50_ms": 5.6, "p99_ms": 453.6, "max_ms": 6421.9}}
+[loadtest] host HTTP server served 1230 request(s)
