@@ -684,8 +684,9 @@ fn tagged(tag: &str, outp: &str, key: &str) -> Vec<String> {
 
 /// `[tlb-smp]` (S4): gtlbsmp. Its reader thread runs on an AP and reads one page
 /// while the main thread (BSP) gives that address new contents: MADV_DONTNEED,
-/// an mmap(MAP_FIXED) over it, a copy-on-write break after a fork. The reader
-/// must see the new contents within 1 ms, never the old frame (`tlbsmp [rounds]`).
+/// an mmap(MAP_FIXED) over it, a copy-on-write break after a fork. Once that call
+/// has returned the reader must never read the old contents through a stale TLB
+/// entry; a page fault on the way is fine (`tlbsmp [rounds]`).
 pub fn tlbsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let rounds: u64 = arg.trim().parse().unwrap_or(1000).clamp(1, 100_000);
     let aps = crate::apuser::user_aps();
@@ -711,7 +712,7 @@ pub fn tlbsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let mut out = tagged("[tlb-smp]", &outp, "TLBSMP mode=");
     let pass = exit == 77 && outp.lines().any(|l| l == "TLBSMP all ok");
     out.push(format!(
-        "[tlb-smp] reader on cpu{}, {rounds} rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit {exit} → {}",
+        "[tlb-smp] reader on cpu{}, {rounds} rounds per mode (dontneed, remap, cowbreak): after the call returned never the old contents (a fault on the way is fine); exit {exit} → {}",
         aps[0], if pass { "OK ✓" } else { "FAILED" }
     ));
     for l in out.iter() {
