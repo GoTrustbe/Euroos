@@ -12521,15 +12521,6 @@ pub const CHROME_ARGV: &[&[u8]] = &[
     // (run 52); one transport at a time, and the TLS record walker judges TCP.
     // QUIC returns once TCP/TLS is clean (workplace sprint, W13).
     b"--disable-quic",
-    // Low-end device mode (BUG-251). Until sysinfo() reported the machine's
-    // memory (BUG-240) chrome read 128 MiB of RAM and so ran in this mode by
-    // itself; every site, interaction and keylat proof up to validate-2026-11d
-    // was measured that way. With the true 6 GiB it chose its desktop sizing
-    // (more raster and tile memory, larger V8 heaps): 30 % more page faults and
-    // key to screen 342 -> 839 ms, on a machine where chrome software-renders
-    // and its threads share one CPU. The flag keeps that sizing explicit, while
-    // sysinfo and /proc/meminfo stay true for its memory-pressure logic.
-    b"--enable-low-end-device-mode",
     // Autoplay without a user gesture: the CDP Runtime.evaluate that would call
     // video.play() does not reach the youtube renderer after the cross-process
     // navigation (the page session's command is not forwarded to the swapped-in
