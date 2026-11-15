@@ -698,12 +698,15 @@ pub fn tlbsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let (cs, rs) = (format!("{cpu_us}"), format!("{rounds}"));
     let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
     let prev_demand = crate::ring3::DEMAND_ENABLED.swap(true, Ordering::Relaxed);
+    // 1000 rounds of three modes (a fork per cowbreak round) take minutes.
+    let prev_dl = crate::ring3::GLIBC_DEADLINE_TICKS.swap(90_000, Ordering::Relaxed);
     let (outp, exit) = with_test_mode(|| {
         crate::apuser::pin_plan(&[usize::MAX, aps[0]]);
         crate::ring3::run_glibc(mem, crate::ring3::gtlbsmp_bytes(), crate::ring3::ldlinux_bytes(),
             &[b"/bin/gtlbsmp", cs.as_bytes(), rs.as_bytes()], &[b"PATH=/bin"], caps)
     });
     crate::ring3::DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
+    crate::ring3::GLIBC_DEADLINE_TICKS.store(prev_dl, Ordering::Relaxed);
     crate::ring3::reap_dead(mem);
     let mut out = tagged("[tlb-smp]", &outp, "TLBSMP mode=");
     let pass = exit == 77 && outp.lines().any(|l| l == "TLBSMP all ok");
@@ -735,11 +738,13 @@ pub fn killsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
     let mut plan = alloc::vec![usize::MAX];
     plan.extend_from_slice(&aps);
+    let prev_dl = crate::ring3::GLIBC_DEADLINE_TICKS.swap(90_000, Ordering::Relaxed);
     let (outp, exit) = with_test_mode(|| {
         crate::apuser::pin_cycle(&plan);
         crate::ring3::run_glibc(mem, crate::ring3::gkillsmp_bytes(), crate::ring3::ldlinux_bytes(),
             &[b"/bin/gkillsmp", rs.as_bytes()], &[b"PATH=/bin"], caps)
     });
+    crate::ring3::GLIBC_DEADLINE_TICKS.store(prev_dl, Ordering::Relaxed);
     crate::ring3::reap_dead(mem);
     let live1 = sched::live_tasks();
     let in1: u64 = (0..8).map(|c| crate::apuser::ST_IN[c].load(Ordering::Relaxed)).sum();

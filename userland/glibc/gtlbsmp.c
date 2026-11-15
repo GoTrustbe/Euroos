@@ -115,7 +115,10 @@ int main(int argc, char **argv) {
     cyc_us = argc > 1 ? strtoull(argv[1], 0, 10) : 1000;
     long rounds = argc > 2 ? atol(argv[2]) : 1000;
     if (cyc_us == 0) cyc_us = 1000;
-    P = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    /* The first page of a large mapping: demand-paged (a small one would come
+     * from the arena window, where MADV_DONTNEED is a no-op and a fork copies). */
+    P = mmap(NULL, 64 << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (P == MAP_FAILED) { printf("TLBSMP mmap failed\n"); return 1; }
     P[0] = 1;
     pthread_t t;
     pthread_create(&t, NULL, reader, NULL);
