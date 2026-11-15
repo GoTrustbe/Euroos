@@ -92,6 +92,8 @@ pub struct RunCtx {
     pub bounces: AtomicU64,
     /// AP user time (TSC) since the task last came to the BSP (S5: bounce rate).
     pub run_since: AtomicU64,
+    /// S5: stay on the BSP until this TSC (a task with a high bounce rate).
+    pub stay_until: AtomicU64,
 }
 const RC0: RunCtx = RunCtx {
     rsp: AtomicU64::new(0),
@@ -105,6 +107,7 @@ const RC0: RunCtx = RunCtx {
     ap_tsc: AtomicU64::new(0),
     bounces: AtomicU64::new(0),
     run_since: AtomicU64::new(0),
+    stay_until: AtomicU64::new(0),
 };
 pub static RUNCTX: [RunCtx; MAX_TASKS] = [RC0; MAX_TASKS];
 
@@ -130,6 +133,12 @@ pub static ST_USER_TSC: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX
 pub static ST_TICKS: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
 pub static ST_IDLE_TICKS: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
 pub static ST_OFFLOADS: AtomicU64 = AtomicU64::new(0);
+pub static ST_STAYS: AtomicU64 = AtomicU64::new(0);
+pub static ST_STEALS: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX_CPU];
+/// S5: a trip to an AP shorter than a tick / STAY_RUN_DIV (0.5 ms) of user time
+/// keeps the task on the BSP for STAY_TICKS ticks.
+const STAY_RUN_DIV: u64 = 20;
+const STAY_TICKS: u64 = 2;
 pub static ST_DRAINED: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
@@ -157,6 +166,7 @@ pub fn on_spawn(idx: usize, migratable: bool) {
     rc.ap_tsc.store(0, Ordering::Relaxed);
     rc.bounces.store(0, Ordering::Relaxed);
     rc.run_since.store(0, Ordering::Relaxed);
+    rc.stay_until.store(0, Ordering::Relaxed);
     rc.last.store(BSP, Ordering::Relaxed);
     let pin = PIN_PLAN.take_one(migratable);
     rc.pin.store(pin, Ordering::Relaxed);
@@ -185,9 +195,36 @@ pub fn target(idx: usize, user_frame: bool, cr3: u64) -> Option<usize> {
         let p = pin as usize;
         return (p < MAX_CPU && USER_OK[p].load(Ordering::Relaxed)).then_some(p);
     }
-    // S5 places the tasks nobody pinned (smpuser=on).
-    None
+    if m != ON {
+        return None;
+    }
+    // S5: a thread that bounces more than it computes stays on the BSP a while.
+    if rdtsc() < rc.stay_until.load(Ordering::Relaxed) {
+        return None;
+    }
+    choose_cpu(rc.last.load(Ordering::Relaxed))
 }
+
+/// S5 placement: the last AP if it is idle, else an idle AP, else the AP with
+/// the shortest queue.
+fn choose_cpu(last: u8) -> Option<usize> {
+    let l = last as usize;
+    if l < MAX_CPU && USER_OK[l].load(Ordering::Relaxed) && CUR_ON[l].load(Ordering::Relaxed) == IDLE && NR[l].load(Ordering::Relaxed) == 0 {
+        return Some(l);
+    }
+    let mut best: Option<(usize, u32)> = None;
+    for c in 0..MAX_CPU {
+        if !USER_OK[c].load(Ordering::Relaxed) {
+            continue;
+        }
+        let load = NR[c].load(Ordering::Relaxed) + (CUR_ON[c].load(Ordering::Relaxed) != IDLE) as u32;
+        if best.map_or(true, |(_, b)| load < b) {
+            best = Some((c, load));
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
 
 /// Hand a task to AP `cpu` (BSP, under the scheduler lock, after the task's FPU
 /// state was saved). From here on the AP owns it. The BSP may still be on the
@@ -234,6 +271,14 @@ pub fn drain_inbox(mut f: impl FnMut(usize, u64, u64, u64)) {
                 let idx = w * 64 + b;
                 let rc = &RUNCTX[idx];
                 let tsc = rc.ap_tsc.swap(0, Ordering::Relaxed);
+                // S5: less than STAY_RUN of user time per trip to an AP (more
+                // than ~2 bounces per ms): the trips cost more than they give.
+                let ran = rc.run_since.swap(0, Ordering::Relaxed);
+                let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+                if ran < per / STAY_RUN_DIV && rc.flags.load(Ordering::Relaxed) & F_EVICT == 0 {
+                    rc.stay_until.store(rdtsc() + per * STAY_TICKS, Ordering::Relaxed);
+                    ST_STAYS.fetch_add(1, Ordering::Relaxed);
+                }
                 f(idx, rc.rsp.load(Ordering::Relaxed), rc.fs_base.load(Ordering::Relaxed), tsc);
                 rc.flags.fetch_and(!F_EVICT, Ordering::Relaxed);
                 rc.cpu.store(BSP, Ordering::Release);
@@ -260,7 +305,12 @@ pub fn wants_ap(idx: usize) -> bool {
     }
     let cr3: u64;
     unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
-    target(idx, true, cr3).is_some()
+    if target(idx, true, cr3).is_none() {
+        return false;
+    }
+    // S5, stay while free: an unpinned thread that returns to user mode on an
+    // otherwise idle BSP keeps it until the BSP is wanted (a wake, a tick).
+    RUNCTX[idx].pin.load(Ordering::Relaxed) != BSP || crate::sched::any_other_ready()
 }
 
 // ── Test pinning ─────────────────────────────────────────────────────────────
@@ -433,10 +483,47 @@ fn to_idle(cpu: usize) -> u64 {
     IDLE_RSP[cpu].load(Ordering::Relaxed)
 }
 
+/// S5: take a queued (not running, not pinned) task from the AP with the
+/// longest queue. Ownership moves with the cleared bit, as everywhere.
+fn steal(cpu: usize) -> Option<usize> {
+    if mode() != ON {
+        return None;
+    }
+    let mut src = None;
+    let mut most = 0;
+    for c in 0..MAX_CPU {
+        let n = NR[c].load(Ordering::Relaxed);
+        if c != cpu && n > most {
+            most = n;
+            src = Some(c);
+        }
+    }
+    let c = src?;
+    for w in 0..W {
+        let mut v = READY[c][w].load(Ordering::SeqCst);
+        while v != 0 {
+            let b = v.trailing_zeros() as usize;
+            v &= v - 1;
+            let idx = w * 64 + b;
+            if RUNCTX[idx].pin.load(Ordering::Relaxed) != BSP {
+                continue;
+            }
+            let bit = 1u64 << b;
+            if READY[c][w].fetch_and(!bit, Ordering::SeqCst) & bit != 0 {
+                NR[c].fetch_sub(1, Ordering::SeqCst);
+                RUNCTX[idx].cpu.store(cpu as u8, Ordering::Release);
+                ST_STEALS[cpu].fetch_add(1, Ordering::Relaxed);
+                return Some(idx);
+            }
+        }
+    }
+    None
+}
+
 /// The next context of this AP after its user task left: a queued task, else idle.
 fn next_or_idle(cpu: usize, now: u64) -> u64 {
     if !crate::kwork::ap_pending(cpu) {
-        if let Some(n) = take_next(cpu) {
+        if let Some(n) = take_next(cpu).or_else(|| steal(cpu)) {
             return switch_in(cpu, n, now);
         }
     }
@@ -464,7 +551,7 @@ pub fn ap_switch(cpu: usize, rsp: u64, why: u8) -> u64 {
         if CUR_ON[cpu].load(Ordering::Relaxed) != IDLE || !crate::kwork::ap_quiet(cpu) {
             return rsp;
         }
-        match take_next(cpu) {
+        match take_next(cpu).or_else(|| steal(cpu)) {
             Some(t) => {
                 IDLE_RSP[cpu].store(rsp, Ordering::Relaxed);
                 switch_in(cpu, t, now)
@@ -799,10 +886,10 @@ pub fn stat_lines() -> alloc::vec::Vec<alloc::string::String> {
     let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
     let mut v = alloc::vec::Vec::new();
     v.push(alloc::format!(
-        "[smpstat] smpuser={} offloads {} sent home {}, shootdowns {} ({} IPIs, {} late), tasks brought home {}",
+        "[smpstat] smpuser={} offloads {} sent home {}, shootdowns {} ({} IPIs, {} late), tasks brought home {}, stays {}",
         mode_name(mode()), ST_OFFLOADS.load(Ordering::Relaxed), ST_DRAINED.load(Ordering::Relaxed),
         ST_SHOOTDOWNS.load(Ordering::Relaxed), ST_SHOOT_IPIS.load(Ordering::Relaxed), ST_SHOOT_LATE.load(Ordering::Relaxed),
-        ST_KICKS.load(Ordering::Relaxed)
+        ST_KICKS.load(Ordering::Relaxed), ST_STAYS.load(Ordering::Relaxed)
     ));
     for c in user_aps() {
         let run = match CUR_ON[c].load(Ordering::Relaxed) {
@@ -810,8 +897,9 @@ pub fn stat_lines() -> alloc::vec::Vec<alloc::string::String> {
             t => alloc::format!("task {t}"),
         };
         v.push(alloc::format!(
-            "[smpstat] cpu{c}: switch-ins {} user {} ms, bounces syscall {} fault {} other {}, evictions {}, ticks user {} idle {}, queued {}, running {run}",
+            "[smpstat] cpu{c}: switch-ins {} (stolen {}) user {} ms, bounces syscall {} fault {} other {}, evictions {}, ticks user {} idle {}, queued {}, running {run}",
             ST_IN[c].load(Ordering::Relaxed),
+            ST_STEALS[c].load(Ordering::Relaxed),
             ST_USER_TSC[c].load(Ordering::Relaxed) * 10 / per,
             ST_BOUNCE_SC[c].load(Ordering::Relaxed),
             ST_BOUNCE_PF[c].load(Ordering::Relaxed),
