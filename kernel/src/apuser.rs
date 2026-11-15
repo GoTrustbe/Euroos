@@ -1151,7 +1151,14 @@ pub fn ap_idle_wait(cpu: usize) {
         }
     }
     x86_64::instructions::interrupts::disable();
-    if NR[cpu].load(Ordering::SeqCst) == 0 && !crate::kwork::ap_pending(cpu) && CUR_ON[cpu].load(Ordering::SeqCst) == IDLE {
+    // BUG-271: a job queued here or stealable from a busy core since the idle
+    // loop looked (its wake-up ping was taken before the cli above): run it now
+    // instead of halting, possibly with the timer masked, until the next IPI.
+    if crate::kwork::ap_pending(cpu) || crate::kwork::steal_ready(cpu) {
+        x86_64::instructions::interrupts::enable();
+        return;
+    }
+    if NR[cpu].load(Ordering::SeqCst) == 0 && CUR_ON[cpu].load(Ordering::SeqCst) == IDLE {
         TIMER_MASKED[cpu].store(true, Ordering::Relaxed);
         crate::apic::set_timer_masked(AP_TIMER_VECTOR, true);
         ST_TICKLESS[cpu].fetch_add(1, Ordering::Relaxed);

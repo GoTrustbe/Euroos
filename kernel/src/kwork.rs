@@ -83,6 +83,16 @@ pub fn submit(cpu: usize, job: Job) -> Result<(), Job> {
     PENDING[cpu].fetch_add(1, Ordering::Release);
     // Wake the core if it sleeps in hlt (the ping vector only counts and EOIs).
     crate::apic::send_ipi(cpu as u8, crate::interrupts::IPI_PING_VECTOR);
+    // BUG-271: an idle AP halts without its tick (S6), so it no longer looks for
+    // work to steal on its own. A job queued behind a running one wakes one idle
+    // AP as well, which steals it (`steal`).
+    if BUSY[cpu].load(Ordering::Acquire) {
+        if let Some(t) = (1..MAX_CPU).map(|k| (cpu + k) % MAX_CPU).find(|&v| {
+            ONLINE[v].load(Ordering::Acquire) && !BUSY[v].load(Ordering::Acquire) && PENDING[v].load(Ordering::Acquire) == 0
+        }) {
+            crate::apic::send_ipi(t as u8, crate::interrupts::IPI_PING_VECTOR);
+        }
+    }
     Ok(())
 }
 
@@ -95,6 +105,15 @@ fn pop_local(cpu: usize) -> Option<Job> {
         PENDING[cpu].fetch_sub(1, Ordering::Release);
     }
     j
+}
+
+/// Another core is busy with a job and has more queued behind it: core `cpu`
+/// could steal one (the idle wait checks this with interrupts off).
+pub fn steal_ready(cpu: usize) -> bool {
+    ACCEPTING.load(Ordering::Acquire)
+        && (1..MAX_CPU).map(|k| (cpu + k) % MAX_CPU).any(|v| {
+            ONLINE[v].load(Ordering::Acquire) && BUSY[v].load(Ordering::Acquire) && PENDING[v].load(Ordering::Acquire) != 0
+        })
 }
 
 /// Take work from a core that is busy with another job. `try_lock` only: an
