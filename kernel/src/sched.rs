@@ -2512,6 +2512,12 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
 static AP_PARK: AtomicBool = AtomicBool::new(false);
 static AP_PARKED: [AtomicBool; MAX_CPU] = [const { AtomicBool::new(false) }; MAX_CPU];
 
+/// True once AP `cpu` dropped its demo workers and runs only its idle/kwork
+/// loop (and, with smpuser, ring-3 tasks through `apuser::ap_tick`).
+pub fn ap_parked(cpu: usize) -> bool {
+    AP_PARKED[cpu % MAX_CPU].load(Ordering::Acquire)
+}
+
 /// Park the demo workers on every listed AP; returns how many cores confirmed
 /// (waits up to ~0.5 s). Called by `smp::init` after its counters were reported.
 pub fn ap_park_demo_workers(cpus: &[usize]) -> usize {

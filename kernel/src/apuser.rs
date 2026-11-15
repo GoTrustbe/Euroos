@@ -1126,7 +1126,12 @@ fn may_poll() -> bool {
 /// a kwork job, a shootdown).
 pub fn ap_idle_wait(cpu: usize) {
     let cpu = cpu % MAX_CPU;
-    if !USER_OK[cpu].load(Ordering::Relaxed) {
+    // BUG-271: until `smp::init` parked the demo workers this core's run queue
+    // still holds them, and only its periodic tick (`sched::ap_schedule_tick`)
+    // switches to them and lets them park. A masked timer here kept them off
+    // the CPU for good: the park wait of `ap_park_demo_workers` ran out (500 ms
+    // of every boot, BUG-272) and kwork never opened. Plain halt, tick on.
+    if !USER_OK[cpu].load(Ordering::Relaxed) || !crate::sched::ap_parked(cpu) {
         x86_64::instructions::interrupts::enable_and_hlt();
         return;
     }
