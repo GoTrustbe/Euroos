@@ -145,8 +145,13 @@ pub fn emergency() {
         if PRINTING_CPU.load(Ordering::Acquire) == crate::apic::lapic_id().wrapping_add(1) {
             return; // inside a print of this cpu: the queue is in use below us
         }
-        if let Some(mut u) = UART.try_lock() {
-            u.finish_queue(true);
+        // Another cpu may be appending a line right now: give it a bounded moment instead of losing the queue.
+        for _ in 0..200_000 {
+            if let Some(mut u) = UART.try_lock() {
+                u.finish_queue(true);
+                break;
+            }
+            core::hint::spin_loop();
         }
     });
 }
