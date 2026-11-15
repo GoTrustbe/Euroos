@@ -163,6 +163,9 @@ advertises queued user work (`BSP_USER_READY > 0`), sends `IPI_RESCHED` to the B
   time is not charged, BUG-143) and `DESK_KICK`. `T0_WANTS`/`T0_TURN_TICK` go once the `[fair]` test passes
   without them. Against five hogs on one CPU task 0 is then entitled to 65 % instead of 2.5 %; with APs the hogs
   are not on the BSP at all.
+- **Desktop, hosted client and foreground programs (fix-d2).** While a hosted X window exists the desktop task is charged at
+  nice 0: its passes are then work for that client, and at nine times the client's weight it took the CPU chrome needed (BUG-274).
+  A glibc program the desktop task runs in the foreground and waits for (`run_glibc`) gets `DESKTOP_NICE` (BUG-273).
 - **Kernel-entry boost on the BSP, bounded.** A user task in kernel context (bounced, or woken inside a system
   call) is picked before user-context tasks and before kernel tasks while its vruntime is within 10 ms of
   `min_vr`. Beyond that plain vruntime order applies, so a thread that floods system calls cannot starve task 0.
