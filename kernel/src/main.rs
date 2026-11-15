@@ -86,6 +86,7 @@ mod ps2;
 mod ring3;
 mod rtc;
 mod sched;
+mod apuser;
 mod schedstat;
 mod watchdog;
 mod serial;
@@ -4326,6 +4327,8 @@ fn main() -> Status {
         ring3::fdsem_selftest(&mut allocator);
         // BUG-150 to BUG-155: memory that comes back, and running out of it ([memt]).
         ring3::memt_selftest(&mut allocator);
+        // S3: a glibc process with a worker on every AP ([ap-user]; SMP scheduler design).
+        schedstat::apuser_test(&mut allocator, "apuser 1 10000 1000");
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
         linuxrand::selftest(&mut allocator);
         // BUG-091: rename over an existing file under open descriptors and mappings ([rename]).

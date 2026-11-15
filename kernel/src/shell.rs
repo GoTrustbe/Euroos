@@ -702,6 +702,16 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             alloc::vec![l]
         }
         "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
+        // S3-S6: ring 3 on the application processors.
+        "smpuser" => crate::schedstat::smpuser_cmd(arg1),
+        "smpstat" => {
+            let v = crate::apuser::stat_lines();
+            for l in v.iter() {
+                crate::serial_println!("{l}");
+            }
+            v
+        }
+        "apuser" => crate::schedstat::apuser_test(ctx.mem, line),
         "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.

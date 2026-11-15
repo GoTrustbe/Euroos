@@ -536,3 +536,120 @@ pub fn wakelat(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
     crate::serial_println!("{l}");
     alloc::vec![l]
 }
+
+/// `smpuser [off|test|on]`: where ring-3 tasks may run (S3-S6).
+pub fn smpuser_cmd(arg: &str) -> Vec<String> {
+    if let Some(m) = crate::apuser::parse_mode(arg) {
+        crate::apuser::set_mode(m);
+    }
+    let l = format!(
+        "[smpuser] {} ({} AP(s) can run ring 3)",
+        crate::apuser::mode_name(crate::apuser::mode()),
+        crate::apuser::user_aps().len()
+    );
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
+/// Per-AP counters of the user-mode scheduler (bounces, AP user time).
+fn ap_counters() -> [(u64, u64, u64, u64); 8] {
+    use crate::apuser::*;
+    core::array::from_fn(|c| {
+        (
+            ST_BOUNCE_SC[c].load(Ordering::Relaxed),
+            ST_BOUNCE_PF[c].load(Ordering::Relaxed),
+            ST_BOUNCE_OTHER[c].load(Ordering::Relaxed),
+            ST_USER_TSC[c].load(Ordering::Relaxed),
+        )
+    })
+}
+
+/// `[ap-user]` (S3), `[cow-smp]` (S4): gapuser with worker threads pinned to the
+/// APs in turn (`apuser [per-AP] [syscalls] [pages] [cow]`). Each worker computes
+/// a checksum with SSE (and AVX2 where the CPU has it), makes the system calls
+/// and touches fresh pages; the result must equal the main thread's run on the
+/// BSP, and each worker must have seen its own AP's APIC id from ring 3.
+pub fn apuser_test(mem: &mut FrameAllocator, line: &str) -> Vec<String> {
+    let mut it = line.split_whitespace().skip(1);
+    let per: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(2).clamp(1, 4);
+    let nsys: u64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(10_000);
+    let pages: u64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(1_000);
+    let cow = it.next() == Some("cow");
+    let tag = if cow { "[cow-smp]" } else { "[ap-user]" };
+    let aps = crate::apuser::user_aps();
+    if aps.is_empty() {
+        let l = format!("{tag} no application processor can run ring 3: nothing to place ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    // The main thread (the reference) stays on the BSP; the workers go to the APs
+    // in turn; the fork child of the cow mode to the first AP.
+    let mut plan = alloc::vec![usize::MAX];
+    for k in 0..per * aps.len() {
+        plan.push(aps[k % aps.len()]);
+    }
+    if cow {
+        plan.push(aps[0]);
+    }
+    let n = per * aps.len();
+    let mode0 = crate::apuser::mode();
+    if mode0 == crate::apuser::OFF {
+        crate::apuser::set_mode(crate::apuser::TEST);
+    }
+    let before = ap_counters();
+    let t0 = rdtsc();
+    crate::apuser::pin_plan(&plan);
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    let (ns, ss, ps) = (format!("{n}"), format!("{nsys}"), format!("{pages}"));
+    let mut argv: Vec<&[u8]> = alloc::vec![b"/bin/gapuser", ns.as_bytes(), ss.as_bytes(), ps.as_bytes()];
+    if cow {
+        argv.push(b"cow");
+    }
+    let (outp, exit) = crate::ring3::run_glibc(mem, crate::ring3::gapuser_bytes(), crate::ring3::ldlinux_bytes(), &argv, &[b"PATH=/bin"], caps);
+    crate::apuser::pin_plan(&[]);
+    crate::apuser::set_mode(mode0);
+    crate::ring3::reap_dead(mem);
+    let t1 = rdtsc();
+    let after = ap_counters();
+    let mut out = Vec::new();
+    let (mut equal, mut on_ap, mut saw_bsp) = (0usize, 0usize, 0usize);
+    let bsp_apic = crate::apic::lapic_id() as u64;
+    for l in outp.lines().filter(|l| l.starts_with("APUSER thread ")) {
+        let k: usize = l.split_whitespace().nth(2).and_then(|x| x.parse().ok()).unwrap_or(usize::MAX);
+        let mask = l.split("apic-mask=").nth(1).and_then(|x| x.split_whitespace().next())
+            .and_then(|x| u64::from_str_radix(x.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
+        if l.ends_with(" ok") {
+            equal += 1;
+        }
+        if let Some(&c) = plan.get(k + 1) {
+            if c != usize::MAX && mask & (1u64 << (crate::apuser::apic_of(c) & 63)) != 0 {
+                on_ap += 1;
+            }
+        }
+        if mask & (1u64 << (bsp_apic & 63)) != 0 {
+            saw_bsp += 1;
+        }
+        out.push(format!("{tag}   {l}"));
+    }
+    let (mut sc, mut pf, mut ot, mut us) = (0u64, 0u64, 0u64, 0u64);
+    for c in 0..8 {
+        sc += after[c].0 - before[c].0;
+        pf += after[c].1 - before[c].1;
+        ot += after[c].2 - before[c].2;
+        us += after[c].3 - before[c].3;
+    }
+    let cow_ok = !cow || outp.lines().any(|l| l.starts_with("APUSER cow child=ok") && l.ends_with("parent-pages-changed=0"));
+    if let Some(l) = outp.lines().find(|l| l.starts_with("APUSER cow")) {
+        out.push(format!("{tag}   {l}"));
+    }
+    let pass = exit == 77 && equal == n && on_ap == n && cow_ok && sc >= n as u64 * nsys / 2;
+    let l = format!(
+        "{tag} {n} worker thread(s) pinned to {} AP(s): result equal to the BSP run {equal}/{n}, ran on its own AP (CPUID from ring 3) {on_ap}/{n}, also seen on the BSP {saw_bsp}; bounces: system calls {sc}, page faults {pf}, other {ot}; AP user time {:.0} ms of {:.0} ms; exit {exit} → {}",
+        aps.len(), ms_f(us), ms_f(t1 - t0), if pass { "OK ✓" } else { "FAILED" }
+    );
+    out.push(l);
+    for l in out.iter() {
+        crate::serial_println!("{l}");
+    }
+    out
+}

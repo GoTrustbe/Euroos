@@ -100,6 +100,10 @@ fn apply(text: &str) {
                 ("serial.chatter", "off") => SERIAL_CHATTER.store(false, Ordering::Relaxed),
                 ("update.check", "off") => UPDATE_CHECK_OFF.store(true, Ordering::Relaxed),
                 ("update.check", "on") => UPDATE_CHECK_OFF.store(false, Ordering::Relaxed),
+                ("smpuser", v) => match crate::apuser::parse_mode(v) {
+                    Some(m) => crate::apuser::set_mode(m),
+                    None => crate::serial_println!("[bootopt] smpuser={v} is not off, test or on: ignored"),
+                },
                 ("display.mode", v) => match parse_mode(v) {
                     Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
                     None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),
