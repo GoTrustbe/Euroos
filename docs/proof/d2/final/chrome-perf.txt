@@ -1,0 +1,21 @@
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 14.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2), 18 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[chrome-smoke]   omnibox selection seen 0.3 s after Ctrl+L (178 px run)
+[chrome-smoke]   load 1: first change 0.34 s, final picture 1.06 s
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[chrome-smoke]   load 2: first change 0.20 s, final picture 4.73 s
+[chrome-smoke]   omnibox selection seen 0.3 s after Ctrl+L (154 px run)
+[chrome-smoke]   load 3: first change 0.20 s, final picture 0.89 s
+[chrome-smoke]   omnibox selection seen 0.5 s after Ctrl+L (154 px run)
+[chrome-smoke]   load 4: first change 0.35 s, final picture 0.73 s
+[chrome-smoke]   omnibox selection seen 0.5 s after Ctrl+L (154 px run)
+[chrome-smoke]   load 5: first change 0.28 s, final picture 2.44 s
+[gui-smoke] ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 1.06 s (min 0.73, max 4.73), first change median 0.28 s, n=5
+[chrome-smoke]   omnibox selection seen 0.5 s after Ctrl+L (154 px run)
+[chrome-smoke]   keys smpuser=off: median 495 ms, p90 957 ms, max 1242 ms over 30 keys
+[chrome-smoke]   keys smpuser=on: median 1011 ms, p90 1306 ms, max 1910 ms over 29 keys
+[chrome-smoke]   keys smpuser=off: median 664 ms, p90 1111 ms, max 1826 ms over 28 keys
+[chrome-smoke]   keys smpuser=on: median 595 ms, p90 990 ms, max 1364 ms over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 595 ms, p90 990 ms, max 1364 ms over 30 keys (120 characters arrived); one screendump takes 21 ms, which is in every number | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[chrome-smoke] FAIL (1 step(s)) - 4/5 steps ok, report and screenshots in /srv/euroos/d2-runs/runs/perf-b8

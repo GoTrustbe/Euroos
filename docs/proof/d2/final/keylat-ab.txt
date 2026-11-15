@@ -1,0 +1,38 @@
+== p6-4
+[chrome-smoke]   keys smpuser=off: median 648 ms, p90 1263 ms, max 1880 ms over 21 keys
+[chrome-smoke]   keys smpuser=on: median 675 ms, p90 1148 ms, max 1630 ms over 27 keys
+[chrome-smoke]   keys smpuser=off: median 628 ms, p90 1217 ms, max 1437 ms over 30 keys
+[chrome-smoke]   keys smpuser=on: median 840 ms, p90 1339 ms, max 2031 ms over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 840 ms, p90 1339 ms, max 2031 ms over 30 keys (120 characters arrived); one screendump takes 27 ms, which is in every number | X input modifie
+[sched-stat]   t0 (kernel task): ran 55.2 % (20992 ms, in system calls and faults 0 ms), ticks user 0 kernel 453, 0 syscalls/s, 42 switches/s
+[sched-stat]   t4 (kernel task): ran 15.0 % (5717 ms, in system calls and faults 0 ms), ticks user 0 kernel 184, 0 syscalls/s, 20 switches/s
+[scon] [sched-stat]   t0 (kernel task): ran 55.2 % (20992 ms, in system calls and faults 0 ms), ticks user 0 kernel 453, 0 syscalls/s, 42 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 15.0 % (5717 ms, in system calls and faults 0 ms), ticks user 0 kernel 184, 0 syscalls/s, 20 switches/s
+[scon] [keylat]   total: median 461727 us, max 2143964 us
+[sched-stat]   t0 (kernel task): ran 53.4 % (15656 ms, in system calls and faults 0 ms), ticks user 0 kernel 492, 0 syscalls/s, 81 switches/s
+== p6-2
+[chrome-smoke]   keys smpuser=off: median 680 ms, p90 1051 ms, max 1783 ms over 26 keys
+[chrome-smoke]   keys smpuser=on: median 774 ms, p90 1406 ms, max 1954 ms over 29 keys
+[chrome-smoke]   keys smpuser=off: median 619 ms, p90 1099 ms, max 1530 ms over 30 keys
+[chrome-smoke]   keys smpuser=on: median 673 ms, p90 1129 ms, max 1689 ms over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 673 ms, p90 1129 ms, max 1689 ms over 30 keys (120 characters arrived); one screendump takes 28 ms, which is in every number | X input modifie
+[sched-stat]   t0 (kernel task): ran 46.1 % (14365 ms, in system calls and faults 0 ms), ticks user 0 kernel 441, 0 syscalls/s, 50 switches/s
+[sched-stat]   t4 (kernel task): ran 15.0 % (4669 ms, in system calls and faults 0 ms), ticks user 0 kernel 123, 0 syscalls/s, 23 switches/s
+[scon] [sched-stat]   t0 (kernel task): ran 46.1 % (14365 ms, in system calls and faults 0 ms), ticks user 0 kernel 441, 0 syscalls/s, 50 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 15.0 % (4669 ms, in system calls and faults 0 ms), ticks user 0 kernel 123, 0 syscalls/s, 23 switches/s
+[scon] [keylat]   total: median 564171 us, max 2129649 us
+[sched-stat]   t0 (kernel task): ran 52.2 % (15768 ms, in system calls and faults 0 ms), ticks user 0 kernel 528, 0 syscalls/s, 90 switches/s
+== pm3x-4
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 839 ms, p90 1222 ms, max 1599 ms over 26 keys (30 characters arrived); one screendump takes 44 ms, which is in every number | X input modifier
+[sched-stat]   t0 (kernel task): ran 44.2 % (15782 ms, in system calls and faults 0 ms), ticks user 0 kernel 461, 0 syscalls/s, 42 switches/s
+[sched-stat]   t4 (kernel task): ran 32.7 % (11695 ms, in system calls and faults 0 ms), ticks user 0 kernel 139, 0 syscalls/s, 22 switches/s
+[scon] [sched-stat]   t0 (kernel task): ran 44.2 % (15782 ms, in system calls and faults 0 ms), ticks user 0 kernel 461, 0 syscalls/s, 42 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 32.7 % (11695 ms, in system calls and faults 0 ms), ticks user 0 kernel 139, 0 syscalls/s, 22 switches/s
+[scon] [keylat]   total: median 550638 us, max 1543624 us
+== pd1-4
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 342 ms, p90 612 ms, max 1026 ms over 30 keys (30 characters arrived); one screendump takes 22 ms, which is in every number | X input modifiers
+[sched-stat]   t0 (kernel task): ran 45.8 % (7415 ms, in system calls and faults 0 ms), ticks user 0 kernel 437, 0 syscalls/s, 106 switches/s
+[sched-stat]   t4 (kernel task): ran 8.7 % (1408 ms, in system calls and faults 0 ms), ticks user 0 kernel 79, 0 syscalls/s, 43 switches/s
+[scon] [sched-stat]   t0 (kernel task): ran 45.8 % (7415 ms, in system calls and faults 0 ms), ticks user 0 kernel 437, 0 syscalls/s, 106 switches/s
+[scon] [sched-stat]   t4 (kernel task): ran 8.7 % (1408 ms, in system calls and faults 0 ms), ticks user 0 kernel 79, 0 syscalls/s, 43 switches/s
+[scon] [keylat]   total: median 219771 us, max 610404 us

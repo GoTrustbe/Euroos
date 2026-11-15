@@ -1,0 +1,30 @@
+[loadtest] completed clean · results → /srv/euroos/d2-runs/soakb8/w/loadtest-results.csv · ltstat samples → /srv/euroos/d2-runs/soakb8/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 3702001, "err": 0, "p50_ms": 4.6, "p99_ms": 29.8, "max_ms": 7820.9, "busy_windows": 195, "busy_s": 3599, "busy": {"ok": 1884435, "err": 0, "p50_ms": 4.6, "p99_ms": 24.5, "max_ms": 2082.7}, "idle": {"ok": 1817566, "err": 0, "p50_ms": 4.7, "p99_ms": 37.6, "max_ms": 7820.9}}
+[loadtest] host HTTP server served 694 request(s)
+validate-11d: 3513 commands over 125.0 min = 1686 per hour; by status {'ok': 3513}
+   churn proc    n= 450  median     6564 ms  mean    12529 ms  p10     4557  p90    33040  max    43942
+   spawn worker  n= 337  median      398 ms  mean      401 ms  p10      329  p90      474  max      566
+   churn fs      n= 112  median     9726 ms  mean     9922 ms  p10     8720  p90    11461  max    14565
+   churn net     n= 112  median      112 ms  mean      351 ms  p10       93  p90      835  max     2688
+   sha256sum     n= 337  median      501 ms  mean      494 ms  p10      421  p90      559  max      661
+   fetch         n= 337  median      253 ms  mean      253 ms  p10      174  p90      293  max     1083
+d1: 11729 commands over 125.0 min = 5630 per hour; by status {'ok': 11729}
+   churn proc    n=1503  median     1328 ms  mean     1311 ms  p10      754  p90     1817  max     3253
+   spawn worker  n=1127  median      557 ms  mean      564 ms  p10      528  p90      611  max      788
+   churn fs      n= 376  median     8512 ms  mean     8581 ms  p10     7968  p90     9265  max    13527
+   churn net     n= 375  median       68 ms  mean      102 ms  p10       52  p90      100  max     1004
+   sha256sum     n=1127  median      421 ms  mean      427 ms  p10      380  p90      481  max     1401
+   fetch         n=1127  median      171 ms  mean      176 ms  p10      151  p90      201  max      303
+d2: 6019 commands over 125.1 min = 2887 per hour; by status {'ok': 6019}
+   churn proc    n= 771  median     2857 ms  mean     2646 ms  p10     1592  p90     3259  max     5282
+   spawn worker  n= 578  median      702 ms  mean      715 ms  p10      632  p90      809  max     1253
+   churn fs      n= 193  median    18207 ms  mean    18593 ms  p10    17492  p90    19751  max    29549
+   churn net     n= 192  median       89 ms  mean      155 ms  p10       60  p90      136  max     1972
+   sha256sum     n= 578  median      982 ms  mean      966 ms  p10      761  p90     1096  max     3294
+   fetch         n= 578  median      102 ms  mean      109 ms  p10       96  p90      122  max      202
+KERNEL PANIC: 0
+NMI PROBE: 0
+WATCHDOG TRIPPED: 1
+timer-probe] FROZEN: 0
+LOCK ORDER INVERSION: 0
+[churn-proc] FAILED: 0

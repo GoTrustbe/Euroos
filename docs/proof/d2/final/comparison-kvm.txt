@@ -1,0 +1,52 @@
+== 1 GiB vs validate-2026-11d
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+== 2 GiB vs validate-2026-11d
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+== 4 GiB vs validate-2026-11d
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+== 8 GiB vs validate-2026-11d
+-- only in base: 1
+   kwork: OKx1
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1

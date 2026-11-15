@@ -2674,6 +2674,19 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     heaptrace image of `fc0b105` against sched-d1: which allocation site holds the 8 MiB at that point (a
   boot-time path of small that runs at a different moment under the S1 scheduler is the first suspect).
 
+### BUG-251 — after the 2026-11e integration the serial TX task takes 33 % of the CPU in a browser session (keylat 342 -> 839 ms) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (key to screen 2.5 times slower)
+- **Actual:**   chrome-smoke `--only perf --smp 4`, same host and hour: sched-d1 image 342 ms (kernel total 220 ms, t4 9 %), integration
+  `b6eb05d` 839 ms (kernel total 551 ms, t4 33 %). t4 is the serial TX task; `[if0-window] 50-68 ms cause=kernel task 4` resumes in
+  `serial::drain_load` (`proof/d2/final/keylat-ab.txt`). The serial output volume is about the same.
+- **Next:**     bisect small / kbugs / mem (public image + `ui.tour=off;update.check=off`), then why drain_load holds IF=0 that long.
+
+### BUG-252 — with drivers at nice -15 the soak's console commands run at half the rate; one deadman trip in 2 h ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Actual:**   soak of `9cbebe8`: commands per hour 5 630 -> 2 887, churn fs 8.5 -> 18.2 s, sha256sum 0.42 -> 0.98 s; one `WATCHDOG
+  TRIPPED` during a 20 s `churn fs`. The hammer is served 4.5 times as often (3.7 M requests, p50 4.6 ms) and takes the CPU.
+- **Next:**     whether the trip is the synchronous 20 s command alone (deadman grace) or BUG-251; a cap on the driver's share.
+
 ### BUG-240 — sysinfo() wrote 256 MiB into loads[2] and 128 MiB into totalram; /proc/meminfo said 256 MiB ✅ FIXED
 - **Status:**   FIXED (`4c0467d`; test `685af41`) · **Severity:** MEDIUM (Chromium sizes caches and memory-pressure levels from it)
 - **Actual:**   syscall 99 wrote `totalram` at offset 24 (that is `loads[2]`) and `freeram` at offset 32 (that is `totalram`):

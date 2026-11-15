@@ -25,6 +25,6 @@ worktree (remove it at the end).
   in two runs (c4-n, c7-n); not analysed.
 
 ## Next
-1. `phaseF.sh b8` on the R630 (final regression of `9cbebe8`, incl. the S4 tests) and the 2 h soak; collect.
+1. Final regression done (README.md, final/); open points below.
 2. BUG-251 bisect (m3 images: `fc0b105`/`3f75d74` builds of `pub` + `br` conf) and BUG-250 heaptrace.
 3. S5: why the APs are only 41-55 % busy in `[spread]` (sample `smpstat` during the run), bounce cost 0.3-0.5 ms.

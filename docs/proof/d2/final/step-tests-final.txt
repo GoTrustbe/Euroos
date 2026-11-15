@@ -1,0 +1,61 @@
+[ap-user]   APUSER thread 0 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 1 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 2 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30785, page faults 89, other 0; AP user time 472 ms of 7238 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=1000 stale=0 max_us=449996
+[tlb-smp]   TLBSMP mode=remap rounds=1000 stale=0 max_us=1
+[tlb-smp]   TLBSMP mode=cowbreak rounds=1000 stale=0 max_us=699995
+[tlb-smp] reader on cpu1, 1000 rounds per mode (dontneed, remap, cowbreak): after the call returned never the old contents (a fault on the way is fine); exit 77 → OK ✓
+[smpstat] smpuser=off offloads 32879 sent home 32879, shootdowns 1926 (1928 IPIs, 0 late), tasks brought home 1000, stays 30829
+[smpstat] cpu1: switch-ins 12273 (stolen 0, from polling 7602, tickless halts 3403) user 71112 ms, bounces syscall 10230 fault 1043 other 0, evictions 1000, ticks user 8945 idle 52, queued 0, running idle
+[smpstat] cpu2: switch-ins 10261 (stolen 0, from polling 7568, tickless halts 1408) user 181 ms, bounces syscall 10260 fault 1 other 0, evictions 0, ticks user 285 idle 156, queued 0, running idle
+[smpstat] cpu3: switch-ins 10345 (stolen 0, from polling 9101, tickless halts 1081) user 122 ms, bounces syscall 10299 fault 46 other 0, evictions 0, ticks user 367 idle 40, queued 0, running idle
+[ap-user]   APUSER thread 0 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 1 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 2 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30605, page faults 45, other 0; AP user time 461 ms of 6983 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[smpuser] off (3 AP(s) can run ring 3), TLB shootdown and fork hold OFF (test knob)
+[tlb-smp]   TLBSMP mode=dontneed rounds=100 stale=97 max_us=3381037
+[tlb-smp]   TLBSMP mode=remap rounds=100 stale=0 max_us=1
+[tlb-smp]   TLBSMP mode=cowbreak rounds=100 stale=94 max_us=3002018
+[tlb-smp] reader on cpu1, 100 rounds per mode (dontneed, remap, cowbreak): after the call returned never the old contents (a fault on the way is fine); exit 1 → FAILED
+[ap-user]   APUSER thread 0 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 1 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 2 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 31783, page faults 17, other 0; AP user time 430 ms of 6700 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[kill-smp]   KILLSMP rounds=500 exit_group=250 sigkill=250 reaped=500
+[kill-smp] 500 rounds of a child with 8 threads spinning on 3 AP(s) ended by exit_group or SIGKILL: AP switch-ins 84262, live tasks 11 -> 11; exit 77 → OK ✓
+[kill-smp]   KILLSMP rounds=500 exit_group=250 sigkill=250 reaped=500
+[kill-smp] 500 rounds of a child with 8 threads spinning on 3 AP(s) ended by exit_group or SIGKILL: AP switch-ins 87264, live tasks 11 -> 11; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 109576 sent home 109576, shootdowns 14 (14 IPIs, 0 late), tasks brought home 8017, stays 100583
+[smpstat] cpu1: switch-ins 104938 (stolen 0, from polling 21734, tickless halts 10761) user 651795 ms, bounces syscall 66919 fault 1001 other 0, evictions 1980, ticks user 70730 idle 135, queued 0, running idle
+[smpstat] cpu2: switch-ins 51521 (stolen 0, from polling 5813, tickless halts 4561) user 704958 ms, bounces syscall 16757 fault 3 other 0, evictions 1977, ticks user 72483 idle 127, queued 0, running idle
+[smpstat] cpu3: switch-ins 46867 (stolen 0, from polling 6683, tickless halts 4273) user 677802 ms, bounces syscall 16883 fault 13 other 0, evictions 1981, ticks user 69112 idle 151, queued 0, running idle
+[ap-user]   APUSER thread 0 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 1 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 2 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 31544, page faults 45, other 0; AP user time 369 ms of 7230 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user]   APUSER thread 0 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 1 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 2 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 3 apic-mask=0x2 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 4 apic-mask=0x4 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user]   APUSER thread 5 apic-mask=0x8 sum=0x826f344e08645017 ref=0x826f344e08645017 syscalls=10000 faults=1000 cow-bad=0 ok
+[ap-user] 6 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 6/6, ran on its own AP (CPUID from ring 3) 6/6, also seen on the BSP 0; bounces: system calls 62529, page faults 106, other 0; AP user time 898 ms of 8443 ms; exit 77 → OK ✓
+[cow-smp]   APUSER thread 0 apic-mask=0x3 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 1 apic-mask=0x5 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 2 apic-mask=0x9 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER cow child=ok parent-pages-changed=0
+[cow-smp] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 3; bounces: system calls 24557, page faults 47, other 0; AP user time 348 ms of 6893 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[many-threads] smpuser=test: threads pinned to 3 AP(s) in turn, AP switch-ins 4604
+[spread] 8 threads x 2000 units: smpuser=off 8401 ms, smpuser=on 3370 ms, ratio 0.40 (want <= 0.40); user time on the APs: cpu1 1464 ms, cpu2 1522 ms, cpu3 1465 ms → FAILED
+[ap-idle] timer interrupts per AP in 10 s with nothing to run: cpu1 0, cpu2 0, cpu3 0 (want < 5) → OK ✓
+[smpstat] smpuser=off offloads 123414 sent home 123414, shootdowns 170 (172 IPIs, 0 late), tasks brought home 0, stays 123251
+[smpstat] cpu1: switch-ins 41243 (stolen 1, from polling 20012, tickless halts 10651) user 2006 ms, bounces syscall 41093 fault 71 other 0, evictions 0, ticks user 1314 idle 194, queued 0, running idle
+[smpstat] cpu2: switch-ins 41184 (stolen 0, from polling 20139, tickless halts 10748) user 2103 ms, bounces syscall 41000 fault 56 other 0, evictions 0, ticks user 1133 idle 427, queued 0, running idle
+[smpstat] cpu3: switch-ins 41301 (stolen 2, from polling 24464, tickless halts 9391) user 2005 ms, bounces syscall 41123 fault 71 other 0, evictions 0, ticks user 643 idle 947, queued 0, running idle
