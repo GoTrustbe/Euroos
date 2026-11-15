@@ -1,0 +1,38 @@
+# chrome-smoke --only sites3, public image pubo-f2 (ui.tour=off;update.check=off), KVM, 2 vCPU
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /srv/euroos/mem3-runs/runs/sites3
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 14.6 s (seconds after Enter: launched 3.6, window on screen 4.4,
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.6 s, load finished 3.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 132 ms; fds:
+[gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.7 s, load finished 6.8 s later; content 593 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 23.5 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly d
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.8 s, load finished 16.9 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 228 
+[gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.1 s, load finished 4.6 s later; content 2288 colours, commonest 36%; desktop loop: slowest c
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.6 s, load finished 3
+[gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.8 s, load finished 3.7 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 174 ms; fds:
+[gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.9 s, load finished 4.1 s later; content 593 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.1 s, load finished 23.8 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.7 s, load finished 16.1 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 394 
+[gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.9 s, load finished 4.2 s later; content 2288 colours, commonest 36%; desktop loop: slowest c
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 3
+[gui-smoke] ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 3.7 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 233 ms; fds:
+[gui-smoke] ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.3 s later; content 593 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.1 s, load finished 23.8 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.9 s, load finished 15.7 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 332 
+[gui-smoke] ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.8 s, load finished 4.4 s later; content 378 colours, commonest 92%; desktop loop: slowest co
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.7 s, load finished 2

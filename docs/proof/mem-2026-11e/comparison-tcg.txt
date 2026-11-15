@@ -1,0 +1,81 @@
+# markers-compare.py: TCG matrix of validate-2026-11d (final-runs/tcg/f) -> st-f3
+
+== user-smp4-iommu
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp4-noiommu
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== kernel-smp4
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== storage-smp4-iommu-1g
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== combined-smp4-iommu-1g
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp1-iommu
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== user-smp1-noiommu
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== kernel-smp1
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== storage-smp1-iommu-1g
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1
+
+== combined-smp1-iommu-1g
+== /tmp/m3a  vs  /tmp/m3b
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   keyfocus: OKx1

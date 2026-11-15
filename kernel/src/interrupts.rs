@@ -723,6 +723,23 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // that touch a not-yet-committed demand page during a syscall).
     crate::ring3::FAULT_CODE.store(code.bits(), Ordering::Relaxed);
     crate::ring3::FAULT_RIP.store(frame.instruction_pointer.as_u64(), Ordering::Relaxed);
+    // Copy-on-write (fork): a write to an arena page shared with another
+    // process. The writer gets its copy, or, when the writer is the launched
+    // process, the children that share the page get theirs. From ring 3 and
+    // from a system call that copies into its caller alike.
+    if code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && code.contains(PageFaultErrorCode::CAUSED_BY_WRITE)
+        && addr >> 39 == 0
+    {
+        let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
+        match crate::paging::arena_cow_fault(cr3, addr, reserve) {
+            Some(true) => return,
+            Some(false) => serial_println!(
+                "[oom] no frame in the process pool for the copy of a shared arena page at {addr:#x} ({} frames free): the write fails",
+                crate::procpool::free_frames()),
+            None => {}
+        }
+    }
     // BUG-156: a page of the arena of a fork child that nobody touched yet. It
     // gets a zeroed frame from the process pool, for ring 3 and for a system
     // call that copies into its caller alike. A fault from ring 3 leaves the

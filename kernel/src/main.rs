@@ -868,6 +868,7 @@ fn main() -> Status {
     // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
     {
         let usable_frames = (allocator.usable_bytes() / 4096) as usize;
+        procpool::RAM_TOTAL_KB.store(allocator.usable_bytes() / 1024, core::sync::atomic::Ordering::Relaxed);
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.
@@ -926,6 +927,27 @@ fn main() -> Status {
                     }
                 }
                 procpool::install_regions(&regions);
+                // Copy-on-write fork: one holder count per frame of RAM, in
+                // the kernel heap. Not from the frame allocator: 128 frames
+                // taken there at 1 GiB moved every later allocation (the
+                // arenas of the boot self-tests) and /bin/msock stopped
+                // answering in [bgnet-cap] (BUG-243).
+                {
+                    let entries = allocator.total_frames();
+                    match alloc::alloc::Layout::from_size_align(entries * 2, 4096) {
+                        Ok(l) => {
+                            // SAFETY: a fresh zeroed allocation, never freed.
+                            let t = unsafe { alloc::alloc::alloc_zeroed(l) } as u64;
+                            if t != 0 {
+                                paging::cow_init(t, entries);
+                                serial_println!("[cow] holder counts for {} MiB of RAM: {} KiB", entries / 256, entries * 2 / 1024);
+                            } else {
+                                serial_println!("[cow] no room for the holder counts: fork copies");
+                            }
+                        }
+                        Err(_) => serial_println!("[cow] no room for the holder counts: fork copies"),
+                    }
+                }
                 let mut line = alloc::format!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
                 for &(b, f) in regions.iter().skip(1) {
                     line.push_str(&alloc::format!(" + {} MiB @ {b:#x}", f / 256));
