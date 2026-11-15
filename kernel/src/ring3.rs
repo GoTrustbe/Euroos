@@ -8525,6 +8525,9 @@ static GFORKCHURN_ELF: &[u8] = include_bytes!("../../userland/glibc/gforkchurn")
 static GSLOTS_ELF: &[u8] = include_bytes!("../../userland/glibc/gslots");
 static GWAKELAT_ELF: &[u8] = include_bytes!("../../userland/glibc/gwakelat");
 static GAPUSER_ELF: &[u8] = include_bytes!("../../userland/glibc/gapuser");
+static GSPREAD_ELF: &[u8] = include_bytes!("../../userland/glibc/gspread");
+static GKILLSMP_ELF: &[u8] = include_bytes!("../../userland/glibc/gkillsmp");
+static GTLBSMP_ELF: &[u8] = include_bytes!("../../userland/glibc/gtlbsmp");
 static GSYNCSOCK_ELF: &[u8] = include_bytes!("../../userland/glibc/gsyncsock");
 static GPCM_ELF: &[u8] = include_bytes!("../../userland/glibc/gpcm");
 static GMANYTHREADS_ELF: &[u8] = include_bytes!("../../userland/glibc/gmanythreads");
@@ -8675,6 +8678,9 @@ pub fn gforkchurn_bytes() -> &'static [u8] { GFORKCHURN_ELF }
 pub fn gslots_bytes() -> &'static [u8] { GSLOTS_ELF }
 pub fn gwakelat_bytes() -> &'static [u8] { GWAKELAT_ELF }
 pub fn gapuser_bytes() -> &'static [u8] { GAPUSER_ELF }
+pub fn gspread_bytes() -> &'static [u8] { GSPREAD_ELF }
+pub fn gkillsmp_bytes() -> &'static [u8] { GKILLSMP_ELF }
+pub fn gtlbsmp_bytes() -> &'static [u8] { GTLBSMP_ELF }
 pub fn gsyncsock_bytes() -> &'static [u8] { GSYNCSOCK_ELF }
 pub fn gpcm_bytes() -> &'static [u8] { GPCM_ELF }
 pub fn gmanythreads_bytes() -> &'static [u8] { GMANYTHREADS_ELF }
@@ -9348,6 +9354,9 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/gslots" => include_bytes!("../../userland/glibc/gslots.sig"),
         "/bin/gwakelat" => include_bytes!("../../userland/glibc/gwakelat.sig"),
         "/bin/gapuser" => include_bytes!("../../userland/glibc/gapuser.sig"),
+        "/bin/gspread" => include_bytes!("../../userland/glibc/gspread.sig"),
+        "/bin/gkillsmp" => include_bytes!("../../userland/glibc/gkillsmp.sig"),
+        "/bin/gtlbsmp" => include_bytes!("../../userland/glibc/gtlbsmp.sig"),
         "/bin/gsyncsock" => include_bytes!("../../userland/glibc/gsyncsock.sig"),
         "/bin/gpcm" => include_bytes!("../../userland/glibc/gpcm.sig"),
         "/bin/gmanythreads" => include_bytes!("../../userland/glibc/gmanythreads.sig"),

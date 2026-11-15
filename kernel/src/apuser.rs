@@ -266,12 +266,15 @@ struct PinPlan {
     n: AtomicU8,
     next: AtomicU32,
     armed: AtomicBool,
+    /// After the last entry, start again at entry 1 (entry 0 is the first task only).
+    cycle: AtomicBool,
 }
 static PIN_PLAN: PinPlan = PinPlan {
     cpus: [const { AtomicU8::new(BSP) }; 16],
     n: AtomicU8::new(0),
     next: AtomicU32::new(0),
     armed: AtomicBool::new(false),
+    cycle: AtomicBool::new(false),
 };
 impl PinPlan {
     fn take_one(&self, migratable: bool) -> u8 {
@@ -284,7 +287,10 @@ impl PinPlan {
         }
         let k = self.next.fetch_add(1, Ordering::Relaxed);
         if k >= n {
-            return BSP;
+            if !self.cycle.load(Ordering::Relaxed) || n < 2 {
+                return BSP;
+            }
+            return self.cpus[(1 + (k - 1) % (n - 1)) as usize].load(Ordering::Relaxed);
         }
         self.cpus[k as usize].load(Ordering::Relaxed)
     }
@@ -292,7 +298,15 @@ impl PinPlan {
 /// Pin the next migratable tasks spawned to `cpus`, one each, in order (BSP:
 /// that one stays on the BSP; empty: stop). Tasks after the last entry stay.
 pub fn pin_plan(cpus: &[usize]) {
+    pin_plan_ex(cpus, false);
+}
+/// The same, and every further migratable task goes to entries 1.. in turn.
+pub fn pin_cycle(cpus: &[usize]) {
+    pin_plan_ex(cpus, true);
+}
+fn pin_plan_ex(cpus: &[usize], cycle: bool) {
     PIN_PLAN.armed.store(false, Ordering::Release);
+    PIN_PLAN.cycle.store(cycle, Ordering::Relaxed);
     for (i, &c) in cpus.iter().take(16).enumerate() {
         PIN_PLAN.cpus[i].store(if c >= MAX_CPU { BSP } else { c as u8 }, Ordering::Relaxed);
     }

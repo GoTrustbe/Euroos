@@ -712,6 +712,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             v
         }
         "apuser" => crate::schedstat::apuser_test(ctx.mem, line),
+        "tlbsmp" => crate::schedstat::tlbsmp_test(ctx.mem, arg1),
+        "killsmp" => crate::schedstat::killsmp_test(ctx.mem, arg1),
+        "manysmp" => crate::schedstat::many_smp_test(ctx.mem),
+        "spread" => crate::schedstat::spread_test(ctx.mem, line),
+        "apidle" => crate::schedstat::apidle_test(arg1),
         "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.

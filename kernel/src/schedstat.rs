@@ -653,3 +653,176 @@ pub fn apuser_test(mem: &mut FrameAllocator, line: &str) -> Vec<String> {
     }
     out
 }
+
+/// Run `f` with smpuser at least `test` (restored after).
+fn with_test_mode<R>(f: impl FnOnce() -> R) -> R {
+    let m0 = crate::apuser::mode();
+    if m0 == crate::apuser::OFF {
+        crate::apuser::set_mode(crate::apuser::TEST);
+    }
+    let r = f();
+    crate::apuser::pin_plan(&[]);
+    crate::apuser::set_mode(m0);
+    r
+}
+
+fn tagged(tag: &str, outp: &str, key: &str) -> Vec<String> {
+    outp.lines().filter(|l| l.starts_with(key)).map(|l| format!("{tag}   {l}")).collect()
+}
+
+/// `[tlb-smp]` (S4): gtlbsmp. Its reader thread runs on an AP and reads one page
+/// while the main thread (BSP) gives that address new contents: MADV_DONTNEED,
+/// an mmap(MAP_FIXED) over it, a copy-on-write break after a fork. The reader
+/// must see the new contents within 1 ms, never the old frame (`tlbsmp [rounds]`).
+pub fn tlbsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
+    let rounds: u64 = arg.trim().parse().unwrap_or(1000).clamp(1, 100_000);
+    let aps = crate::apuser::user_aps();
+    if aps.is_empty() {
+        let l = String::from("[tlb-smp] no application processor can run ring 3: nothing to test ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    let cpu_us = (per_tick() / 10_000).max(1);
+    let (cs, rs) = (format!("{cpu_us}"), format!("{rounds}"));
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    let (outp, exit) = with_test_mode(|| {
+        crate::apuser::pin_plan(&[usize::MAX, aps[0]]);
+        crate::ring3::run_glibc(mem, crate::ring3::gtlbsmp_bytes(), crate::ring3::ldlinux_bytes(),
+            &[b"/bin/gtlbsmp", cs.as_bytes(), rs.as_bytes()], &[b"PATH=/bin"], caps)
+    });
+    crate::ring3::reap_dead(mem);
+    let mut out = tagged("[tlb-smp]", &outp, "TLBSMP mode=");
+    let pass = exit == 77 && outp.lines().any(|l| l == "TLBSMP all ok");
+    out.push(format!(
+        "[tlb-smp] reader on cpu{}, {rounds} rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit {exit} → {}",
+        aps[0], if pass { "OK ✓" } else { "FAILED" }
+    ));
+    for l in out.iter() {
+        crate::serial_println!("{l}");
+    }
+    out
+}
+
+/// `[kill-smp]` (S4): gkillsmp. Rounds of a fork child with 8 threads spinning
+/// on the APs, ended by exit_group (even rounds) or SIGKILL (odd rounds); the
+/// task census must come back to where it started (`killsmp [rounds]`).
+pub fn killsmp_test(mem: &mut FrameAllocator, arg: &str) -> Vec<String> {
+    let rounds: u64 = arg.trim().parse().unwrap_or(1000).clamp(1, 100_000);
+    let aps = crate::apuser::user_aps();
+    if aps.is_empty() {
+        let l = String::from("[kill-smp] no application processor can run ring 3: nothing to test ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    crate::ring3::reap_dead(mem);
+    let live0 = sched::live_tasks();
+    let in0: u64 = (0..8).map(|c| crate::apuser::ST_IN[c].load(Ordering::Relaxed)).sum();
+    let rs = format!("{rounds}");
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_FILE | crate::ring3::CAP_PROC_INFO;
+    let mut plan = alloc::vec![usize::MAX];
+    plan.extend_from_slice(&aps);
+    let (outp, exit) = with_test_mode(|| {
+        crate::apuser::pin_cycle(&plan);
+        crate::ring3::run_glibc(mem, crate::ring3::gkillsmp_bytes(), crate::ring3::ldlinux_bytes(),
+            &[b"/bin/gkillsmp", rs.as_bytes()], &[b"PATH=/bin"], caps)
+    });
+    crate::ring3::reap_dead(mem);
+    let live1 = sched::live_tasks();
+    let in1: u64 = (0..8).map(|c| crate::apuser::ST_IN[c].load(Ordering::Relaxed)).sum();
+    let mut out = tagged("[kill-smp]", &outp, "KILLSMP rounds=");
+    let pass = exit == 77 && outp.lines().any(|l| l == "KILLSMP all ok") && live1 == live0 && in1 > in0;
+    out.push(format!(
+        "[kill-smp] {rounds} rounds of a child with 8 threads spinning on {} AP(s) ended by exit_group or SIGKILL: AP switch-ins {}, live tasks {live0} -> {live1}; exit {exit} → {}",
+        aps.len(), in1 - in0, if pass { "OK ✓" } else { "FAILED" }
+    ));
+    for l in out.iter() {
+        crate::serial_println!("{l}");
+    }
+    out
+}
+
+/// `[many-threads]` with every thread on the APs in turn (S4 criterion).
+pub fn many_smp_test(mem: &mut FrameAllocator) -> Vec<String> {
+    let aps = crate::apuser::user_aps();
+    let mut plan = alloc::vec![usize::MAX];
+    plan.extend_from_slice(&aps);
+    let in0: u64 = (0..8).map(|c| crate::apuser::ST_IN[c].load(Ordering::Relaxed)).sum();
+    with_test_mode(|| {
+        crate::apuser::pin_cycle(&plan);
+        crate::churn::many_threads_test(mem);
+    });
+    let in1: u64 = (0..8).map(|c| crate::apuser::ST_IN[c].load(Ordering::Relaxed)).sum();
+    let l = format!("[many-threads] smpuser=test: threads pinned to {} AP(s) in turn, AP switch-ins {}", aps.len(), in1 - in0);
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
+/// `[spread]` (S5): gspread, 8 CPU-bound threads of one process without system
+/// calls, once with smpuser=off and once with smpuser=on: with the APs the run
+/// must take at most 0.4 of the time, and every AP must have run user code
+/// (`spread [threads] [units]`).
+pub fn spread_test(mem: &mut FrameAllocator, line: &str) -> Vec<String> {
+    let mut it = line.split_whitespace().skip(1);
+    let n: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(8).clamp(1, 64);
+    let units: u64 = it.next().and_then(|x| x.parse().ok()).unwrap_or(2000);
+    let aps = crate::apuser::user_aps();
+    if aps.is_empty() {
+        let l = String::from("[spread] no application processor can run ring 3: nothing to spread ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    let (ns, us) = (format!("{n}"), format!("{units}"));
+    let caps = crate::ring3::CAP_CONSOLE | crate::ring3::CAP_PROC_INFO;
+    let m0 = crate::apuser::mode();
+    let mut wall = [0u64; 2];
+    let mut ok = [false; 2];
+    let mut per_ap = Vec::new();
+    for (k, m) in [crate::apuser::OFF, crate::apuser::ON].into_iter().enumerate() {
+        crate::apuser::set_mode(m);
+        let u0: Vec<u64> = (0..8).map(|c| crate::apuser::ST_USER_TSC[c].load(Ordering::Relaxed)).collect();
+        let t0 = rdtsc();
+        let (outp, exit) = crate::ring3::run_glibc(mem, crate::ring3::gspread_bytes(), crate::ring3::ldlinux_bytes(),
+            &[b"/bin/gspread", ns.as_bytes(), us.as_bytes()], &[b"PATH=/bin"], caps);
+        wall[k] = rdtsc() - t0;
+        ok[k] = exit == 77 && outp.contains("SPREAD threads=");
+        if k == 1 {
+            per_ap = aps.iter().map(|&c| crate::apuser::ST_USER_TSC[c].load(Ordering::Relaxed) - u0[c]).collect();
+        }
+        crate::ring3::reap_dead(mem);
+    }
+    crate::apuser::set_mode(m0);
+    let ratio = wall[1] as f64 / wall[0].max(1) as f64;
+    let all_used = per_ap.iter().all(|&t| t > 0);
+    let pass = ok[0] && ok[1] && ratio <= 0.4 && all_used;
+    let used: Vec<String> = aps.iter().zip(per_ap.iter()).map(|(c, t)| format!("cpu{c} {:.0} ms", ms_f(*t))).collect();
+    let l = format!(
+        "[spread] {n} threads x {units} units: smpuser=off {:.0} ms, smpuser=on {:.0} ms, ratio {ratio:.2} (want <= 0.40); user time on the APs: {} → {}",
+        ms_f(wall[0]), ms_f(wall[1]), used.join(", "), if pass { "OK ✓" } else { "FAILED" }
+    );
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
+/// `[ap-idle]` (S6): with nothing to run, an AP takes fewer than 5 timer
+/// interrupts in 10 s (`apidle [seconds]`).
+pub fn apidle_test(arg: &str) -> Vec<String> {
+    let secs: u64 = arg.trim().parse().unwrap_or(10).clamp(1, 120);
+    let aps = crate::apuser::user_aps();
+    if aps.is_empty() {
+        let l = String::from("[ap-idle] no application processor: nothing to measure ⬜");
+        crate::serial_println!("{l}");
+        return alloc::vec![l];
+    }
+    let snap = || -> Vec<u64> {
+        (0..8).map(|c| crate::apuser::ST_IDLE_TICKS[c].load(Ordering::Relaxed) + crate::apuser::ST_TICKS[c].load(Ordering::Relaxed)).collect()
+    };
+    let a = snap();
+    wait_ticks(secs * 100);
+    let b = snap();
+    let per: Vec<u64> = aps.iter().map(|&c| b[c] - a[c]).collect();
+    let pass = per.iter().all(|&n| n < 5);
+    let txt: Vec<String> = aps.iter().zip(per.iter()).map(|(c, n)| format!("cpu{c} {n}")).collect();
+    let l = format!("[ap-idle] timer interrupts per AP in {secs} s with nothing to run: {} (want < 5) → {}", txt.join(", "), if pass { "OK ✓" } else { "FAILED" });
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
