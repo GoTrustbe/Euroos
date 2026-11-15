@@ -1,0 +1,11 @@
+# BUG-182: connif0 (scheduled /bin/gnet connect, longest window without a timer tick), public images, KVM 2 vCPU, user-net restrict=on
+# c0 = db9f0a6 (test only), c1 = SYN wait sleeps (first version), c2 = 5ea2dde (every network wait sleeps). filter-buffer = -object filter-buffer,netdev=n0,queue=rx,interval=1500000 (the answer held back up to 1.5 s)
+== runs/ci/c0pub.tlog
+[if0-window] 420 ms cause=syscall 42 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 4 last syscall 42, resumed at rip=0x15eaa9a4 cs=0x23) #1 longest 420 ms
+[conn-if0] /bin/gnet connect to 192.0.2.1:80 over virtio-net ("GNET: connect(192.0.2.1:80) failed" exit=2, 470 ms, its network waits slept 0 time(s)): longest window without a timer tick 420 ms (limit 50 ms) -> FAILED
+== runs/ci/c1pub.tlog
+[conn-if0] /bin/gnet connect to 192.0.2.1:80 over virtio-net ("GNET: connect(192.0.2.1:80) failed" exit=2, 1509 ms, its network waits slept 147 time(s)): longest window without a timer tick 10 ms (limit 50 ms) -> OK ✓
+== runs/ci/c2pub.tlog
+[conn-if0] /bin/gnet connect to 10.0.2.77:80 over virtio-net ("GNET: connect(10.0.2.77:80) failed" exit=2, 1613 ms, its network waits slept 156 time(s)): longest window without a timer tick 10 ms (limit 50 ms) -> OK ✓
+[conn-if0] /bin/gnet connect to 192.0.2.1:80 over virtio-net ("GNET: connect(192.0.2.1:80) failed" exit=2, 1401 ms, its network waits slept 137 time(s)): longest window without a timer tick 10 ms (limit 50 ms) -> OK ✓
+# earlier runs without filter-buffer (connif0 192.0.2.1 answered by slirp in 60 ms: OK on c0 and c1; connif0 10.0.2.77, ARP: c0 948 ms cause=syscall 42 FAILED, c1 1005 ms FAILED (ARP wait still spun), c2 OK)

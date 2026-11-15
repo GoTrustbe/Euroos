@@ -1,0 +1,10 @@
+# [fair] hogtest 5 10 8, KVM 4 vCPU 4 GiB, net none, quiet machine, at the same time: m1pub (merged f53eec1), f2br (4c8c363, before BUG-273/274); per-round task 0 share %
+m1pub: 53 53 55 60 52 57 55 57 57 53 
+[fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.5 s (limit 12.6 s), lowest task 0 share 52 % -> OK ✓
+f2br: 48 54 52 56 52 58 58 54 56 58 
+[fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.6 s (limit 12.6 s), lowest task 0 share 48 % -> FAILED
+
+# m1pub once more during the TCG/starts load (with connif0 after it):
+[fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 49 % -> FAILED
+[conn-if0] /bin/gnet connect to 10.0.2.77:80 over virtio-net ("GNET: connect(10.0.2.77:80) failed" exit=2, 856 ms, its network waits slept 84 time(s)): longest window without a timer tick 10 ms (limit 50 ms) -> OK ✓
+[conn-if0] /bin/gnet connect to 192.0.2.1:80 over virtio-net ("GNET: connect(192.0.2.1:80) failed" exit=2, 1395 ms, its network waits slept 138 time(s)): longest window without a timer tick 10 ms (limit 50 ms) -> OK ✓

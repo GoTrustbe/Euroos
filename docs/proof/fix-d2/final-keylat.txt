@@ -1,0 +1,14 @@
+# keylat, merged f53eec1 (m1br) against 3ecde9e (b0br), quiet machine, chrome-smoke --only perf, two pairs per round, tmpfs, SMT siblings idle; median key to screen ms per round
+== smp 4
+0 b0br.img: 323 284 325 
+1 m1br.img: 200 223 232 
+2 b0br.img: 307 326 305 
+3 m1br.img: 236 215 x 
+done
+(x: round 3 of slot 3 did not reach the key step: the harness did not see the omnibox selection after Ctrl+L; keys reached chrome ([keylat] lines); the same harness failure is in /srv/euroos/reg-runs (kl3-r1-2, q1-xs, q2-lo, q3-s2lo) on d2-reg images; its guest was stopped)
+== smp 2
+0 b0br.img: 310 314 347 
+1 m1br.img: 214 265 243 
+2 b0br.img: 342 304 345 
+3 m1br.img: 274 247 234 
+done

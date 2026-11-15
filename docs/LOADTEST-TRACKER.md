@@ -2348,8 +2348,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   0.5, LFE dropped, normalised per side). Not a plug PCM: plug over this device never settled (runs 78-83).
 - **Test:**     `[pcmch]` (`gpcm.c`, raw ioctls as snd_pcm_set_params, 6/1/2 channels, the ring checked): 5 of 11 FAILED ->
   15 of 15 OK. Wikimedia 480p (6-channel Opus): 0 -> 17 of 18 five-second windows with sound; local VP9+Opus unchanged (12/12).
-### BUG-182 — a second without timer ticks while NIC interrupts arrive (`[timer-probe] FROZEN`) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (the harness ends the run as CRASH/HANG; the guest goes on)
+### BUG-182 — a second without timer ticks while NIC interrupts arrive (`[timer-probe] FROZEN`) ✅ FIXED
+- **Status:**   FIXED (`5ea2dde`; test `db9f0a6`, feature/fix-d2) · **Severity:** MEDIUM (the harness ends the run as CRASH/HANG; the guest goes on)
 - **Actual:**   `chrome-smoke --only localvideo` run av1 (`proof/chrome-audio/localvideo.txt`, image `bf92f3c`, KVM 2 vCPU,
   6 GiB), at the H.264 page, before any audio was opened: `[timer-probe] FROZEN: 2281 Mcycles since the previous NIC irq but
   only 2 ticks (now 2483): ISR[20..3f]=0 IRR[20..3f]=0x1 TPR=0x0 PPR=0x40 LVT_TIMER=0x00020020 CUR=164200 halted-at
@@ -2377,6 +2377,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   signature: right after `TCP established to 142.250.x.x:443` the first connect of the browser, `[if0-window] 1009-1036 ms cause=syscall 42` (connect), `2214-2280 Mcycles`
   without a tick, `IRR 0x20`, `halted-at rip=0x100...9db`. The `[if0-window]` attribution of sched-d1 names the system call: `connect` keeps the CPU with
   interrupts off for about a second. `proof/validate-2026-11e/chrome-starts20.txt`, `starts19-frozen.txt`.
+
+- **Fix (fix-d2):** the IF=0 path is the network wait itself. `net::rx_should_block()` was true only for frames of the userspace driver;
+  with the in-kernel virtio-net of the browser images a blocking `connect` (also an ARP lookup, a receive) of a scheduled process spun
+  with interrupts off for the whole bound of its wait, 1 s for the first SYN round when the SYN-ACK was late. Test first: `connif0`
+  (`[conn-if0]`, a scheduled `/bin/gnet` connect, longest window without a tick) with a QEMU `filter-buffer` holding the answer back:
+  420 ms (SYN) and 948 ms (ARP) `cause=syscall 42` -> FAILED. Now every wait whose caller may sleep sleeps a tick after `RX_BURST`
+  tries and polls the ring itself; `rx_route_irq` wakes the waiters early. After: 10 ms, OK. Browser boots: 40/40 starts plus the
+  keylat and final runs without FROZEN (`proof/fix-d2/README.md`).
 
 ### BUG-150 — a fork that was refused part-way kept everything it had taken ✅ FIXED
 - **Status:**   FIXED (`48bf2e7`) · **Severity:** HIGH (this is where the demand pool of BUG-137 went)
@@ -2688,7 +2696,7 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Proof:**    `proof/validate-2026-11e/power-leg.txt`, `proof/fix270/`.
 
 ### BUG-271 — the APs no longer take kernel work: `[smp] J1: demo workers parked on 0/N`, `[kwork] no APs accepting work` (since S6)
-- **Status:**   OPEN · **Severity:** MEDIUM (self-test coverage of `[kwork]` and the per-CPU scheduler is gone; per-CPU kernel work queues idle on every release image)
+- **Status:**   FIXED (`1830a79`, `4c8c363`; test `fe608dd`, feature/fix-d2) · **Severity:** MEDIUM (self-test coverage of `[kwork]` and the per-CPU scheduler is gone; per-CPU kernel work queues idle on every release image)
 - **Actual:**   self-test image, KVM or TCG, smp >= 2: `[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0`, `[smp] J1: demo
   workers parked on 0/1 AP(s)`, `[kwork] no APs accepting work (single core) — per-CPU queues idle` (validate-2026-11d: worker-A=375,
   parked 1/1, `[kwork] ... 2 ok -> OK`). Public image, 4 vCPU: `[smp] 0/3 AP(s) idle in hlt, taking kernel work from per-CPU queues`
@@ -2700,16 +2708,23 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   tickless AP idle of S6 the AP never gets a tick to switch to the demo worker that would park itself, so the wait runs out and
   `kwork::start_accepting()` is never called. Same cause as BUG-272.
 - **Proof:**    `proof/validate-2026-11e/ap-bisect.txt`.
+- **Fix (fix-d2):** the cause above confirmed (`worker-A=0`: the demo workers never ran). `apuser::ap_idle_wait` goes tickless only on a parked AP
+  (`1830a79`). With the queues open, `[kwork]` at 4 vCPU showed `work-stealing=NO`: a tickless idle AP never looks for work to steal;
+  `kwork::submit` now pings an idle AP when the target core is busy, and the idle wait checks own and stealable work with IF=0 (`4c8c363`).
+  Test first: `[kwork] 1 AP(s) online but not accepting work -> FAILED` (`fe608dd`). After: J1 parked 1/1 and 3/3, `[kwork] ... -> OK`
+  (work-stealing=yes), public image `[smp] 3/3 AP(s) idle in hlt`. `proof/fix-d2/ap-kwork.txt`.
 
 ### BUG-272 — boot time +0.3 to 0.4 s: the `smp-timer` phase takes 551 ms instead of 47 ms (since S6)
-- **Status:**   OPEN · **Severity:** MEDIUM (the release criterion of a median of at most 2.8 s to the desktop is missed)
+- **Status:**   FIXED (`1830a79`, feature/fix-d2) · **Severity:** MEDIUM (the release criterion of a median of at most 2.8 s to the desktop is missed)
 - **Actual:**   `boot-time.py`, public image, KVM, pin 38-39, 10 pairs alternating on a quiet machine: 48dfd05 median 3.00 s
   (2.70-3.39), download 2026.11.14 median 2.68 s (2.23-2.93). `[boot-time] phase smp-timer: 551 ms (at 989 ms)` against 47 ms.
 - **Cause:**    the 500 ms wait of BUG-271 (`ap_park_demo_workers` runs out on every boot with APs).
 - **Proof:**    `proof/validate-2026-11e/boot-time.txt`.
+- **Fix (fix-d2):** BUG-271. smp-timer phase 54-60 ms (2 vCPU); boot time, 10 pairs alternating, pin 18-19: merged `f53eec1` median
+  **2.41 s** (2.21-2.79) against `3ecde9e` 2.63 s (2.23-2.73). `proof/fix-d2/README.md`.
 
 ### BUG-273 — the self-test syscall fuzzer runs into its 30 s limit on a loaded host: `[fuzz] ... kernel-survived=false` (D2 family, not validate-2026-11d)
-- **Status:**   OPEN · **Severity:** LOW (self-test marker; the process hit `[glibc] TIMEOUT waiting for the process to exit`, the kernel is fine)
+- **Status:**   FIXED (`93dbd07`, feature/fix-d2) · **Severity:** LOW (self-test marker; the process hit `[glibc] TIMEOUT waiting for the process to exit`, the kernel is fine)
 - **Actual:**   100 short boots of the self-test image of `48dfd05` (6 lanes of 2 vCPU beside other guests): 108 boots, **21 with `[fuzz] ... FAILED`**,
   no other FAILED line. gfuzz stops after 15 000 of 20 000 calls at the run deadline (3 000 ticks, `exit=0 (want 171)`); its deterministic
   sequence reaches the 5 000-call mark at tick ~4 100-4 350 instead of ~3 250.
@@ -2719,9 +2734,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Cause:**    not found; the D2 family needs a larger share of the 30 s than validate-2026-11d when a core is shared. The limit is
   in `run_glibc` (`ring3.rs`), the test is `main.rs` `[fuzz]`.
 - **Proof:**    `proof/validate-2026-11e/short-boots.txt`, `fuzz-ab.txt`.
+- **Cause (fix-d2):** S1 (`cdf5aff`). 16 lanes of 2 vCPU on both SMT siblings of eight cores, same hour: validate-2026-11d 0/32,
+  `4c8c363` 17/32, S0 `ab8e32c` 0/32, S1 `cdf5aff` 12/32. S1 charges every turn by its length; the fuzzer, which the desktop task
+  starts and only waits for, got one nice-0 share beside the ring-3 demo spinners of the self-test image instead of the CPU the waiting
+  task leaves. **Fix:** `run_glibc`/`run_glibc_disk` give a program that task 0 started `DESKTOP_NICE` (`93dbd07`); deadline and call
+  count unchanged. `proof/fix-d2/fuzz-ab.txt`, final short boots in `proof/fix-d2/README.md`.
 
 ### BUG-274 — key to screen on the browser 80 to 120 ms slower than the release (3ecde9e), the kernel own numbers are not
-- **Status:**   OPEN (needs a decision) · **Severity:** MEDIUM
+- **Status:**   FIXED (`48df3b0`, feature/fix-d2) · **Severity:** MEDIUM
 - **Actual:**   `chrome-smoke --only perf` (30 keys), release code `3ecde9e` against `48dfd05`, same host, tmpfs work directories, four runs at a time, medians:
   quiet machine (3 rounds) smp 4: 327 / 307 / 327 ms against 410 / 409 / 428 ms; smp 2: 289 / 278 / 322 against (FROZEN) / 416 / 398;
   with other load (3 rounds): smp 4 281 / 326 / 260 against 376 / 391 / 363; smp 2 300 / 326 / 327 against 374 / (FROZEN) / 341.
@@ -2732,12 +2752,22 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   explain it, since read to first draw got shorter. Cause not found.
 - **Reproduce:** `scripts/chrome-smoke.py --only perf --kvm --smp 4 --workdir /dev/shm/X` with the browser image (`ui.tour=off;update.check=off`), both images at the same time (`proof/validate-2026-11e/drivers/klatq.sh`).
 - **Proof:**    `proof/validate-2026-11e/keylat.txt`.
+- **Cause (fix-d2):** S1 (`cdf5aff`), not S3-S6. Browser images, paired rounds on tmpfs with idle SMT siblings, smp 4: `3ecde9e`
+  284-348, S0 `ab8e32c` 304-340, S1 351-359, S2 352-388, sched-d1 378-403 ms; the BUG-271 fix alone 348-399. S1 gives the desktop loop the
+  weight of nice -10; with chrome hosted its passes are work for chrome and it took the CPU while chrome waited (sched-stat over the 30
+  keys: desktop loop 7.2 s of 21 s at -10, 3.0 s of 15.9 s at nice 0; the kernel read-to-first-draw median 147 -> 165-214 ms in the
+  same logs). Desktop nice 0 or -5 restores the keylat but fails `[fair]` (16 %, 34 %). **Fix:** while a hosted X window exists the
+  desktop task is charged at nice 0 (`48df3b0`); without an X client nothing changes. Merged `f53eec1` against `3ecde9e`, quiet, paired:
+  smp 4 200-236 against 284-326 ms, smp 2 214-274 against 304-347 ms. `proof/fix-d2/keylat-*.txt`, `final-keylat.txt`.
 
 ### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once
 - **Status:**   OPEN (intermittent) · **Severity:** LOW
 - **Actual:**   TCG matrix of `48dfd05`, `combined-smp1-iommu-1g`: `[churn-forkthreads] ... (no result line) (exit 0)` FAILED (validate-2026-11d: 40 of 40 rounds PASS).
   The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. Not reproduced, so no cause.
 - **Proof:**    `proof/validate-2026-11e/tcg-summary.txt`, `comparison-tcg.txt`.
+- **Rerun (fix-d2):** the same configuration 20 times at once on the merged self-test image of feature/fix-d2 (`f53eec1`):
+  `[churn-forkthreads]` OK 20/20, desktop 20/20, 0 watchdog, 0 NMI; markers-compare against the validation rerun `rr3` 0 worse in all 20.
+  Not reproduced; not investigated further. `proof/fix-d2/bug275-tcg20.txt`.
 
 ### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ✅ FIXED
 - **Status:**   FIXED (`c70dddf`; test `8a6f333`) · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
