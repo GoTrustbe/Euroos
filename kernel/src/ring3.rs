@@ -7584,8 +7584,9 @@ pub fn spawn_euro_app(
         set_task_caps(idx, caps | CAP_TASK_SET);
         set_task_profile(idx, profile);
         if profile == eurosandbox::Profile::Driver {
-            // BUG-231: a driver runs when its interrupt wakes it (sched::DRIVER_NICE).
-            crate::sched::set_nice(idx, crate::sched::DRIVER_NICE);
+            // BUG-231: a driver runs when its interrupt wakes it (sched::DRIVER_NICE),
+            // within its budget (BUG-252, sched::set_driver).
+            crate::sched::set_driver(idx);
         }
         crate::serial_println!("[euroapp] pid {pid} -> task {idx}: caps {caps:#x}, profile {}", profile.name());
         Some(idx)

@@ -9,7 +9,7 @@
 //! increasing counters prove they really run in parallel (interleaved).
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::segmentation::{Segment, CS, SS};
@@ -126,6 +126,132 @@ pub const DESKTOP_NICE: i8 = -10;
 /// a woken driver is ahead of the pack again; what it takes under a flood is
 /// still bounded by its weight.
 pub const DRIVER_NICE: i8 = -15;
+
+/// The driver budget (BUG-252). Nice -15 is what a driver needs to run when its
+/// interrupt wakes it; it is not meant as the weight of a driver that never
+/// sleeps. Under an inbound flood e1000d took 45 % of the CPU at that weight
+/// (each frame it hands on is a device exit, and under QEMU's user network that
+/// exit carries the host side's TCP work too) and the desktop loop's console
+/// commands ran at half their rate. A driver keeps nice -15 for the first
+/// `DRV_BUDGET_PCT` % of every window of `DRV_WINDOW_TICKS` ticks; past that it
+/// is charged at `DRIVER_OVER_NICE` (it runs when nobody else wants the CPU)
+/// for the rest of the window, and the next window starts it at the pack again
+/// (the debt of the throttled stretch is not carried over: the budget is the
+/// limit, not its vruntime). A driver that does a short pass per interrupt never
+/// reaches the budget, and under a flood most frames still go through at once:
+/// only those that come after the budget is spent wait for the next window.
+/// Default 10 % of 500 ms: in 25-minute soaks with the inbound hammer, 10 % of
+/// 100 ms left the hammer p50 at 8.9 ms (the throttled stretches were many and
+/// short), 30 % of 100 ms the console at 4 006 commands an hour; 10 % of 500 ms
+/// gave p50 5.7 ms and 5 232 commands an hour (fixed -15: 5.0 ms, 2 812).
+/// `sched.drvbudget=PCT` and `sched.drvwindow=TICKS` (boot options) and the
+/// shell command `drvbudget [PCT]` change it; 100 % is the old fixed weight.
+pub const DRIVER_OVER_NICE: i8 = 19;
+static DRV_WINDOW_TICKS: AtomicU64 = AtomicU64::new(DRV_WINDOW_DEFAULT);
+const DRV_WINDOW_DEFAULT: u64 = 50;
+static DRV_BUDGET_PCT: AtomicU64 = AtomicU64::new(DRV_BUDGET_DEFAULT);
+const DRV_BUDGET_DEFAULT: u64 = 10;
+/// The driver tasks (index + 1, 0 = free), their run time in the current window
+/// (TSC), and how often a driver went over its budget.
+const DRV_SLOTS: usize = 8;
+static DRV_TASK: [AtomicUsize; DRV_SLOTS] = [const { AtomicUsize::new(0) }; DRV_SLOTS];
+static DRV_RUN: [AtomicU64; DRV_SLOTS] = [const { AtomicU64::new(0) }; DRV_SLOTS];
+static DRV_OVER: AtomicU64 = AtomicU64::new(0);
+static DRV_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+
+fn drv_slot(idx: usize) -> Option<usize> {
+    (0..DRV_SLOTS).find(|&k| DRV_TASK[k].load(Ordering::Relaxed) == idx + 1)
+}
+
+/// Task `idx` is a userspace driver: nice -15 within its budget (see above).
+pub fn set_driver(idx: usize) {
+    set_nice(idx, DRIVER_NICE);
+    if drv_slot(idx).is_some() {
+        return;
+    }
+    for k in 0..DRV_SLOTS {
+        if DRV_TASK[k].compare_exchange(0, idx + 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            DRV_RUN[k].store(0, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+/// The driver budget in percent of a window (100: none).
+pub fn driver_budget() -> u64 {
+    DRV_BUDGET_PCT.load(Ordering::Relaxed)
+}
+
+pub fn set_driver_budget(pct: u64) {
+    DRV_BUDGET_PCT.store(pct.clamp(1, 100), Ordering::Relaxed);
+}
+
+/// The budget window in ticks.
+pub fn driver_window() -> u64 {
+    DRV_WINDOW_TICKS.load(Ordering::Relaxed)
+}
+
+pub fn set_driver_window(ticks: u64) {
+    DRV_WINDOW_TICKS.store(ticks.clamp(5, 1000), Ordering::Relaxed);
+}
+
+/// (driver tasks, times one went over its budget).
+pub fn driver_stats() -> (alloc::vec::Vec<usize>, u64) {
+    let v = (0..DRV_SLOTS).filter_map(|k| DRV_TASK[k].load(Ordering::Relaxed).checked_sub(1)).collect();
+    (v, DRV_OVER.load(Ordering::Relaxed))
+}
+
+/// The nice value a turn of task `idx` is charged at: its own, except for a
+/// driver past its budget in this window.
+fn charge_nice(s: &Scheduler, idx: usize) -> i8 {
+    let n = s.tasks[idx].nice;
+    if n >= DRIVER_OVER_NICE {
+        return n;
+    }
+    let Some(k) = drv_slot(idx) else { return n };
+    let pct = DRV_BUDGET_PCT.load(Ordering::Relaxed);
+    if pct >= 100 {
+        return n;
+    }
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    if DRV_RUN[k].load(Ordering::Relaxed) > per * DRV_WINDOW_TICKS.load(Ordering::Relaxed) * pct / 100 {
+        DRIVER_OVER_NICE
+    } else {
+        n
+    }
+}
+
+/// A turn of `idx` of `cycles` ends: count it against a driver's budget, and
+/// start a new window when this one is over (a driver that ran past its budget
+/// starts it at the pack, not behind it).
+fn drv_account(s: &mut Scheduler, idx: usize, cycles: u64) {
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    let start = DRV_WINDOW_START.load(Ordering::Relaxed);
+    let win = DRV_WINDOW_TICKS.load(Ordering::Relaxed);
+    if now.wrapping_sub(start) >= win {
+        DRV_WINDOW_START.store(now, Ordering::Relaxed);
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let cap = per * win * DRV_BUDGET_PCT.load(Ordering::Relaxed) / 100;
+        for k in 0..DRV_SLOTS {
+            let was = DRV_RUN[k].swap(0, Ordering::Relaxed);
+            if was > cap {
+                if let Some(t) = DRV_TASK[k].load(Ordering::Relaxed).checked_sub(1) {
+                    if t < s.count && s.tasks[t].vruntime > s.min_vr {
+                        s.tasks[t].vruntime = s.min_vr;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(k) = drv_slot(idx) {
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let cap = per * win * DRV_BUDGET_PCT.load(Ordering::Relaxed) / 100;
+        let before = DRV_RUN[k].fetch_add(cycles, Ordering::Relaxed);
+        if before <= cap && before + cycles > cap {
+            DRV_OVER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 /// vruntime is in weighted nanoseconds. A task that waited gets ahead of the
 /// pack by half a slice at most: `max(vruntime, min_vr - WAKE_FLOOR)`.
@@ -392,7 +518,7 @@ fn woken(s: &Scheduler, idx: usize) {
         true
     } else {
         let live = s.tasks[cur].vruntime
-            .wrapping_add(vr_charge(now.saturating_sub(EXEC_START.load(Ordering::Relaxed)), s.tasks[cur].nice));
+            .wrapping_add(vr_charge(now.saturating_sub(EXEC_START.load(Ordering::Relaxed)), charge_nice(s, cur)));
         s.tasks[idx].vruntime.saturating_add(WAKE_PREEMPT) < live
     };
     if want {
@@ -1579,7 +1705,11 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     // Ready, blocks, sleeps or yields: a thread that yields after 50 us pays 50 us,
     // not a turn. The desktop loop never banks idle time: when it leaves the CPU
     // it is placed like a task that waited (at most half a slice ahead).
-    let charge = vr_charge(ran_tsc, s.tasks[cur].nice);
+    // BUG-252: a driver is charged at nice -15 within its budget, at
+    // DRIVER_OVER_NICE past it (the turn that crosses it counts as within).
+    let cn = charge_nice(&s, cur);
+    drv_account(&mut s, cur, ran_tsc);
+    let charge = vr_charge(ran_tsc, cn);
     s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(charge);
     if cur == 0 {
         place_woken(&mut s, 0);
@@ -1968,6 +2098,9 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     crate::ring3::fd_space_slot_reset(i);
     SPAWN_GEN[i].fetch_add(1, Ordering::Relaxed);
     KSTART[i].store(0, Ordering::Relaxed);
+    if let Some(k) = drv_slot(i) {
+        DRV_TASK[k].store(0, Ordering::Relaxed);
+    }
     Some(i)
 }
 

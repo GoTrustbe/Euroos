@@ -104,6 +104,14 @@ fn apply(text: &str) {
                     Some(m) => crate::apuser::set_mode(m),
                     None => crate::serial_println!("[bootopt] smpuser={v} is not off, test or on: ignored"),
                 },
+                ("sched.drvwindow", v) => match v.parse::<u64>() {
+                    Ok(t) if (5..=1000).contains(&t) => crate::sched::set_driver_window(t),
+                    _ => crate::serial_println!("[bootopt] sched.drvwindow={v} is not 5..1000 ticks: ignored"),
+                },
+                ("sched.drvbudget", v) => match v.parse::<u64>() {
+                    Ok(p) if (1..=100).contains(&p) => crate::sched::set_driver_budget(p),
+                    _ => crate::serial_println!("[bootopt] sched.drvbudget={v} is not 1..100: ignored"),
+                },
                 ("display.mode", v) => match parse_mode(v) {
                     Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
                     None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),

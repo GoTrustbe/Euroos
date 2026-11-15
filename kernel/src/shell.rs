@@ -705,6 +705,18 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             crate::serial_println!("{l}");
             alloc::vec![l]
         }
+        "drvbudget" => {
+            if let Ok(p) = arg1.trim().parse::<u64>() {
+                crate::sched::set_driver_budget(p);
+            }
+            let (t, over) = crate::sched::driver_stats();
+            let l = alloc::format!(
+                "[drvbudget] drivers {:?} at nice {} within {} % of every {} ms, nice {} past it; over the budget {} times",
+                t, crate::sched::DRIVER_NICE, crate::sched::driver_budget(), crate::sched::driver_window() * 10, crate::sched::DRIVER_OVER_NICE, over
+            );
+            crate::serial_println!("{l}");
+            alloc::vec![l]
+        }
         "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
         // S3-S6: ring 3 on the application processors.
         "smpuser" => crate::schedstat::smpuser_cmd(arg1),
