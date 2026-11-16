@@ -1340,6 +1340,20 @@ pub fn desktop_idle_hlt() {
 /// TSC and count (`keylat` prints them, `keylat reset` clears them). Ended by
 /// the tick means nothing woke a waiting thread before it: a timed wait,
 /// which the 10 ms tick rounds up.
+/// 11f-A: sleepers the tick woke while a key was on its way, by the system
+/// call they slept in: epoll_wait/epoll_pwait, poll/ppoll/select/pselect,
+/// futex, nanosleep/clock_nanosleep, other (kernel tasks included).
+pub static TICK_WAKES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub const TICK_WAKE_NAMES: [&str; 5] = ["epoll", "poll/select", "futex", "nanosleep", "other"];
+fn tick_wake_kind(sys: u64) -> usize {
+    match sys {
+        232 | 281 | 441 => 0,
+        7 | 271 | 23 | 270 => 1,
+        202 => 2,
+        35 | 230 => 3,
+        _ => 4,
+    }
+}
 pub static IDLE_BY: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 pub static IDLE_BY_N: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// The tick in which the desktop loop was last given the CPU by the scheduler.
@@ -1707,11 +1721,15 @@ fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
     drain_locked(&mut s);
     // 1. Wake sleepers: Sleeping -> Ready as soon as their wake time is reached.
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    let in_flight = crate::xserver::keylat::in_flight();
     for i in 0..s.count {
         if let State::Sleeping(w) = s.tasks[i].state {
             if now >= w {
                 s.tasks[i].state = State::Ready;
                 place_woken(&mut s, i);
+                if in_flight {
+                    TICK_WAKES[tick_wake_kind(crate::ring3::last_syscall(i).0)].fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     }

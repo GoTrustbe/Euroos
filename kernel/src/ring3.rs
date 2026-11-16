@@ -2938,6 +2938,10 @@ fn epoll_fd_writable(fd: u64) -> bool {
 /// ready and a wait was requested, YIELD (bounded) so chrome's worker threads and
 /// timers advance instead of the main thread busy-spinning — then return 0 so the
 /// pump re-checks its timer queue. This keeps a cooperative kernel making progress.
+/// 11f-A: epoll_wait/poll calls that found an fd ready only after they had
+/// slept (their 2-tick re-check), while a key was on its way.
+pub static POLL_LATE: AtomicU64 = AtomicU64::new(0);
+
 fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     EPOLL_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if !is_epoll_fd(epfd) {
@@ -3011,6 +3015,9 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             }
             crate::serial_println!("[wait] t{} {:?} epoll_wait timeout={timeout} nothing ready:{desc}",
                 crate::sched::current(), thread_name(crate::sched::current()));
+        }
+        if n > 0 && tries > 0 && crate::xserver::keylat::in_flight() {
+            POLL_LATE.fetch_add(1, Ordering::Relaxed);
         }
         if n > 0 || timeout == 0 {
             // Livelock forensics: run 14's Chrome_IOThread called epoll_wait a
@@ -17864,6 +17871,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 }
                 crate::serial_println!("[pollset] t{} {:?} n={nfds} to={timeout_ms} ready={ready}:{desc}",
                     crate::sched::current(), thread_name(crate::sched::current()));
+            }
+            if ready > 0 && tries > 0 && crate::xserver::keylat::in_flight() {
+                POLL_LATE.fetch_add(1, Ordering::Relaxed);
             }
             if ready > 0 || timeout_ms == 0 {
                 break ready; // something is ready, or the caller asked not to wait

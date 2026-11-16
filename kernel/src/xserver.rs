@@ -791,6 +791,19 @@ pub mod keylat {
             let b = |k: usize| (us(0, crate::sched::IDLE_BY[k].load(Ordering::Relaxed)) / 1000, crate::sched::IDLE_BY_N[k].load(Ordering::Relaxed));
             let ((tm, tn), (im, inn)) = (b(0), b(1));
             out.push(alloc::format!("[keylat] BSP idle while a key was on its way (delivery to first paint): {} ms; ended by the timer tick {tm} ms ({tn} halts), by another interrupt {im} ms ({inn} halts)", tm + im));
+            let mut l = alloc::string::String::from("[keylat] sleepers the tick woke meanwhile, by system call:");
+            for (k, name) in crate::sched::TICK_WAKE_NAMES.iter().enumerate() {
+                l.push_str(&alloc::format!(" {name} {}", crate::sched::TICK_WAKES[k].load(Ordering::Relaxed)));
+            }
+            out.push(l);
+            // A wait in epoll_wait/poll re-checked its descriptors every two
+            // ticks: a message for a chrome thread waited up to 20 ms for it,
+            // several times per key. Limit: under 2 such late finds per key.
+            let late = crate::ring3::POLL_LATE.load(Ordering::Relaxed);
+            let keys = KEYNO.load(Ordering::Relaxed).max(1);
+            out.push(alloc::format!(
+                "[keylat] epoll/poll waits that found a descriptor ready only after sleeping: {late} in {keys} keys ({:.1} a key) -> {} (limit 2 a key)",
+                late as f64 / keys as f64, if late < 2 * keys { "OK" } else { "FAILED" }));
         }
         out.push(wake_line());
         out
@@ -818,6 +831,10 @@ pub mod keylat {
             b.store(0, Ordering::Relaxed);
         }
         crate::sched::deskwatch::cpu_reset();
+        for k in 0..5 {
+            crate::sched::TICK_WAKES[k].store(0, Ordering::Relaxed);
+        }
+        crate::ring3::POLL_LATE.store(0, Ordering::Relaxed);
         for k in 0..2 {
             crate::sched::IDLE_BY[k].store(0, Ordering::Relaxed);
             crate::sched::IDLE_BY_N[k].store(0, Ordering::Relaxed);
