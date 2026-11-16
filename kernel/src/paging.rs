@@ -478,6 +478,49 @@ fn rwx_big_inner(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64, str
     Ok(pml4)
 }
 
+/// ASLR S4: the address space of a launched glibc process whose arena of
+/// `nblocks` 2 MiB blocks (RAM at `arena_phys`) is mapped at `virt_arena`.
+/// With `virt_arena == arena_phys` this is [`try_build_address_space_rwx_big`]
+/// (the identity arena). Otherwise the arena hangs under its slot of the
+/// arena zone and PML4[0] is the kernel's identity map with no USER leaf: a
+/// PDPT of 1 GiB supervisor pages. Refuses (nothing kept) when a table frame
+/// is missing.
+pub fn try_build_address_space_arena(
+    falloc: &mut FrameAllocator,
+    virt_arena: u64,
+    arena_phys: u64,
+    nblocks: u64,
+) -> Result<u64, OutOfFrames> {
+    if virt_arena == arena_phys {
+        return try_build_address_space_rwx_big(falloc, arena_phys, nblocks);
+    }
+    if virt_arena < ARENA_ZONE_BASE || virt_arena.saturating_add(nblocks * MIB2) > ARENA_ZONE_END {
+        return Err(OutOfFrames);
+    }
+    let [pml4, pdpt] = falloc.allocate_many::<2>().map_err(|_| OutOfFrames)?;
+    // SAFETY: two fresh, identity-mapped frames; we fill them completely.
+    unsafe {
+        core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
+        let pml4p = pml4 as *mut u64;
+        let pdptp = pdpt as *mut u64;
+        // PML4[0]: the kernel, identity, supervisor only (no USER bit at any level).
+        pml4p.write_volatile(pdpt | PRESENT | WRITABLE);
+        pml4p.add(1).write_volatile(high_pdpt_entry());
+        for i in 0..512usize {
+            pdptp.add(i).write_volatile((i as u64 * GIB) | PRESENT | WRITABLE | HUGE);
+        }
+    }
+    let mapped = {
+        let mut get_pd = || falloc.allocate().ok();
+        map_user_arena(pml4, virt_arena, arena_phys, nblocks, &mut get_pd)
+    };
+    if !mapped {
+        free_address_space(falloc, pml4);
+        return Err(OutOfFrames);
+    }
+    Ok(pml4)
+}
+
 /// Like [`build_address_space`], but for a FORKED child: the USER arena lies at a
 /// DIFFERENT physical address than where it appears virtually. We map the VIRTUAL
 /// arena (= the 2 MiB block of the PARENT, because the copied stack/code carry
@@ -2559,12 +2602,14 @@ pub fn robust_selftest() -> bool {
     let mut built = 0;
     // (name, frames needed, builder)
     type Builder = fn(&mut FrameAllocator, u64, &[u64; 8], &[u64; 8]) -> Result<u64, OutOfFrames>;
-    let cases: [(&str, usize, Builder); 5] = [
+    let cases: [(&str, usize, Builder); 6] = [
         ("wx", 4, |f, a, e, w| try_build_address_space(f, a, e, w)),
         ("wx_big", 5, |f, a, e, w| try_build_address_space_big(f, a, 6, e, w)),
         ("rwx", 3, |f, a, _, _| try_build_address_space_rwx(f, a)),
         ("rwx_big", 4, |f, a, _, _| try_build_address_space_rwx_big(f, a, 6)),
         ("remap", 3, |f, a, _, _| try_build_address_space_remap(f, a, a)),
+        // ASLR S4: the arena in the zone (PML4[0] PDPT + zone PDPT + PD).
+        ("arena_zone", 4, |f, a, _, _| try_build_address_space_arena(f, ARENA_ZONE_BASE, a, 6)),
     ];
     for (name, need, build) in cases {
         for have in 0..=need {
@@ -2599,9 +2644,9 @@ pub fn robust_selftest() -> bool {
     unsafe { dealloc(buf as *mut u8, layout) };
     crate::serial_println!(
         "[robust-paging] process page tables at 0..n free frames: {refused} refusals (OutOfFrames, 0 frames kept), {built} builds (freed again) → {}",
-        if ok && refused == 19 && built == 5 { "OK ✓" } else { "FAILED ✗" }
+        if ok && refused == 23 && built == 6 { "OK ✓" } else { "FAILED ✗" }
     );
-    ok && refused == 19 && built == 5
+    ok && refused == 23 && built == 6
 }
 
 // -- ASLR S2: an arena above the kernel's identity map ([arena-hi]) -----------

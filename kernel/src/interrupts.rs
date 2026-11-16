@@ -844,8 +844,10 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             for i in 0..96u64 {
                 let a = rsp.wrapping_add(i * 8);
                 if let Some(v) = read_user_qword(a) {
-                    // Plausible code pointer: in the demand region (libs/code) or arena.
-                    if crate::ring3::in_demand_zone(v) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                    // Plausible code pointer: in the demand region (libs/code) or arena
+                    // (identity, or the arena zone: ASLR S4).
+                    if crate::ring3::in_demand_zone(v) || (v >= 0x0100_0000 && v < 0x1000_0000)
+                        || (crate::paging::ARENA_ZONE_BASE..crate::paging::ARENA_ZONE_END).contains(&v) {
                         serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
                         printed += 1;
                         if printed >= 12 { break; }

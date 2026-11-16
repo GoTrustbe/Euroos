@@ -11066,7 +11066,9 @@ fn reap_orphan_fork_children() -> usize {
     // shared any more. A count left over is a fault of the copy-on-write
     // model; it is said and cleared, so the next run does not inherit it.
     {
-        let arena = ARENA_BASE.load(Ordering::Relaxed);
+        // ASLR S4: the counts are per frame: the RAM of the arena, not its
+        // virtual base (equal only with the identity arena).
+        let arena = LAUNCH_ARENA_PHYS.load(Ordering::Relaxed);
         let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
         if arena != 0 && span != 0 {
             let left = crate::paging::cow_refs().clear_range(arena, arena + span);
@@ -11689,6 +11691,37 @@ pub fn aslr_set_mode(m: euromm::layout::Mode) {
 static EXE_BASE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
 static EXE_END: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE + euromm::layout::EXE_WINDOW);
 static VDSO_CUR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+// -- ASLR S4: the arena of a launched process outside the identity map ---------
+
+/// Boot option `aslr.arena=`: false = `identity` (the arena of a launched glibc
+/// process at its physical address, as before), true = `fixed` (at
+/// `paging::ARENA_ZONE_BASE`, 8 TiB, with PML4[0] holding no user page).
+static ARENA_FIXED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(ARENA_FIXED_DEFAULT);
+/// `aslr.arena=` without the option.
+pub const ARENA_FIXED_DEFAULT: bool = false;
+pub fn arena_set_fixed(on: bool) {
+    ARENA_FIXED.store(on, Ordering::Relaxed);
+}
+/// The arena placement launches use now: `fixed` needs a demand zone above the
+/// arena zone, so `aslr=legacy` (demand region at 1 TiB) keeps the identity arena.
+pub fn arena_fixed() -> bool {
+    ARENA_FIXED.load(Ordering::Relaxed) && aslr_mode() != euromm::layout::Mode::Legacy
+}
+/// The name of the placement in use (`[bootopt]`, `[aslr-layout]`).
+pub fn arena_mode_name() -> &'static str {
+    if arena_fixed() { "fixed" } else { "identity" }
+}
+/// Where the launched process sees an arena whose RAM is at `phys`.
+fn arena_virt_for(phys: u64) -> u64 {
+    if arena_fixed() { crate::paging::ARENA_ZONE_BASE } else { phys }
+}
+/// The RAM of the arena of the launched process (0 = none): the frames the
+/// reaper's copy-on-write sweep and the teardown go by. `ARENA_BASE` is its
+/// virtual base; the two are equal only with the identity arena. Not part of
+/// `ChildMem`: a fork child's arena is single frames (BUG-156), it has no RAM
+/// base, and nothing reaches a child's arena by a frame number derived from it.
+static LAUNCH_ARENA_PHYS: AtomicU64 = AtomicU64::new(0);
 
 /// One draw for one image (a launch or an exec), cut by euromm::layout
 /// (BUG-088, ASLR S1): exe base (programs from disk), mmap floor, vDSO and the
@@ -12783,13 +12816,17 @@ pub fn spawn_glibc_persistent(
     let frames = (nblocks * 512) as usize;
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    let exe_base = arena;
-    let ldso_base = arena + 0x0080_0000;
+    // ASLR S4: av virtual, arena the RAM the kernel fills (see run_glibc).
+    let av = arena_virt_for(arena);
+    let kern = |va: u64| va - av + arena;
+    let exe_base = av;
+    let ldso_base = av + 0x0080_0000;
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
     let lay = image_layout(0, 0);
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
-    ARENA_BASE.store(arena, Ordering::Relaxed);
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
+    ARENA_BASE.store(av, Ordering::Relaxed);
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
@@ -12798,8 +12835,8 @@ pub fn spawn_glibc_persistent(
 
     // BUG-053: from here on the arena is held; every refusal gives it back.
     let (Some(exe_info), Some(ld_info)) = (
-        load_elf64(exe, exe_base, exe_base, program_span_pages(exe)),
-        load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)),
+        load_elf64(exe, exe_base, kern(exe_base), program_span_pages(exe)),
+        load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)),
     ) else {
         glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
         crate::serial_println!("[glibc] persistent app: executable or loader is not a loadable ELF - not started");
@@ -12809,15 +12846,15 @@ pub fn spawn_glibc_persistent(
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
     let vdso_ok = false;
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, 0) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, 0) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, av, nblocks as u64);
             p
         }
         Ok(p) => p,
@@ -13471,16 +13508,20 @@ fn glibc_disk_launch(
     let frames = (nblocks * 512) as usize;
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
-    ARENA_BASE.store(arena, Ordering::Relaxed);
+    // ASLR S4: av virtual, arena the RAM the kernel fills (see run_glibc).
+    let av = arena_virt_for(arena);
+    let kern = |va: u64| va - av + arena;
+    let ldso_base = av + 0x0080_0000; // ld-linux at +8 MiB
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
+    ARENA_BASE.store(av, Ordering::Relaxed);
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
-    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_disk_launch_abort(falloc, arena, frames, 0, 0, 0, prev_demand, prev_file);
@@ -13489,16 +13530,16 @@ fn glibc_disk_launch(
     };
     let vdso_ok = vdso_prepare(falloc);
     VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, av, nblocks as u64);
             p
         }
         Ok(p) => p,
@@ -13524,8 +13565,8 @@ fn glibc_disk_launch(
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let demand_floor = lay.mmap_floor;
     crate::serial_println!(
-        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={})",
-        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), aslr_mode().name()
+        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={}{})",
+        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), aslr_mode().name(), if arena_fixed() { ", arena fixed" } else { "" }
     );
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
@@ -14848,16 +14889,21 @@ pub fn run_glibc(
     // clear it directly here.) SAFETY: `frames` contiguous frames we just reserved.
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    // Arena layout.
-    let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
-    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
+    // Arena layout. ASLR S4: av is where the process sees the arena, arena
+    // its RAM, which the kernel fills here through the identity map (the
+    // launcher runs on the boot address space).
+    let av = arena_virt_for(arena);
+    let kern = |va: u64| va - av + arena;
+    let exe_base = av; // PIE exe: first PT_LOAD has p_vaddr 0
+    let ldso_base = av + 0x0080_0000; // ld-linux at +8 MiB
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
     let lay = image_layout(0, 0);
     EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
     EXE_END.store(lay.exe_end, Ordering::Relaxed);
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
 
-    ARENA_BASE.store(arena, Ordering::Relaxed);
+    ARENA_BASE.store(av, Ordering::Relaxed);
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
@@ -14866,14 +14912,14 @@ pub fn run_glibc(
 
     // load_elf64 places PT_LOAD at base+p_vaddr and applies R_X86_64_RELATIVE
     // (idempotent: ld.so also self-relocates).
-    let exe_info = match load_elf64(exe, exe_base, exe_base, program_span_pages(exe)) {
+    let exe_info = match load_elf64(exe, exe_base, kern(exe_base), program_span_pages(exe)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
             return (String::from("(bad exe ELF)"), u64::MAX);
         }
     };
-    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
@@ -14883,16 +14929,16 @@ pub fn run_glibc(
 
     let vdso_ok = vdso_prepare(falloc);
     VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, av, nblocks as u64);
             p
         }
         Ok(p) => p,
