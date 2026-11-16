@@ -7319,6 +7319,7 @@ fn main() -> Status {
             if gtk_vis { xrepaints += 1; }
             let comp_t0 = xserver::keylat::tsc();
             if gtk_vis {
+                let _ = xserver::take_damage(); // the status tick composites all of it
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
             // Native app window (Euro API surface): repaint on a new frame; the
@@ -7362,12 +7363,18 @@ fn main() -> Status {
             let comp_t0 = xserver::keylat::tsc();
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
-            compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            // 11f-A: only the rows the client's requests changed (a key
+            // changes one line of the page), else the whole body.
+            let band = xserver::take_damage()
+                .and_then(|(y0, y1)| compositor::draw_xclient_rows(&fb, &windows[gtk_idx], y0, y1));
+            if band.is_none() {
+                compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
-            let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+            let (gx, gy, gw, gh) = band.unwrap_or_else(|| compositor::window_body_rect(&windows[gtk_idx]));
             fb.present_rect(gx, gy, gw, gh);
             xserver::keylat::composite_from(comp_t0);
             xserver::keylat::painted();

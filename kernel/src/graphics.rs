@@ -370,6 +370,33 @@ impl FrameBuffer {
         }
     }
 
+    /// Copy a row of 0x00RRGGBB pixels to (x, y), cut to the clip rectangle
+    /// and the screen; the top byte of each source pixel is dropped (as
+    /// `put_pixel(Color::rgb(..))` does). The hosted X window's composite
+    /// (11f-A): one row at a time instead of a call per pixel.
+    pub fn put_row(&self, x: usize, y: usize, src: &[u32]) {
+        let (x0, y0, x1, y1) = self.bounds();
+        if self.buf.is_null() || y < y0 || y >= y1 || x >= x1 {
+            if self.buf.is_null() {
+                for (i, &v) in src.iter().enumerate() {
+                    self.put_pixel(x + i, y, Color::from_u32(v));
+                }
+            }
+            return;
+        }
+        let start = x.max(x0);
+        let skip = start - x;
+        if skip >= src.len() {
+            return;
+        }
+        let n = (src.len() - skip).min(x1 - start);
+        // SAFETY: y < height, start + n <= x1 <= width: inside the backbuffer.
+        let dst = unsafe { core::slice::from_raw_parts_mut(self.buf.add(y * self.width + start), n) };
+        for (d, v) in dst.iter_mut().zip(&src[skip..skip + n]) {
+            *d = v & 0x00FF_FFFF;
+        }
+    }
+
     /// Read a pixel back (cursor save-under + alpha-blend).
     pub fn get_pixel(&self, x: usize, y: usize) -> Color {
         if x >= self.width || y >= self.height {

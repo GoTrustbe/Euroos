@@ -1832,6 +1832,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
                 put_image(c, draw, dst_x, dst_y, width, height, data);
             }
             keylat::rect(width, height);
+            damage_req(draw, dst_y, height);
             trace(format_args!("PutImage draw={draw:#x} fmt={detail} {width}x{height} @({dst_x},{dst_y})"));
             // Verify: sample the four quadrant centres in the rendered window.
             if let Some(win) = c.windows.iter().find(|w| w.id == draw) {
@@ -1969,6 +1970,7 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             copy_area(c, src, dst, sx, sy, dx, dy, w, h);
             trace(format_args!("CopyArea src={src:#x} dst={dst:#x} {w}x{h} @({dx},{dy})"));
             keylat::rect(w as usize, h as usize);
+            damage_req(dst, dy, h.max(0) as usize);
             present(c, dst);
         }
         // GetSelectionOwner(23): selection@4 -> the window SetSelectionOwner named,
@@ -2805,7 +2807,35 @@ fn present(c: &XConn, id: u32) {
 /// browser's place in the frame (a white frame with one line of text), clicks
 /// were sent to the tooltip, and a maximise resized the tooltip (BUG-097).
 /// `c` is the connection being processed (it is out of the table).
+// Damage of the retained window (11f-A): the rows that changed since the
+// desktop loop last composited it. A PutImage or CopyArea onto the main window
+// (no popup open) names its rows; anything else (a fill, a move, a popup, a
+// new buffer) makes it full. `take_damage` hands it to the desktop loop.
+static REQ_RECT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DMG_LO: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+static DMG_HI: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DMG_FULL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// The drawing request about to be presented touches rows y..y+h of `draw`.
+fn damage_req(draw: u32, y: i32, h: usize) {
+    let y0 = y.clamp(0, 0xffff) as u64;
+    let y1 = (y as i64 + h as i64).clamp(0, 0xffff) as u64;
+    REQ_RECT.store(((draw as u64) << 32) | (y0 << 16) | y1, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rows `lo..hi` of the retained window changed since the last call; None: all of it.
+pub fn take_damage() -> Option<(usize, usize)> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let lo = DMG_LO.swap(u32::MAX, Relaxed);
+    let hi = DMG_HI.swap(0, Relaxed);
+    if DMG_FULL.swap(false, Relaxed) || lo >= hi {
+        return None;
+    }
+    Some((lo as usize, hi as usize))
+}
+
 fn compose_windowed(c: &XConn) {
+    let req = REQ_RECT.swap(0, core::sync::atomic::Ordering::Relaxed);
     let t = XCONNS.lock();
     let all = c.windows.iter().chain(t.iter().flatten().flat_map(|x| x.windows.iter()))
         .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.buf.len() == w.w as usize * w.h as usize);
@@ -2814,13 +2844,28 @@ fn compose_windowed(c: &XConn) {
     };
     let (mw, mh) = (main.w as usize, main.h as usize);
     let mut r = RETAINED_WINDOW.lock();
+    let mut band = req != 0 && (req >> 32) as u32 == main.id && !all.clone().any(|w| w.id != main.id);
     match r.as_mut() {
         Some((w, h, buf)) if buf.len() == main.buf.len() => {
+            band &= *w == mw && *h == mh && RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed) == main.id;
             *w = mw;
             *h = mh;
             buf.copy_from_slice(&main.buf);
         }
-        _ => *r = Some((mw, mh, main.buf.clone())),
+        _ => {
+            band = false;
+            *r = Some((mw, mh, main.buf.clone()))
+        }
+    }
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        let (lo, hi) = (((req >> 16) & 0xffff) as u32, (req & 0xffff) as u32);
+        if band && lo < hi {
+            DMG_LO.fetch_min(lo, Relaxed);
+            DMG_HI.fetch_max(hi, Relaxed);
+        } else if !band {
+            DMG_FULL.store(true, Relaxed);
+        }
     }
     if let Some((_, _, buf)) = r.as_mut() {
         for p in all.filter(|w| w.id != main.id) {
