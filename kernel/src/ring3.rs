@@ -11257,15 +11257,18 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         irq_window();
         dz_free_except(child_pml4, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
-        // ASLR S1: the vDSO of the new image at a new draw (BUG-350: the
-        // child has one since its fork).
+        // The vDSO the child had since its fork (BUG-350) goes: the new image
+        // runs without one (AT_SYSINFO_EHDR 0), as every exec'd child did
+        // before. Mapping one there made Chromium's network service abort
+        // (BUG-355), so the exec'd image keeps the syscalls for its clock.
         crate::paging::free_pool_table_chain(child_pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
         crate::paging::flush_tlb_all();
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
     // ASLR S1: an exec draws anew (design 2.4): exe base, mmap floor and the
-    // slides in the arena and the vDSO base. The arena base stays until S5.
+    // slides in the arena. The arena base stays until S5; the new image has
+    // no vDSO (BUG-355).
     let (exe_span, exe_align) = disk_exe_geometry(diskidx);
     let lay = image_layout(exe_span, exe_align);
     let demand_floor = lay.mmap_floor;
@@ -11290,11 +11293,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let exe_base = lay.exe_base;
     EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
     EXE_END.store(lay.exe_end, Ordering::Relaxed);
-    let vdso = {
-        use x86_64::registers::control::Cr3;
-        let cr3 = Cr3::read().0.start_address().as_u64();
-        if vdso_map_pool(cr3, lay.vdso) { lay.vdso } else { 0 }
-    };
+    let vdso = 0u64; // no vDSO after exec (BUG-355)
     VDSO_CUR.store(vdso, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
@@ -11714,7 +11713,7 @@ pub struct Placed {
 /// The regions of an image with the arena at `arena` (`span` bytes) and the
 /// draw `lay`. A program from disk has its executable at the exe base, an
 /// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
-/// (a launch, and an exec in a fork child since BUG-350).
+/// (a launch), not after an exec in a fork child (BUG-355).
 fn place(arena: u64, span: u64, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
     let (brk, mmap, stack) = glibc_arena_layout(arena, span, lay);
     Placed {
@@ -11740,7 +11739,7 @@ pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
     let parent = place(arena, SPAN, &image_layout(es, ea), true, true);
     let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
     for _ in 0..8 {
-        let c = place(arena, SPAN, &image_layout(es, ea), true, true);
+        let c = place(arena, SPAN, &image_layout(es, ea), true, false);
         let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
         for (k, (a, b)) in pairs.iter().enumerate() {
             if a == b || *b == 0 {
