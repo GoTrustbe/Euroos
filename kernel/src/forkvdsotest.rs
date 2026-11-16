@@ -362,8 +362,9 @@ pub fn vdso_read(real: bool) -> u64 {
 struct Mono {
     back: [u64; 3], // largest step back: mono, boot, real
     backs: u64,
-    order: u64,     // a system call outside the two vDSO reads around it
+    order: u64,     // a system call outside the two vDSO reads around it, by more than 1 us
     order_max: u64,
+    jitter: u64,    // ... by less (rdtsc does not wait for earlier instructions)
     last: [u64; 3],
 }
 
@@ -386,8 +387,13 @@ impl Mono {
         }
         for (lo, x, hi) in [(v1, s, v2), (b, sb, vdso_read(false)), (r1, sr, r2)] {
             if x < lo || x > hi {
-                self.order += 1;
-                self.order_max = self.order_max.max(lo.saturating_sub(x)).max(x.saturating_sub(hi));
+                let by = lo.saturating_sub(x).max(x.saturating_sub(hi));
+                if by > 1000 {
+                    self.order += 1;
+                    self.order_max = self.order_max.max(by);
+                } else {
+                    self.jitter += 1;
+                }
             }
         }
         // after the last reads of each kind, a later read is later still
@@ -402,7 +408,7 @@ fn vdso_mono(kids: u64, kids_ok: u64, exec_vdso: Option<bool>) {
         return;
     }
     let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed);
-    let mut m = Mono { back: [0; 3], backs: 0, order: 0, order_max: 0, last: [0; 3] };
+    let mut m = Mono { back: [0; 3], backs: 0, order: 0, order_max: 0, jitter: 0, last: [0; 3] };
     // A. Late ticks: interrupts off for 1.5 periods right after a tick.
     let mut late = 0;
     if per != 0 {
@@ -435,10 +441,11 @@ fn vdso_mono(kids: u64, kids_ok: u64, exec_vdso: Option<bool>) {
         n += 1;
     }
     let (behind, behind_max) = ring3::vdso_behind_stats();
+    let ahead = vdso_read(false).saturating_sub(crate::interrupts::ticks() * 10_000_000);
     let us = |ns: u64| ns / 1000;
     let line = alloc::format!(
-        "{late} late ticks of 1.5 periods and a 2 s run ({n} rounds): steps back mono {} us, boot {} us, real {} us ({} times); system call outside its two vDSO reads {} times (max {} us); tick anchor behind the readers {behind} times (max {} us); clock frame shared by {kids_ok} of {kids} child calls (fork and exec), exec'd child has a vDSO: {}",
-        us(m.back[0]), us(m.back[1]), us(m.back[2]), m.backs, m.order, us(m.order_max), us(behind_max),
+        "{late} late ticks of 1.5 periods and a 2 s run ({n} rounds): steps back mono {} us, boot {} us, real {} us ({} times); system call outside its two vDSO reads {} times (max {} us; by under 1 us {}); tick anchor behind the readers {behind} times (max {} us), clock ahead of the tick count now {} us; clock frame shared by {kids_ok} of {kids} child calls (fork and exec), exec'd child has a vDSO: {}",
+        us(m.back[0]), us(m.back[1]), us(m.back[2]), m.backs, m.order, us(m.order_max), m.jitter, us(behind_max), us(ahead),
         match exec_vdso { Some(true) => "yes", Some(false) => "no", None => "not measured (the probe cannot exec)" });
     let ok = m.backs == 0 && m.order == 0 && late > 0 && kids > 0 && kids_ok == kids && exec_vdso != Some(false);
     crate::serial_println!("[vdso-mono] {line} → {}", if ok { "OK ✓" } else { "FAILED" });

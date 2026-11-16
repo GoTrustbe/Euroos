@@ -9767,17 +9767,80 @@ pub fn vdso_tick() {
         VDSO_CAL_TICK.store(ticks, Ordering::Relaxed);
         VDSO_CAL_TSC.store(tsc, Ordering::Relaxed);
     }
-    let mono_ns = ticks * 10_000_000;
-    let real_ns = base * 1_000_000_000 + ticks.saturating_sub(base_ticks) * 10_000_000;
+    // BUG-355: the new anchor is never below what a reader of the page saw a
+    // moment ago. A reader adds up to two ticks of rdtsc time to the anchor;
+    // the tick count does not follow a late tick (one period lost when the
+    // gap is under two, LAPIC jitter, a vCPU that was not running), so
+    // `ticks * 10 ms` was often below that and the vDSO clock stepped back,
+    // up to 10 ms ([vdso-mono]). Now the clock stays continuous: the anchor is
+    // the larger of the tick time and the time readers see now, and while it
+    // runs ahead of the ticks it runs slower (1/8, or 3/4 from 5 ms) until
+    // the ticks caught up. REALTIME is the same clock plus the boot epoch.
+    let target = ticks * 10_000_000;
     let d = frame as *mut u64;
+    // SAFETY: the identity-mapped clock frame; only this tick (the BSP) writes.
+    let seen = unsafe { vdso_interp(d.add(1).read_volatile(), d.add(5).read_volatile(), d.add(6).read_volatile(), tsc) };
+    let mono_ns = if seen > target {
+        VDSO_BEHIND.fetch_add(1, Ordering::Relaxed);
+        VDSO_BEHIND_MAX.fetch_max(seen - target, Ordering::Relaxed);
+        seen
+    } else {
+        target
+    };
+    let cal = VDSO_NS_PER_TSC.load(Ordering::Relaxed);
+    let ahead = mono_ns - target;
+    let rate = if ahead == 0 { cal } else if ahead < 5_000_000 { cal - cal / 8 } else { cal / 4 };
+    let real_ns = mono_ns + (base * 1_000_000_000).saturating_sub(base_ticks * 10_000_000);
     unsafe {
         let seq = d.read_volatile().wrapping_add(1);
         d.write_volatile(seq); // odd: update in progress
         d.add(1).write_volatile(mono_ns);
         d.add(3).write_volatile(real_ns);
         d.add(5).write_volatile(tsc);
-        d.add(6).write_volatile(VDSO_NS_PER_TSC.load(Ordering::Relaxed));
+        d.add(6).write_volatile(rate);
         d.write_volatile(seq.wrapping_add(1)); // even: stable
+    }
+}
+
+/// BUG-355: how often the tick anchor was below the clock readers saw, and
+/// the largest difference (ns): each one was a step back before the fix.
+static VDSO_BEHIND: AtomicU64 = AtomicU64::new(0);
+static VDSO_BEHIND_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// The vDSO's interpolation (`userland/glibc/vdso.c` `read_clock`): the anchor
+/// plus the rdtsc time since it, at most two ticks.
+fn vdso_interp(anchor: u64, tsc0: u64, rate: u64, now: u64) -> u64 {
+    if rate == 0 {
+        return anchor;
+    }
+    let dt = now.wrapping_sub(tsc0);
+    let ns = if dt < 1 << 40 { ((dt as u128 * rate as u128) >> 20) as u64 } else { 0 };
+    anchor + ns.min(20_000_000)
+}
+
+/// The clock of the vDSO page as a process reads it (None: no page yet).
+fn vdso_clock(real: bool) -> Option<u64> {
+    let f = VDSO_TIME_FRAME.load(Ordering::Relaxed);
+    if f == 0 {
+        return None;
+    }
+    let d = f as *const u64;
+    // SAFETY: the identity-mapped clock frame, read only; seqlock as in vdso.c.
+    unsafe {
+        loop {
+            let s1 = d.read_volatile();
+            if s1 == 0 {
+                return None; // no tick has written it yet
+            }
+            let base = d.add(if real { 3 } else { 1 }).read_volatile();
+            let tsc0 = d.add(5).read_volatile();
+            let rate = d.add(6).read_volatile();
+            if s1 & 1 != 0 || d.read_volatile() != s1 {
+                core::hint::spin_loop();
+                continue;
+            }
+            return Some(vdso_interp(base, tsc0, rate, core::arch::x86_64::_rdtsc()));
+        }
     }
 }
 
@@ -9799,8 +9862,16 @@ static PAINT_WATCH_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// nanosecond-grain gettimeofday in glibc).
 /// clock_gettime: REALTIME (0) and TAI (11) the wall clock, every other clock
 /// the uptime, in nanoseconds.
+///
+/// BUG-355: the very clock of the vDSO page (the same clocks as `vdso.c`:
+/// REALTIME, REALTIME_COARSE and TAI the wall clock), so a process with a vDSO
+/// and one without, or one call through each, never disagree.
 pub(crate) fn clock_ns(clk: u64) -> u64 {
-    if clk == 0 || clk == 11 {
+    let real = matches!(clk, 0 | 5 | 11);
+    if let Some(ns) = vdso_clock(real) {
+        return ns;
+    }
+    if real {
         wall_ns()
     } else {
         crate::interrupts::ticks() * 10_000_000 // 100 Hz tick
@@ -9810,7 +9881,7 @@ pub(crate) fn clock_ns(clk: u64) -> u64 {
 /// `[vdso-mono]`: how often the tick anchor of the clock page was below what
 /// the vDSO readers had seen, and by how much at most (ns).
 pub(crate) fn vdso_behind_stats() -> (u64, u64) {
-    (0, 0)
+    (VDSO_BEHIND.load(Ordering::Relaxed), VDSO_BEHIND_MAX.load(Ordering::Relaxed))
 }
 
 // Self-test access (forkvdsotest.rs: BUG-351, BUG-352, BUG-355).
@@ -9877,6 +9948,9 @@ pub(crate) fn test_set_user_rip(rip: u64) {
 }
 
 pub fn wall_ns() -> u64 {
+    if let Some(ns) = vdso_clock(true) {
+        return ns; // BUG-355: the clock of the vDSO page
+    }
     let base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return crate::rtc::epoch() * 1_000_000_000; // pre-vdso boot phase
@@ -11369,18 +11443,15 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         irq_window();
         dz_free_except(child_pml4, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
-        // The vDSO the child had since its fork (BUG-350) goes: the new image
-        // runs without one (AT_SYSINFO_EHDR 0), as every exec'd child did
-        // before. Mapping one there made Chromium's network service abort
-        // (BUG-355), so the exec'd image keeps the syscalls for its clock.
+        // ASLR S1: the vDSO of the new image at a new draw (BUG-350: the
+        // child has one since its fork).
         crate::paging::free_pool_table_chain(child_pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
         crate::paging::flush_tlb_all();
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
     // ASLR S1: an exec draws anew (design 2.4): exe base, mmap floor and the
-    // slides in the arena. The arena base stays until S5; the new image has
-    // no vDSO (BUG-355).
+    // slides in the arena and the vDSO base. The arena base stays until S5.
     let (exe_span, exe_align) = disk_exe_geometry(diskidx);
     let lay = image_layout(exe_span, exe_align);
     let demand_floor = lay.mmap_floor;
@@ -11405,7 +11476,12 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let exe_base = lay.exe_base;
     EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
     EXE_END.store(lay.exe_end, Ordering::Relaxed);
-    let vdso = 0u64; // no vDSO after exec (BUG-355)
+    // BUG-355: a vDSO at the new draw again; its clock no longer steps back.
+    let vdso = {
+        use x86_64::registers::control::Cr3;
+        let cr3 = Cr3::read().0.start_address().as_u64();
+        if vdso_map_pool(cr3, lay.vdso) { lay.vdso } else { 0 }
+    };
     VDSO_CUR.store(vdso, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
@@ -11825,7 +11901,7 @@ pub struct Placed {
 /// The regions of an image with the arena at `arena` (`span` bytes) and the
 /// draw `lay`. A program from disk has its executable at the exe base, an
 /// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
-/// (a launch), not after an exec in a fork child (BUG-355).
+/// (a launch, and an exec in a fork child since BUG-350).
 fn place(arena: u64, span: u64, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
     let (brk, mmap, stack) = glibc_arena_layout(arena, span, lay);
     Placed {
@@ -11851,7 +11927,7 @@ pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
     let parent = place(arena, SPAN, &image_layout(es, ea), true, true);
     let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
     for _ in 0..8 {
-        let c = place(arena, SPAN, &image_layout(es, ea), true, false);
+        let c = place(arena, SPAN, &image_layout(es, ea), true, true);
         let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
         for (k, (a, b)) in pairs.iter().enumerate() {
             if a == b || *b == 0 {
