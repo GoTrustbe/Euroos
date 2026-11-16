@@ -1,0 +1,16 @@
+# gs-pub
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-pub
+# gs-soak
+[gui-smoke] PASS — 77/77 steps ok, report and screenshots in /dev/shm/v11f/gs-soak
+# gs-input
+[gui-smoke] FAIL notification list: Esc closes it (BUG-057)
+[gui-smoke] FAIL notification list: a click beside it closes it (BUG-057)
+[gui-smoke] FAIL (2 step(s)) — 65/67 steps ok, report and screenshots in /dev/shm/v11f/gs-input
+# gs-e1000e
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-e1000e
+# gs-smp
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-smp
+# gs-b0
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-b0
+input rerun m: [gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-in-m
+input rerun b0: [gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/v11f/gs-in-b0

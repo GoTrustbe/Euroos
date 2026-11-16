@@ -1,0 +1,8 @@
+# scripts/build.sh release and image, built twice in one worktree (merge 00a6459)
+f9f0dbcbb31e20e744fcfb99291486e53d53161b8eba38fad40a837cb9923755  m-st.img
+f9f0dbcbb31e20e744fcfb99291486e53d53161b8eba38fad40a837cb9923755  m-st2.img
+cfc4f2f1f188daed0e10bbdaf9a74bc621967771f1a4dc094cc036e850f90a53  m-pub.img
+cfc4f2f1f188daed0e10bbdaf9a74bc621967771f1a4dc094cc036e850f90a53  m-pub2.img
+# e4b8ba4 rebuilt (b0-pub) against the public 2026.11.16 download (web-pub)
+6871d3a5b8830415e738561d92d34be93685fa5cad7b7277c886273aecc5a42b b0-pub.img
+4f15ad0e1c9ef5f5681333a99890a45489881c5e80891a3e22dd7bfd9c611521 web-pub.img

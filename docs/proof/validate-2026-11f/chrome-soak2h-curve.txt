@@ -1,0 +1,109 @@
+325 census samples over 124 min; pool 3231 MiB
+
+per site step (MiB; d = change of what the pool has in use since the step before)
+  min rnd site           ok    used     d  anon zero~ noacc filep tabl pcache  shm  free heap ramf procs
+    1   1 euro-os        ok     442    +0   104     4     0    89    5    214   28  2789  121    1     7
+    3   1 wikipedia      ok     547  +105   155     4     0   133    8    219   29  2684  122    1    10
+    5   1 github         ok     641   +94   218     5     0   149    9    226   37  2590  122    1    11
+    7   1 youtube        ok     801  +160   342     8     0   179   13    230   36  2430  123    1    13
+    9   1 openstreetmap  ok     679  -122   247     7     0   149   10    230   41  2552  123    1    11
+    9   1 pdf            ok     786  +107   293     8     0   194   13    233   49  2445  123    1    14
+   10   2 euro-os        ok     724   -62   270     6     0   164   11    235   41  2507  123    1    12
+   12   2 wikipedia      ok     728    +4   262     8     0   164   12    235   53  2503  123    1    12
+   13   2 github         ok     760   +32   281     6     0   179   12    235   51  2471  123    1    13
+   15   2 youtube        ok     795   +35   318     7     0   179   13    235   47  2436  123    1    13
+   18   2 openstreetmap  ok     844   +49   356     9     0   194   14    235   42  2387  123    1    14
+   20   2 pdf            ok     681  -163   243     6     0   149   11    235   40  2550  123    1    11
+   20   3 euro-os        ok     786  +105   299     8     0   194   14    235   41  2445  123    1    14
+   21   3 wikipedia      ok     725   -61   275     7     0   164   12    235   36  2506  123    1    12
+   23   3 github         ok     689   -36   241     6     0   149   11    235   50  2542  123    1    11
+   24   3 youtube        ok     695    +6   248     6     0   149   11    235   49  2536  123    1    11
+   26   3 openstreetmap  ok     705   +10   256     6     0   149   12    238   48  2526  123    1    11
+   29   3 pdf            ok     843  +138   361    11     0   179   14    240   45  2388  123    1    13
+   31   4 euro-os        ok     685  -158   245     6     0   149   12    240   36  2546  123    1    11
+   31   4 wikipedia      ok     792  +107   296     8     0   194   14    240   45  2439  123    1    14
+   32   4 github         ok     736   -56   277     7     0   164   13    240   40  2495  123    1    12
+   34   4 youtube        ok     700   -36   245     7     0   149   12    240   51  2531  123    1    11
+   35   4 openstreetmap  FAIL   702    +2   248     6     0   149   12    240   49  2529  123    1    11
+   37   4 pdf            ok     715   +13   257     6     0   149   12    240   53  2516  123    1    11
+   40   5 euro-os        ok     850  +135   369     9     0   179   15    240   44  2381  124    1    13
+   43   5 wikipedia      ok     695  -155   251     6     0   149   13    241   39  2536  123    1    11
+   43   5 github         ok     801  +106   301     9     0   194   15    241   47  2430  123    1    14
+   44   5 youtube        ok     745   -56   281     7     0   164   14    241   43  2486  123    1    12
+   46   5 openstreetmap  FAIL   715   -30   260     7     0   149   13    241   50  2516  123    1    11
+   47   5 pdf            ok     717    +2   262     6     0   149   13    241   50  2514  123    1    11
+   49   6 euro-os        ok     720    +3   262     6     0   149   13    241   54  2511  123    1    11
+   52   6 wikipedia      ok     861  +141   373    10     0   179   16    241   50  2370  123    1    13
+   54   6 github         ok     703  -158   252     6     0   149   13    241   45  2528  123    1    11
+   55   6 youtube        ok     810  +107   303     8     0   194   16    241   54  2421  123    1    14
+   56   6 openstreetmap  ok     747   -63   285     7     0   164   14    241   40  2484  123    1    12
+   57   6 pdf            ok     723   -24   263     7     0   149   14    241   54  2508  123    1    11
+   59   7 euro-os        ok     713   -10   255     5     0   149   14    241   52  2518  123    1    11
+   61   7 wikipedia      ok     729   +16   269     6     0   149   14    241   55  2502  123    1    11
+   64   7 github         ok     862  +133   371     9     0   179   16    241   52  2369  124    1    13
+   66   7 youtube        ok     706  -156   257     6     0   149   14    241   43  2525  123    1    11
+   66   7 openstreetmap  FAIL   814  +108   307     8     0   194   17    241   53  2417  124    1    14
+   67   7 pdf            ok     754   -60   285     7     0   164   15    241   46  2477  124    1    12
+   69   8 euro-os        ok     714   -40   249     7     0   149   14    241   59  2517  124    1    11
+   70   8 wikipedia      ok     714    +0   252     6     0   149   14    241   55  2517  124    1    11
+   72   8 github         ok     733   +19   268     6     0   149   15    241   59  2498  123    1    11
+   75   8 youtube        ok     868  +135   378     9     0   179   17    242   49  2363  124    1    13
+   77   8 openstreetmap  FAIL   698  -170   248     6     0   149   15    242   42  2533  123    1    11
+   78   8 pdf            ok     810  +112   302     8     0   194   17    242   52  2421  124    1    14
+   79   9 euro-os        ok     754   -56   281     7     0   164   16    242   48  2477  124    1    12
+   80   9 wikipedia      ok     720   -34   255     6     0   149   15    242   56  2511  123    1    11
+   82   9 github         ok     724    +4   260     6     0   149   15    242   55  2507  124    1    11
+   84   9 youtube        ok     741   +17   274     6     0   149   15    242   58  2490  124    1    11
+   87   9 openstreetmap  ok     880  +139   383    10     0   179   18    242   55  2351  124    1    13
+   89   9 pdf            ok     713  -167   254     6     0   149   15    242   50  2518  124    1    11
+   89  10 euro-os        ok     820  +107   304     9     0   194   18    243   57  2411  124    1    14
+   90  10 wikipedia      ok     758   -62   287     9     0   164   17    243   45  2473  124    1    12
+   92  10 github         ok     724   -34   256     7     0   149   16    243   57  2507  124    1    11
+   94  10 youtube        ok     730    +6   262     6     0   149   16    243   57  2501  124    1    11
+   95  10 openstreetmap  ok     745   +15   276     6     0   149   16    243   59  2486  124    1    11
+   98  10 pdf            ok     871  +126   370     9     0   179   19    243   57  2360  124    1    13
+  100  11 euro-os        ok     716  -155   257     7     0   149   16    243   47  2515  124    1    11
+  100  11 wikipedia      ok     826  +110   310     9     0   194   19    243   57  2405  124    1    14
+  102  11 github         ok     765   -61   288     7     0   164   17    243   50  2466  124    1    12
+  103  11 youtube        ok     727   -38   252     7     0   149   16    243   64  2504  124    1    11
+  105  11 openstreetmap  ok     728    +1   255     6     0   149   16    243   62  2503  124    1    11
+  106  11 pdf            ok     737    +9   262     6     0   149   17    243   63  2494  124    1    11
+
+what a site adds to the memory in use, per round (MiB): first round, then the later ones
+  euro-os        first    +0   later -62 +105 -158 +135 +3 -10 -40 -56 +107 -155   mean -13
+  wikipedia      first  +105   later +4 -61 +107 -155 +141 +16 +0 -34 -62 +110   mean +7
+  github         first   +94   later +32 -36 -56 +106 -158 +133 +19 +4 -34 -61   mean -5
+  youtube        first  +160   later +35 +6 -36 -56 +107 -156 +135 +17 +6 -38   mean +2
+  openstreetmap  first  -122   later +49 +10 +2 -30 -63 +108 -170 +139 +15 +1   mean +6
+  pdf            first  +107   later -163 +138 +13 +2 -24 -60 +112 -167 +126 +9   mean -1
+
+after the warm-up (15 min): 286 samples over 109 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      793    768    681    952    +19.4
+anon                      317    284    241    452     +4.2
+zero                        7      7      5     15     -0.2
+noaccess                    0      0      0      0     +0.0
+fileprivate               179    164    149    194     -2.6
+tables                     13     19     11     20     +3.6
+pagecache                 235    243    235    243     +3.6
+shm                        47     55     36     83    +10.5
+heap_used                 123    124    123    125     +0.8
+big_used                   37     41     32     41     +2.7
+ramfile_bytes               1      1      1      1     +0.0
+
+lowest free: 2279 MiB of 3231; largest unattributed: 7616 KiB
+verdict: flat (in use +19.4 MiB/h = +0.6% of the pool per hour; 0 kill/exhaustion lines; 7 MiB without an owner at the worst)
+
+last census, per process (pid name anon zero~ no-access):
+      1 chrome                76     0     0
+   1000 network.CrUtilit       6     0     0
+   1001 storage.CrUtilit       3     0     0
+   1002 CrRendererMain        17     0     0
+   1012 on_device_model.       1     0     0
+   1114 CrRendererMain        18     0     0
+   1115 CrRendererMain        30     0     0
+   1116 CrRendererMain        56     1     0
+   1119 CrRendererMain        24     0     0
+   1122 CrRendererMain        32     1     0
+   1125 CrRendererMain         7     0     0
+   1126 CrRendererMain         7     0     0

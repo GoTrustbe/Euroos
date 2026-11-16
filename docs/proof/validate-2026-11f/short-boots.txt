@@ -1,0 +1,2 @@
+boots: 108 end=marker: 108 with FAILED line: 0 crash: 0 seeded: 108
+secs to [fuzz]: median 33.991135266 max 39.546802704

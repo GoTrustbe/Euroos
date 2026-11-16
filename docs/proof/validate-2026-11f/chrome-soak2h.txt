@@ -1,0 +1,14 @@
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 3.0 s, load finished 4.2 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 428 ms; fds: 11 processes, 621 
+[chrome-mem-soak] round 4 done after 2691 s: heap 123 MiB used, 388 MiB free; big 37/474 MiB (peak 42); files 43 MiB; demand 2486 MiB free
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.8 s, load finished 3.9 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 229 ms; fds: 11 processes, 621 
+[chrome-mem-soak] round 5 done after 3401 s: heap 123 MiB used, 388 MiB free; big 37/474 MiB (peak 42); files 43 MiB; demand 2486 MiB free
+[chrome-mem-soak] round 6 done after 4072 s: heap 124 MiB used, 387 MiB free; big 38/473 MiB (peak 42); files 43 MiB; demand 2477 MiB free
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 3.0 s, load finished 3.9 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 290 ms; fds: 11 processes, 619 
+[chrome-mem-soak] round 7 done after 4779 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 42); files 43 MiB; demand 2480 MiB free
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.2 s, load finished 5.0 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 160 ms; fds: 11 processes, 620 
+[chrome-mem-soak] round 8 done after 5484 s: heap 124 MiB used, 387 MiB free; big 38/473 MiB (peak 42); files 43 MiB; demand 2473 MiB free
+[chrome-mem-soak] round 9 done after 6147 s: heap 124 MiB used, 387 MiB free; big 39/472 MiB (peak 42); files 43 MiB; demand 2466 MiB free
+[chrome-mem-soak] round 10 done after 6812 s: heap 124 MiB used, 387 MiB free; big 41/470 MiB (peak 43); files 43 MiB; demand 2466 MiB free
+[chrome-mem-soak] round 11 done after 7476 s: heap 124 MiB used, 387 MiB free; big 41/470 MiB (peak 43); files 43 MiB; demand 2463 MiB free
+[chrome-smoke] FAIL (4 step(s)) - 175/179 steps ok, report and screenshots in /dev/shm/v11f/soak2h
+[chrome-mem-soak] FAIL (4 step(s)): 11 rounds in 7476 s

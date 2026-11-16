@@ -3025,3 +3025,16 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      the body of `forget_clients` runs in `without_interrupts`.
 - **Test:**     `[xlock]` also runs `forget_clients` (only when no connection is open) and counts X locks taken with IF on:
   `= 1 (want 0) -> FAILED` (`eb239c5`, KVM 2 GiB) -> `= 0 -> OK` (`7253cb1`, KVM 1/2/4/8 GiB).
+
+
+### BUG-340 — gui-smoke `--input virtio`: the notification-list Esc/click steps failed once (BUG-057) ⬜ OPEN
+- **Status:**   OPEN, intermittent (validate-2026-11f) · **Severity:** LOW
+- **Found:**    2026-11-16 · validation of `00a6459`: `gui-smoke --input virtio` public image 65/67 (`notification list: Esc closes it` and `a click beside it closes it`, BUG-057);
+  repeat on the same image 67/67 and on the 2026.11.16 image 67/67. Not reproduced since; the default (USB) input run was 67/67.
+- **Next:**     repeat `--input virtio` 10 times on both images to see whether it is a rate or a one-off; keep the serial log of a failing run.
+
+### BUG-341 — Chromium session: the OpenStreetMap step often ends "content still changing" ⬜ OPEN
+- **Status:**   OPEN (validate-2026-11f) · **Severity:** LOW (harness / live site)
+- **Found:**    2026-11-16 · 2 h session at 8 GiB: 4 of 11 rounds fail only this step (`content 273 colours, commonest 85%, still changing`); 0 of 3 rounds in the sites run. No kernel line near it,
+  nothing else fails. 11e saw it once in 11 rounds.
+- **Next:**     decide whether the settle criterion should ignore the map tile animation, or treat it as a live-site step.
