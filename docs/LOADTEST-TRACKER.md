@@ -1750,6 +1750,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (`build_address_space_remap`), so the main process is the case to convert; the places that read a process's memory
   through the identity map (comments "identity-mapped" in `ring3.rs`, about 30) have to go through its page tables.
   And spread the demand pool over several PML4 slots.
+- **2026-11-16 (`feature/11f-aslr-s23`, preparation, no address changes):** steps S2 and S3 of
+  `docs/design/ASLR.md`. S2: the arena functions and the page-fault dispatch handle an arena in any PML4 slot
+  of the new arena zone (8..12 TiB), self-test `[arena-hi]`. S3: `load_elf64` and `setup_user_stack_glibc`
+  take the virtual address and the kernel-side address separately, self-test `[elf-bias]`. Every caller still
+  passes one address twice; `[aslr]` gives the same bits as before. Proof `docs/proof/11f-aslr-s23/`.
+  Next: S0, S1, S4 (the launched process at a non-identity base).
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise

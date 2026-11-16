@@ -1,6 +1,7 @@
 # ASLR for Linux-ABI processes: a virtual arena per process (BUG-088)
 
-Status: design only, nothing implemented. Written against `feature/app-control` @ `e4b8ba4`;
+Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); the
+other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -382,3 +383,58 @@ Cheapest useful stop: S0 + S1 (Chromium's binary 0 -> 30 bits, libraries and hea
 - Re-randomising a fork child that never execs; `personality(ADDR_NO_RANDOMIZE)`; sub-page
   stack offset; randomised kernel-stack offsets per syscall.
 - Shared futexes keyed by frame (1.5): a bug of its own.
+
+## 7. Verified in S2/S3
+
+Branch `feature/11f-aslr-s23` (from `feature/11f-integ` `00a6459`). Proof: `docs/proof/11f-aslr-s23/`. Every
+process still gets the addresses it got before: nothing is placed in the arena zone yet, every caller passes
+equal numbers.
+
+**S2 (paging.rs, interrupts.rs).** New: `ARENA_ZONE_BASE`/`ARENA_ZONE_END` (8..12 TiB, PML4 16..23),
+`in_arena_zone(addr)` (PML4[0] or the zone) and `arena_pdpt(pml4, virt)` (the PDPT under the slot of the
+address). `lazy_pte_ptr`, `arena_pte_ptr`, `arena_pt`, `arena_split`, `share_arena_cow`, `clone_arena_lazy`,
+`fill_remap_tables_lazy`, `map_user_arena` (now takes the PML4, not a PDPT) work in any of those slots; above
+PML4[0] a missing PDPT or PD is created empty, not as identity. `free_fork_tables`, `free_address_space` and
+`lazy_arena_frames` walk PML4[0] and the zone slots. The page-fault handler sends a fault to
+`arena_cow_fault`/`lazy_arena_fault` when `in_arena_zone(addr)` instead of `addr >> 39 == 0`. `[arena-hi]`
+covers it (lazy arena across PML4 16/17, faults, copy-on-write between two spaces, census, teardown).
+
+Corrections to section 1.3 found in the code:
+
+- A6: `lazy_pte_ptr` did not only answer None for a high arena: the old `fill_remap_tables_lazy` wrote the page
+  directories of a high arena into the PDPT of PML4[0] (index `virt >> 30 & 511`), over the kernel's identity
+  map of that address space. `[arena-hi]` before S2: "the arena pages are not lazy entries above PML4[0]".
+- A6, not changed (not needed for S2, needed in S4): `arena_slots` and the identity builders
+  (`try_build_address_space*`, `fill_remap_tables`, `fill_remap_tables_wx`) still build PML4[0] only;
+  `fill_remap_tables*` without `_lazy` are the native (musl) fork, A12. `table_frames` returns the PD under
+  PML4[0] only; its one caller is the reaper of pooled native processes (`ring3.rs` ~5014), also A12.
+- A7: the two `addr >> 39 == 0` tests in `page_fault_handler` were the only fault dispatch by slot; the demand
+  path (`handle_demand_fault`) goes by its own range.
+- A8: `arena_cow_fault` Evict looks children up with `lazy_pte_ptr`, so it follows the zone with no change.
+- Kernel code that touches a page of a scratch or foreign arena on its CR3 needs STAC/CLAC (SMAP), as
+  `copy_user_page` does; S4 helpers (rule 2 of 3.2) go through the frame and need none.
+
+**S3 (ring3.rs).** `load_elf64(elf, virt_base, kern_base, pages)`: segments are written at `kern_base`,
+`R_X86_64_RELATIVE` tables are read and written at `kern_base`, the words, `entry`, `phdr` and `base` carry
+`virt_base`. `setup_user_stack_glibc(stack_top, stack_kern, ..)`: every pointer (argv, envp, `AT_RANDOM`,
+`AT_PLATFORM`, `AT_EXECFN`, the returned rsp) is virtual, every byte (including the 16 `AT_RANDOM` bytes) is
+written at the kernel-side address. All ten `load_elf64` calls and the four stack calls pass equal values.
+`[elf-bias]` covers it (exe `seq` + ld.so + stack, virtual next to the kernel side and at 8 TiB).
+
+Corrections:
+
+- A2: ld.so has **no** `R_X86_64_RELATIVE` in `DT_RELA` (its relative relocations are packed `DT_RELR`,
+  which the kernel does not apply; ld.so relocates itself). The kernel's relocation pass matters for the
+  executable (and native programs), so `[elf-bias]` loads `seq` (10 relocations) next to ld.so; the design's
+  test ("load ld.so ... relocated words") would have checked nothing.
+- A4: `glibc_layout` / `glibc_arena_layout` need no second number: every result is the base plus an offset, so
+  the kernel-side address of any of them is `kern + (x - virt)`. Unchanged; S4 computes the kernel-side stack
+  top that way.
+- A3: `VDSO_EHDR_NEXT` is consumed by `setup_user_stack_glibc` (a process-global hand-off from the launcher);
+  S1/S4 must keep it per launch when the vDSO base becomes per process.
+
+**For S4 (noticed, not done):** the launchers still zero and load the arena through its identity address
+(A1) and pass that number twice; `ARENA_BASE`, `in_user_arena`, `glibc_launch_abort`, the census and the
+reaper use it as both. `try_build_address_space_rwx_big` + `arena_split` must build the arena under the zone
+slot (`map_user_arena` already can) and leave PML4[0] without a USER leaf; `free_address_space` already frees
+such a chain. `table_frames` and the native reaper (A12) stay on PML4[0].

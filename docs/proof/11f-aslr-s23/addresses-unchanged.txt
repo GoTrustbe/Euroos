@@ -1,0 +1,22 @@
+# Addresses unchanged: load bases of every [elf] relocation line and the [aslr] probe, KVM 2 GiB, base vs fin
+## base
+load bases: 0x13a00000 0x13c00000 0x13e00000 0x14000000 0x14600000 0x14800000 0x14a00000 0x14c00000 0x14e00000 0x15000000 0x15800000 0x19000000 0x19800000 0x200000 0x240000 
+[aslr]   exe      first 0x000013e010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000014600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x010088d4d100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x00002bc6ad34  varying bits  8  distinct 56/64
+[aslr]   brk      first 0x000015ea2000  varying bits  8  distinct 53/64
+[aslr]   mmap     first 0x000017e0c000  varying bits  9  distinct 61/64
+[aslr]   mmapbig  first 0x010088eff000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+## fin
+load bases: 0x13a00000 0x13c00000 0x13e00000 0x14000000 0x14600000 0x14800000 0x14a00000 0x14c00000 0x14e00000 0x15000000 0x15800000 0x19000000 0x19800000 0x200000 0x240000 0x560bf000 0x560cd000 0x80012345000 0x80040000000 
+[aslr]   exe      first 0x000013e010e0  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000014600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x010055ec9100  varying bits 20  distinct 64/64
+[aslr]   stack    first 0x00002bc72d34  varying bits  8  distinct 56/64
+[aslr]   brk      first 0x000015e66000  varying bits  8  distinct 55/64
+[aslr]   mmap     first 0x000017ecd000  varying bits  9  distinct 60/64
+[aslr]   mmapbig  first 0x01005607b000  varying bits 20  distinct 64/64
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+(fin has four more bases: the [elf-bias] scratch buffer 0x560bf000/0x560cd000 and its 8 TiB case 0x80012345000/0x80040000000)
