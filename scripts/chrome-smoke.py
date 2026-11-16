@@ -578,6 +578,32 @@ class Chrome(gs.Guest):
         print("[chrome-smoke]   omnibox selection NOT seen", flush=True)
         return False
 
+    def focus_omnibox(self, attempts=3):
+        """Put the focus in the omnibox with its URL selected, and see it happen. Ctrl+L first
+        (as a person would), up to `attempts` times: the browser hands the key to the page first and
+        focuses the omnibox when the renderer answers "not handled", which under load can take
+        longer than one look. When that never shows, one click on the omnibox, which focuses and
+        selects it without asking the renderer (a person would do that too). Always judged by the
+        selection on the screen, never by the key having been sent. Returns whether it was seen;
+        when it was not, the screendump is kept (omnibox-not-selected-N.png) for the analysis."""
+        for _ in range(attempts):
+            self.key("ctrl", "l")
+            if self.omnibox_selected(None):
+                return True
+            self.nap(1.0)                   # the browser is busy: ask again
+        self.key("esc")                     # leave whatever the page or the popup did with the keys
+        self.nap(0.3)
+        self.click(*self.cx(OMNIBOX_X, TOOLBAR_Y))
+        if self.omnibox_selected(None, timeout=4):
+            print("[chrome-smoke]   omnibox focused by a click after Ctrl+L did not show it", flush=True)
+            return True
+        self.omnibox_misses = getattr(self, "omnibox_misses", 0) + 1
+        try:
+            self.shot(save_as=f"omnibox-not-selected-{self.omnibox_misses}")
+        except Exception:
+            pass
+        return False
+
     @staticmethod
     def url_is(u, host):
         """Does the tab's URL belong to `host`? By its host name, not by 'the text occurs somewhere'
@@ -595,13 +621,8 @@ class Chrome(gs.Guest):
         before = self.tabs() or []
         old_titles = {t for _, t in before}
         same = any(self.url_is(u, host) and (contains is None or contains in u) for u, _ in before)          # going to the page we are on
-        for attempt in range(3):
-            self.key("ctrl", "l")
-            if self.omnibox_selected(None):
-                break
-            self.nap(1.0)                   # the browser is busy: ask again
-        else:
-            self.record_note = f"the omnibox never showed its selection after Ctrl+L ({host})"
+        if not self.focus_omnibox():
+            self.record_note = f"the omnibox never showed its selection after Ctrl+L or a click ({host})"
         self.type(url)
         self.nap(0.2)
         t0 = time.time()
@@ -836,7 +857,9 @@ class Chrome(gs.Guest):
         for i in range(n_load):
             self.navigate("file:///tmp/input-test.html", "input-test")
             self.settle(10, quiet=0.8)
-            self.key("ctrl", "l"); self.nap(0.3)
+            if not self.focus_omnibox():
+                self.step("perf: the omnibox takes the focus (Ctrl+L)", False, f"load {i + 1}: the omnibox never showed its selection")
+                break
             self.type("https://euro-os.eu/en/"); self.nap(0.3)
             region = self.content()
             before = self.digest(self.shot(), region)
@@ -864,6 +887,8 @@ class Chrome(gs.Guest):
                 time.sleep(0.1)
             loads.append((first if first is not None else 40.0, final))
             print(f"[chrome-smoke]   load {i + 1}: first change {loads[-1][0]:.2f} s, final picture {final:.2f} s", flush=True)
+        if not loads:
+            return loads, []                # the omnibox never took the focus: the step above says so
         firsts = sorted(l[0] for l in loads); finals = sorted(l[1] for l in loads)
         med_final = statistics.median(finals)
         self.step("perf: reference site loads in under 3 s (Enter to the final picture)", med_final < 3.0,
