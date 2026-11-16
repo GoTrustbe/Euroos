@@ -2959,6 +2959,10 @@ const NT: usize = crate::sched::MAX_TASKS;
 static PK_N: [core::sync::atomic::AtomicUsize; NT] = [const { core::sync::atomic::AtomicUsize::new(0) }; NT];
 static PK: [[AtomicU64; NPK]; NT] = [const { [const { AtomicU64::new(0) }; NPK] }; NT];
 static PK_HIT: [core::sync::atomic::AtomicBool; NT] = [const { core::sync::atomic::AtomicBool::new(false) }; NT];
+/// The slot's task generation at registration (`sched::SPAWN_GEN`): a thread
+/// killed inside epoll_wait/poll never drops its registration, and the next
+/// task in that slot must not be woken for the dead one's descriptors.
+static PK_GEN: [AtomicU64; NT] = [const { AtomicU64::new(0) }; NT];
 static PK_WAITERS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 /// Waiters a ready descriptor woke before their re-check (`pollwake` counts).
 pub static POLL_WAKES: AtomicU64 = AtomicU64::new(0);
@@ -2970,6 +2974,11 @@ impl PollKeys {
         let cur = crate::sched::current();
         let mut n = 0;
         if cur < NT {
+            // A registration left by a killed thread in this slot.
+            if PK_N[cur].swap(0, Ordering::AcqRel) > 0 {
+                PK_WAITERS.fetch_sub(1, Ordering::AcqRel);
+            }
+            PK_GEN[cur].store(crate::sched::SPAWN_GEN[cur].load(Ordering::Relaxed), Ordering::Relaxed);
             for &fd in fds {
                 if let Some(k) = crate::net::poll_key(fd) {
                     if n < NPK && !(0..n).any(|i| PK[cur][i].load(Ordering::Relaxed) == k) {
@@ -3026,7 +3035,10 @@ fn poll_wake_where(hit: impl Fn(u64) -> bool) {
         }
         if (0..n).any(|i| hit(PK[t][i].load(Ordering::Relaxed))) && !PK_HIT[t].swap(true, Ordering::AcqRel) {
             POLL_WAKES.fetch_add(1, Ordering::Relaxed);
-            crate::sched::wake_sleeping(t, |t| PK_N[t].load(Ordering::Acquire) > 0);
+            crate::sched::wake_sleeping(t, |t| {
+                PK_N[t].load(Ordering::Acquire) > 0
+                    && PK_GEN[t].load(Ordering::Relaxed) == crate::sched::SPAWN_GEN[t].load(Ordering::Relaxed)
+            });
         }
     }
 }
@@ -3040,7 +3052,13 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     let mut tries = 0u32;
     // This call's own deadline (it was one static shared by every waiter, so a
     // short wait of one thread cut the long wait of another short).
-    let mut epoll_deadline = 0u64;
+    // Taken once: the loop's first pass used to set it, and an event wake that
+    // found nothing ready (which does not count as a try) set it again.
+    let epoll_deadline = if (timeout as i32) > 0 {
+        crate::interrupts::ticks() + ((timeout as i32) as u64).div_ceil(10)
+    } else {
+        0
+    };
     let mut keys: Option<PollKeys> = None;
     loop {
         let list = match &EPOLLS.lock()[idx] {
@@ -3144,9 +3162,6 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         // keep the clock moving if it froze (interrupts are off in a syscall), and
         // report 0 only when a FINITE timeout really elapsed.
         let timeout_ms = timeout as i32;
-        if tries == 0 && timeout_ms > 0 {
-            epoll_deadline = crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10);
-        }
         if timeout_ms > 0 && crate::interrupts::ticks() >= epoll_deadline {
             return 0; // the finite timeout really expired
         }
