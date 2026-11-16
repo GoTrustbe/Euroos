@@ -5541,6 +5541,9 @@ fn set_process_profile(cur: usize, p: eurosandbox::Profile) {
 /// renderer-thread crash does not take the whole browser down. Returns true if a
 /// group was terminated.
 pub fn fault_kill_group(cur: usize, signal: u8) -> bool {
+    if fork_child_fault_kill(cur, signal) {
+        return true;
+    }
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     if main == usize::MAX || PERSIST_PML4.load(Ordering::Relaxed) != 0 {
         return false;
@@ -12421,10 +12424,69 @@ fn oom_kill() -> bool {
     }
 }
 
+/// BUG-352: fork children the kernel ended for a fault in ring 3 (memory
+/// isolation, #GP, #UD), with the signal, waiting for their teardown.
+static FAULT_KILLED: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// BUG-352: a task of a fork child faulted in ring 3 and is marked dead. The
+/// whole child ends (its other tasks too, as on Linux), and its parent gets
+/// the status "killed by `signal`" from wait4 like after any other death. The
+/// teardown needs another process's context (it frees the page tables this
+/// task runs on), so `fault_killed_poll` does it: in the parent's wait4, the
+/// desktop loop or the next fault. Before, the parent waited the 60 s wait4
+/// bound and got nothing; the child was only freed at the end of the run.
+fn fork_child_fault_kill(cur: usize, signal: u8) -> bool {
+    let Some(owner) = fork_child_owner(cur) else { return false };
+    let hit = GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.1 == owner).copied();
+    let Some((pid, ctask, _, _, _)) = hit else { return false };
+    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+    for &t in core::iter::once(&ctask).chain(threads.iter()) {
+        futex_purge_task(t);
+        if t != cur && !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+        }
+    }
+    {
+        let mut g = FAULT_KILLED.lock();
+        if !g.iter().any(|&(p, _)| p == pid) {
+            g.push((pid, signal as u32));
+        }
+    }
+    crate::serial_println!("[fork] child pid {pid} (task {cur}) ended by signal {signal} after a fault in ring 3: its parent's wait4 gets the status");
+    true
+}
+
+/// BUG-352: tear down the fork children `fork_child_fault_kill` ended; their
+/// status (the signal) goes to wait4. Not from inside such a child.
+fn fault_killed_poll() {
+    let list: alloc::vec::Vec<(u64, u32)> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut g = FAULT_KILLED.lock();
+        if g.is_empty() {
+            return;
+        }
+        core::mem::take(&mut *g)
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    let me = fork_child_owner(crate::sched::current());
+    for (pid, sig) in list {
+        let hit = GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.0 == pid).copied();
+        let Some((_, ctask, pml4, arena, frames)) = hit else { continue }; // gone (end of the run)
+        if me == Some(ctask) {
+            FAULT_KILLED.lock().push((pid, sig));
+            continue;
+        }
+        fork_child_teardown(pid, ctask, pml4, arena, frames, Some(sig));
+        crate::serial_println!("[fork] child pid {pid} torn down after its fault: status {sig:#x} for wait4");
+    }
+}
+
 /// End the child that was found to be the one to go while it was itself the
 /// running process. Called from task context of ANOTHER process (the desktop
 /// loop, a wait4, a fault from ring 3); a no-op otherwise.
 pub fn oom_deferred_poll() {
+    fault_killed_poll();
     let pid = OOM_DEFERRED.load(Ordering::Relaxed);
     if pid == 0 {
         return;
@@ -18340,6 +18402,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let wnohang = a3 & 1 != 0;
             let deadline = crate::interrupts::ticks() + 6000; // ~60 s of guest time
             loop {
+                fault_killed_poll(); // BUG-352: a child ended by a fault
                 let mut ce = GLIBC_CHILD_EXITS.lock();
                 if let Some(i) = ce.iter().position(|&(p, _)| want == -1 || p == want as u64) {
                     let (cpid, status) = ce.remove(i);
