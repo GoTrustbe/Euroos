@@ -6630,7 +6630,19 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
             let line = String::from_utf8_lossy(&bytes).into_owned();
-            crate::serial_println!("[euroapp pid {}] {}", p.pid, line.trim_end());
+            // BUG-230: the serial copy is one line of at most 160 printable
+            // characters. The whole line (up to 4 KiB, the fuzzer's are
+            // binary) went to the UART with interrupts off: 80-160 ms
+            // without a tick under KVM. The app's output keeps all of it.
+            const SHOWN: usize = 160;
+            let text = line.trim_end();
+            let shown: String = text.chars().take(SHOWN).map(|c| if c.is_control() { '.' } else { c }).collect();
+            let more = text.chars().count().saturating_sub(SHOWN);
+            if more > 0 {
+                crate::serial_println!("[euroapp pid {}] {shown} ... (+{more} characters)", p.pid);
+            } else {
+                crate::serial_println!("[euroapp pid {}] {shown}", p.pid);
+            }
             if p.output.len() < 512 {
                 p.output.push(line);
             }
@@ -15008,6 +15020,11 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         // more is named (24 lines at most).
         let t0 = crate::hpet::ns();
         let r = fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
+        // The last call of the task, as the Linux path records it.
+        let t = cur.min(LAST_SYS.len() - 1);
+        LAST_SYS[t].0.store(num, Ordering::Relaxed);
+        LAST_SYS[t].1.store(a1, Ordering::Relaxed);
+        LAST_SYS[t].2.store(r, Ordering::Relaxed);
         let us = crate::hpet::ns().wrapping_sub(t0) / 1000;
         if us > BG_CALL_MAX_US.load(Ordering::Relaxed) {
             BG_CALL_MAX_US.store(us, Ordering::Relaxed);
