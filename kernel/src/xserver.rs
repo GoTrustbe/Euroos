@@ -837,6 +837,7 @@ fn note_presented(id: u32, w: u16, h: u16, dx: i64, dy: i64, sc: usize) {
 /// desktop.
 fn window_at(px: i32, py: i32) -> Option<(u32, i32, i32, i32)> {
     let t = PRESENTED.lock();
+    note_lock_held();
     t.iter()
         .filter(|(_, dx, dy, sc, w, h, _)| {
             px >= *dx && px < dx + w * sc && py >= *dy && py < dy + h * sc
@@ -856,10 +857,40 @@ fn conn_of_window(t: &[Option<XConn>], id: u32) -> Option<usize> {
         c.as_ref().map_or(false, |c| c.windows.iter().any(|w| w.id == id && w.mapped))
     })
 }
+/// BUG-320 (self-test): how often `pump_mouse` / `window_at` held an X server lock with
+/// interrupts ENABLED. The X client's read/process path takes the same locks with IF=0;
+/// task 0 (the desktop loop), preempted while it holds one of them, leaves the client
+/// spinning on it for good (single CPU: nobody else runs to release it).
+static LOCKED_WITH_IF: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn note_lock_held() {
+    if cfg!(feature = "selftest") && x86_64::instructions::interrupts::are_enabled() {
+        LOCKED_WITH_IF.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Boot self-test `[xlock]` (BUG-320): the desktop loop's mouse path takes the X server
+/// locks with interrupts off.
+pub fn xlock_selftest() {
+    if !x86_64::instructions::interrupts::are_enabled() {
+        crate::serial_println!("[xlock] interrupts are off here: not run");
+        return;
+    }
+    let before = LOCKED_WITH_IF.load(core::sync::atomic::Ordering::Relaxed);
+    pump_mouse();
+    let _ = window_at(0, 0);
+    let n = LOCKED_WITH_IF.load(core::sync::atomic::Ordering::Relaxed) - before;
+    crate::serial_println!(
+        "[xlock] pump_mouse and window_at, run with interrupts on: X locks taken with interrupts enabled = {n} (want 0) -> {}",
+        if n == 0 { "OK (a preemption cannot catch task 0 holding them) ✓" } else { "FAILED" }
+    );
+}
+
 pub fn pump_mouse() {
     // ButtonPressMask(0x4) or PointerMotionMask(0x40) selected by any mapped window?
     let wants = {
         let t = XCONNS.lock();
+        note_lock_held();
         t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x44 != 0))
     };
     if !wants {

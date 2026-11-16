@@ -1203,6 +1203,7 @@ fn main() -> Status {
     boottime::phase("storage-rootfs");
     if SELFTEST {
         watchdog::io_progress_selftest(); // BUG-280
+        xserver::xlock_selftest(); // BUG-320
     }
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
