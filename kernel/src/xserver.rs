@@ -2500,25 +2500,31 @@ pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Orderin
 /// the desktop calls this, so whatever is still connected is gone. It also
 /// gives the slots back: there are MAX_XCONN of them.
 pub fn forget_clients() {
-    let gone = {
-        let mut t = lock_home();
-        note_lock_held();
-        let n = t.iter().flatten().count();
-        for c in t.iter_mut() {
-            *c = None;
-        }
-        n
-    };
-    PRESENTED.lock().clear();
-    SELECTIONS.lock().clear();
-    SEL_OWNERS.lock().clear();
-    XFIXES_SELECT.lock().clear();
-    READER_CONNS.lock().clear();
-    FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
-    RETAINED_ID.store(0, core::sync::atomic::Ordering::Relaxed);
-    IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
-    LAST_ROOT.store(0, core::sync::atomic::Ordering::Relaxed);
-    *RETAINED_WINDOW.lock() = None;
+    // Interrupts off while the tables are held (the BUG-320 rule, 11f-integ): the desktop
+    // loop calls this, and a client of the previous app still on its way out takes the
+    // same locks with IF=0 and would spin for good on a preempted task 0.
+    let gone = x86_64::instructions::interrupts::without_interrupts(|| {
+        let gone = {
+            let mut t = lock_home();
+            note_lock_held();
+            let n = t.iter().flatten().count();
+            for c in t.iter_mut() {
+                *c = None;
+            }
+            n
+        };
+        PRESENTED.lock().clear();
+        SELECTIONS.lock().clear();
+        SEL_OWNERS.lock().clear();
+        XFIXES_SELECT.lock().clear();
+        READER_CONNS.lock().clear();
+        FOCUS_WINDOW.store(0, core::sync::atomic::Ordering::Relaxed);
+        RETAINED_ID.store(0, core::sync::atomic::Ordering::Relaxed);
+        IMPLICIT_GRAB.store(0, core::sync::atomic::Ordering::Relaxed);
+        LAST_ROOT.store(0, core::sync::atomic::Ordering::Relaxed);
+        *RETAINED_WINDOW.lock() = None;
+        gone
+    });
     if gone > 0 {
         crate::serial_println!("[xserver] a hosted app starts: {gone} connection(s) of clients that are gone were forgotten");
     }
