@@ -133,3 +133,4 @@ On `544d5a2` unless noted; `4e681ba` changes only the `serialcost` shell command
 - `keylat` prints more per key now (`[keylat-ev]`, `[keylat-cpu]`); with APs that output costs the BSP nothing (fix 2); on
   smp 1 it does.
 - The R630 was shared with other teams' TCG runs (CPUs outside 4-11) during the regression; the boot-time numbers move with it.
+- R630 drivers: `drivers/` (`cms.sh`, `klat.sh`, `wave2-4.sh`, `scmd.py`); `kboot-hda.sh` is the one of `../revalidate-2026-11e/drivers/`.
