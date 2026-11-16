@@ -4351,6 +4351,8 @@ fn main() -> Status {
         // the ELF loader with a virtual base and a kernel-side address ([elf-bias]).
         paging::arena_hi_selftest();
         ring3::elf_bias_selftest();
+        // ASLR S1: the demand region over many PML4 slots ([demand-slots]).
+        ring3::demand_slots_selftest(&mut allocator);
         // S3: a glibc process with a worker on every AP ([ap-user]; SMP scheduler design).
         schedstat::apuser_test(&mut allocator, "apuser 1 10000 1000");
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).

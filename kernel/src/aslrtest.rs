@@ -1,33 +1,54 @@
 //! `[aslr]` — how many address bits of a Linux program change from one start
-//! to the next (BUG-088).
+//! to the next (BUG-088), and the checks of ASLR step S0 (docs/design/ASLR.md).
 //!
-//! Starts `userland/glibc/gaslr` (a glibc PIE) STARTS times with demand
-//! paging on, as a program from a pack runs, and reads per start where its
-//! executable, ld.so, libc, stack, brk heap and two fresh anonymous mappings
-//! (4 KiB and 1 MiB) lie. For each region the varying bits are the bits that
-//! differ from the first start in at least one start: an upper bound of the
-//! entropy of the slide, and the figure paxtest and the like give. The verdict
-//! compares with what Linux gives a 64-bit process (mmap base 28 bits, stack
-//! 22, PIE base 28; `/proc/sys/vm/mmap_rnd_bits`).
+//! Starts `userland/glibc/gaslrx` (a glibc PIE; `gaslr` plus the vDSO and a
+//! fork/exec mode) STARTS times with demand paging on, as a program from a
+//! pack runs, and reads per start where its executable, ld.so, libc, stack,
+//! brk heap, two fresh anonymous mappings (4 KiB and 1 MiB) and the vDSO lie.
+//! For each region the varying bits are the bits that differ from the first
+//! start in at least one start: an upper bound of the entropy of the slide,
+//! and the figure paxtest and the like give. The verdict compares with what
+//! Linux gives a 64-bit process (mmap base 28 bits, stack 22, PIE base 28;
+//! `/proc/sys/vm/mmap_rnd_bits`).
+//!
+//! The same starts give:
+//! - `[aslr-phys]`: an address of the process that is its own physical
+//!   address (the identity-mapped arena; looked up in the page tables of the
+//!   process by `run_glibc`). Until step S4 the arena regions are.
+//! - `[aslr-ind]`: the bits that vary in the distance between two regions
+//!   (stack - mmap, exe - stack, exe - mmap). Regions that move together give
+//!   0; the target is 20 (step S6 gives the arena regions their own bases).
+//! - `[aslr-fork]`: a fork child sees the layout of its parent bit for bit.
+//! - `[aslr-exec]`: an exec in a fork child gets a new draw in every region.
 
 use crate::ring3;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
+use euromm::layout::Mode;
 use euromm::FrameAllocator;
 
-static GASLR_ELF: &[u8] = include_bytes!("../../userland/glibc/gaslr");
+static GASLR_ELF: &[u8] = include_bytes!("../../userland/glibc/gaslrx");
 
 const STARTS: usize = 64;
-const KEYS: [&str; 7] = ["exe", "ldso", "libc", "stack", "brk", "mmap", "mmapbig"];
+const FORKS: usize = 8;
+const KEYS: [&str; 8] = ["exe", "ldso", "libc", "stack", "brk", "mmap", "mmapbig", "vdso"];
+const EXE: usize = 0;
+const STACK: usize = 3;
+const MMAP: usize = 5;
+const MMAPBIG: usize = 6;
+const VDSO: usize = 7;
 /// Linux x86-64: mmap_rnd_bits 28 (mmap base and PIE base), stack 22.
 const LINUX_MMAP: u32 = 28;
 const LINUX_STACK: u32 = 22;
 const LINUX_PIE: u32 = 28;
+/// `[aslr-ind]`: the distance between two regions must vary in this many bits.
+const IND_BITS: u32 = 20;
 
-fn parse(out: &str) -> Option<[u64; 7]> {
-    let l = out.lines().find(|l| l.starts_with("gaslr: "))?;
-    let mut v = [0u64; 7];
+fn parse_tag(out: &str, tag: &str) -> Option<[u64; 8]> {
+    let head = alloc::format!("{tag}: ");
+    let l = out.lines().find(|l| l.starts_with(&head))?;
+    let mut v = [0u64; 8];
     for (i, k) in KEYS.iter().enumerate() {
         let tag = alloc::format!(" {k}=0x");
         let at = l.find(&tag)? + tag.len();
@@ -37,15 +58,30 @@ fn parse(out: &str) -> Option<[u64; 7]> {
     Some(v)
 }
 
-pub fn selftest(falloc: &mut FrameAllocator) {
+fn run(falloc: &mut FrameAllocator, arg: Option<&[u8]>) -> (String, u64) {
     let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO;
+    let mut argv: Vec<&[u8]> = alloc::vec![b"/bin/gaslrx"];
+    if let Some(a) = arg {
+        argv.push(a);
+    }
+    ring3::run_glibc(falloc, GASLR_ELF, ring3::ldlinux_bytes(), &argv, &[b"PATH=/bin"], caps)
+}
+
+/// Bits that differ from the first value in at least one value.
+fn varying(xs: &[u64]) -> u32 {
+    xs.iter().fold(0u64, |a, &x| a | (x ^ xs[0])).count_ones()
+}
+
+pub fn selftest(falloc: &mut FrameAllocator) {
+    let mode = ring3::aslr_mode();
     let prev_demand = ring3::DEMAND_ENABLED.swap(true, Ordering::Relaxed);
     let prev_file = ring3::DEMAND_FILE_ENABLED.swap(true, Ordering::Relaxed);
-    let mut seen: Vec<[u64; 7]> = Vec::new();
+    let mut seen: Vec<[u64; 8]> = Vec::new();
     let mut bad = 0usize;
-    for _ in 0..STARTS {
-        let (out, exit) = ring3::run_glibc(falloc, GASLR_ELF, ring3::ldlinux_bytes(), &[b"/bin/gaslr"], &[b"PATH=/bin"], caps);
-        match parse(&out) {
+    for i in 0..STARTS {
+        ring3::PHYS_PROBE.store(i == 0, Ordering::Relaxed);
+        let (out, exit) = run(falloc, None);
+        match parse_tag(&out, "gaslr") {
             Some(v) if exit == 0 => seen.push(v),
             _ => {
                 bad += 1;
@@ -58,46 +94,169 @@ pub fn selftest(falloc: &mut FrameAllocator) {
             }
         }
     }
+    ring3::PHYS_PROBE.store(false, Ordering::Relaxed);
+    let phys: Vec<(u64, u64)> = core::mem::take(&mut *ring3::PHYS_SEEN.lock());
+    // Fork and exec: a few starts each.
+    let mut forks: Vec<([u64; 8], [u64; 8])> = Vec::new();
+    let mut fork_dead = false;
+    for _ in 0..FORKS {
+        let (out, _) = run(falloc, Some(b"fork"));
+        match (parse_tag(&out, "gaslr-parent"), parse_tag(&out, "gaslr-fork")) {
+            (Some(p), Some(c)) => forks.push((p, c)),
+            (Some(_), None) => {
+                // The child printed nothing: it died (and the parent waited for
+                // it until wait4 gave up). One is the verdict; no more of them.
+                crate::serial_println!("[aslr-fork]   the fork child gave no line: {:?}", out.trim());
+                fork_dead = true;
+                break;
+            }
+            _ => crate::serial_println!("[aslr-fork]   a start gave no line: {:?}", out.trim()),
+        }
+    }
+    let (exec_out, _) = run(falloc, Some(b"exec"));
     ring3::DEMAND_FILE_ENABLED.store(prev_file, Ordering::Relaxed);
     ring3::DEMAND_ENABLED.store(prev_demand, Ordering::Relaxed);
     ring3::clear_demand_file_maps();
+
+    report_aslr(mode, &seen);
+    report_phys(&seen, &phys);
+    report_ind(mode, &seen);
+    report_fork(&forks, fork_dead);
+    report_exec(mode, &exec_out);
+}
+
+fn report_aslr(mode: Mode, seen: &[[u64; 8]]) {
     if seen.len() < 50 {
         crate::serial_println!("[aslr] only {} of {STARTS} starts gave their addresses: not measured ⬜", seen.len());
         return;
     }
-    let mut bits = [0u32; 7];
-    let mut distinct = [0usize; 7];
-    for i in 0..7 {
-        let x = seen.iter().fold(0u64, |acc, v| acc | (v[i] ^ seen[0][i]));
-        bits[i] = x.count_ones();
-        let mut vals: Vec<u64> = seen.iter().map(|v| v[i]).collect();
-        vals.sort_unstable();
-        vals.dedup();
-        distinct[i] = vals.len();
-    }
-    for i in 0..7 {
+    let mut bits = [0u32; 8];
+    for i in 0..8 {
+        let col: Vec<u64> = seen.iter().map(|v| v[i]).collect();
+        bits[i] = varying(&col);
+        let mut d = col.clone();
+        d.sort_unstable();
+        d.dedup();
         crate::serial_println!(
             "[aslr]   {:8} first {:#014x}  varying bits {:2}  distinct {}/{}",
-            KEYS[i],
-            seen[0][i],
-            bits[i],
-            distinct[i],
-            seen.len()
+            KEYS[i], seen[0][i], bits[i], d.len(), seen.len()
         );
     }
-    let mmap = bits[5].min(bits[6]);
-    let ok = mmap >= LINUX_MMAP && bits[3] >= LINUX_STACK && bits[0] >= LINUX_PIE;
+    let mmap = bits[MMAP].min(bits[MMAPBIG]);
+    let ok = mmap >= LINUX_MMAP && bits[STACK] >= LINUX_STACK && bits[EXE] >= LINUX_PIE;
+    let verdict = if mode == Mode::Off {
+        "off (boot option aslr=off: fixed addresses on purpose) ⬜"
+    } else if ok {
+        "OK ✓"
+    } else {
+        "FAILED (below the Linux level: BUG-088)"
+    };
     crate::serial_println!(
-        "[aslr] {} starts of a glibc PIE: varying bits mmap {} (4 KiB {}, 1 MiB {}), stack {}, PIE base {}, brk {}, ld.so {}, libc {}; Linux x86-64 gives mmap {LINUX_MMAP}, stack {LINUX_STACK}, PIE {LINUX_PIE} → {}",
-        seen.len(),
-        mmap,
-        bits[5],
-        bits[6],
-        bits[3],
-        bits[0],
-        bits[4],
-        bits[1],
-        bits[2],
-        if ok { "OK ✓" } else { "FAILED (below the Linux level: BUG-088)" }
+        "[aslr] {} starts of a glibc PIE (aslr={}): varying bits mmap {} (4 KiB {}, 1 MiB {}), stack {}, PIE base {}, brk {}, ld.so {}, libc {}, vDSO {}; Linux x86-64 gives mmap {LINUX_MMAP}, stack {LINUX_STACK}, PIE {LINUX_PIE} → {verdict}",
+        seen.len(), mode.name(), mmap, bits[MMAP], bits[MMAPBIG], bits[STACK], bits[EXE], bits[4], bits[1], bits[2], bits[VDSO]
     );
+}
+
+/// `[aslr-phys]`: which regions of the first start lie at their own physical
+/// address (looked up in the page tables of the process before they were freed).
+fn report_phys(seen: &[[u64; 8]], phys: &[(u64, u64)]) {
+    let Some(first) = seen.first() else {
+        crate::serial_println!("[aslr-phys] no start gave its addresses: not measured ⬜");
+        return;
+    };
+    if phys.is_empty() {
+        crate::serial_println!("[aslr-phys] the addresses of the first start were not looked up: not measured ⬜");
+        return;
+    }
+    let mut same = String::new();
+    let mut looked = 0;
+    for (i, k) in KEYS.iter().enumerate() {
+        if let Some(&(va, pa)) = phys.iter().find(|&&(va, _)| va == first[i]) {
+            if pa == u64::MAX {
+                continue;
+            }
+            looked += 1;
+            if pa == va {
+                same.push(' ');
+                same.push_str(k);
+            }
+        }
+    }
+    if same.is_empty() {
+        crate::serial_println!("[aslr-phys] {looked} addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓");
+    } else {
+        crate::serial_println!(
+            "[aslr-phys] {looked} addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena):{same} → FAILED (not yet: the arena leaves the identity map in step S4)"
+        );
+    }
+}
+
+/// `[aslr-ind]`: bits that vary in the distance between two regions.
+fn report_ind(mode: Mode, seen: &[[u64; 8]]) {
+    if seen.len() < 50 {
+        crate::serial_println!("[aslr-ind] only {} starts: not measured ⬜", seen.len());
+        return;
+    }
+    let pair = |a: usize, b: usize| -> u32 {
+        let d: Vec<u64> = seen.iter().map(|v| v[a].wrapping_sub(v[b])).collect();
+        varying(&d)
+    };
+    let (sm, es, em) = (pair(STACK, MMAP), pair(EXE, STACK), pair(EXE, MMAP));
+    let (lb, vb) = (pair(2, EXE), pair(VDSO, MMAPBIG));
+    let low: Vec<&str> = [("stack-mmap", sm), ("exe-stack", es), ("exe-mmap", em)]
+        .iter()
+        .filter(|&&(_, b)| b < IND_BITS)
+        .map(|&(n, _)| n)
+        .collect();
+    let verdict = if mode == Mode::Off {
+        String::from("off (boot option aslr=off) ⬜")
+    } else if low.is_empty() {
+        String::from("OK ✓")
+    } else {
+        alloc::format!("FAILED (not yet: {} move with one arena base until step S6)", low.join(", "))
+    };
+    crate::serial_println!(
+        "[aslr-ind] {} starts: varying bits of the distance stack-mmap {sm}, exe-stack {es}, exe-mmap {em} (want >= {IND_BITS}); libc-exe {lb}, vDSO-mmap1MiB {vb} → {verdict}",
+        seen.len()
+    );
+}
+
+/// `[aslr-fork]`: the addresses of the fork child equal those of its parent in every region.
+fn report_fork(forks: &[([u64; 8], [u64; 8])], dead: bool) {
+    if dead {
+        crate::serial_println!("[aslr-fork] a fork child of the probe died before it printed its addresses (after {} that did) → FAILED", forks.len());
+        return;
+    }
+    if forks.len() < FORKS / 2 {
+        crate::serial_println!("[aslr-fork] only {} of {FORKS} fork starts gave both lines: not measured ⬜", forks.len());
+        return;
+    }
+    let diff: Vec<&str> = (0..8).filter(|&i| forks.iter().any(|(p, c)| p[i] != c[i])).map(|i| KEYS[i]).collect();
+    if diff.is_empty() {
+        crate::serial_println!("[aslr-fork] {} fork children: every region (exe, ld.so, libc, stack, brk, mmap 4 KiB and 1 MiB, vDSO) at the address of the parent → OK ✓", forks.len());
+    } else {
+        crate::serial_println!("[aslr-fork] {} fork children: not at the address of the parent: {} → FAILED", forks.len(), diff.join(", "));
+    }
+}
+
+/// `[aslr-exec]`: the probe execs itself in a fork child.
+fn report_exec(_mode: Mode, out: &str) {
+    if let Some(l) = out.lines().find(|l| l.starts_with("gaslr-exec: refused")) {
+        crate::serial_println!(
+            "[aslr-exec] the exec of the probe in a fork child was refused ({}): this kernel re-executes only the persistent program from disk (do_child_execve); not measured by the probe, not yet ⬜",
+            l.trim_start_matches("gaslr-exec: refused ").trim()
+        );
+        return;
+    }
+    match (parse_tag(out, "gaslr"), parse_tag(out, "gaslr-exec")) {
+        (Some(p), Some(c)) => {
+            let same: Vec<&str> = (0..8).filter(|&i| p[i] == c[i] && p[i] != 0).map(|i| KEYS[i]).collect();
+            if same.is_empty() {
+                crate::serial_println!("[aslr-exec] the exec'd child differs from its parent in every region → OK ✓");
+            } else {
+                crate::serial_println!("[aslr-exec] the exec'd child keeps the address of the parent in: {} → FAILED", same.join(", "));
+            }
+        }
+        _ => crate::serial_println!("[aslr-exec] the exec start gave no pair: {:?} ⬜", out.trim()),
+    }
 }

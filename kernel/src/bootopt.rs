@@ -45,6 +45,14 @@
 //!   hosted Chromium to the page over DevTools, as it did until 2026-11. The
 //!   default, `x11`, sends X events only.
 //!
+//! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
+//!   programs (docs/design/ASLR.md, euromm::layout). `legacy` (the default
+//!   until step S1 decides otherwise) is the layout of before; `on` places
+//!   the demand region, the executable from disk, the mmap floor and the vDSO
+//!   at random addresses in their zones; `off` uses the zones of `on` with
+//!   every random part 0, so addresses repeat from run to run (debugging,
+//!   comparing two logs). An unknown value is ignored and logged.
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
@@ -112,6 +120,10 @@ fn apply(text: &str) {
                     Ok(p) if (1..=100).contains(&p) => crate::sched::set_driver_budget(p),
                     _ => crate::serial_println!("[bootopt] sched.drvbudget={v} is not 1..100: ignored"),
                 },
+                ("aslr", v) => match euromm::layout::Mode::parse(v) {
+                    Some(m) => crate::ring3::aslr_set_mode(m),
+                    None => crate::serial_println!("[bootopt] aslr={v} is not on, off or legacy: ignored"),
+                },
                 ("display.mode", v) => match parse_mode(v) {
                     Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
                     None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),
@@ -151,6 +163,7 @@ pub fn capture() {
         if net_user_driver() { "user" } else { "kernel" },
         if nvme_user_driver() { "user (data disk only)" } else { "kernel" }
     );
+    crate::serial_println!("[bootopt] aslr={}", crate::ring3::aslr_mode().name());
 }
 
 /// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?

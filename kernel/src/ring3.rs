@@ -4204,7 +4204,7 @@ pub fn pcache_reclaim(want: usize) -> usize {
         if n > hi - lo { None } else { Some(((n / 64) as usize, 1u64 << (n % 64))) }
     };
     for &pml4 in spaces.iter() {
-        crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, true, &mut |frame, accessed| {
+        dz_scan_ro(pml4, true, &mut |frame, accessed| {
             if let Some((w, b)) = bit(frame) {
                 mapped[w] |= b;
                 if accessed {
@@ -4233,7 +4233,7 @@ pub fn pcache_reclaim(want: usize) -> usize {
             }
         }
         for &pml4 in spaces.iter() {
-            crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, false, &mut |frame, _| {
+            dz_scan_ro(pml4, false, &mut |frame, _| {
                 matches!(bit(frame), Some((w, b)) if hot[w] & b != 0)
             });
         }
@@ -4289,8 +4289,8 @@ fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
     if parent == 0 || parent == child_pml4 || !EXIT_GUARD.load(Ordering::Relaxed) {
         return keep;
     }
-    let pv = crate::paging::demand_phys_sorted(parent, DEMAND_PML4_IDX);
-    let cv = crate::paging::demand_phys_sorted(child_pml4, DEMAND_PML4_IDX);
+    let pv = dz_phys_sorted(parent);
+    let cv = dz_phys_sorted(child_pml4);
     let mut n = 0usize;
     let mut first = [0u64; 4];
     for &f in &cv {
@@ -5475,17 +5475,16 @@ fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
 }
 
 fn aslr_slides() -> Slides {
-    let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
-    // BUG-088: every slide in pages (4 KiB), over the same ranges as before:
-    // brk 4 -> 8 bits, mmap window 5 -> 9, demand pool 10 -> 19. The ranges
-    // are what the identity-mapped arena and the one PML4 slot of the demand
-    // pool leave; the Linux level (28 bits) needs a virtual arena.
-    Slides {
-        brk: (r & 0xFF) << 12,              // 0..1 MiB in 4 KiB steps
-        mmap: ((r >> 8) & 0x1FF) << 12,     // 0..2 MiB in 4 KiB steps
-        stack: ((r >> 17) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
-        demand: ((r >> 25) & 0x7FFFF) << 12, // 0..2 GiB in 4 KiB steps
+    use euromm::layout::{draw, Mode, EXE_WINDOW, LEGACY_DEMAND_BASE};
+    // BUG-088: one draw of 32 bytes per image, cut by euromm::layout (host-tested).
+    // S0: every mode keeps the layout of before (the zone of `aslr=on` comes
+    // with S1); `aslr=off` makes every slide 0, so addresses repeat per run.
+    let r = crate::entropy::draw_wait::<{ euromm::layout::DRAW_BYTES }>();
+    if aslr_mode() == Mode::Off {
+        return Slides { brk: 0, mmap: 0, stack: 0, demand: 0 };
     }
+    let l = draw(&r, Mode::Legacy, 0, 0);
+    Slides { brk: l.brk, mmap: l.mmap, stack: l.stack, demand: l.mmap_floor - (LEGACY_DEMAND_BASE + EXE_WINDOW) }
 }
 
 /// Apply `p` to the whole process of task `cur`: its main task and every thread
@@ -9575,6 +9574,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/grenprobe" => include_bytes!("../../userland/glibc/grenprobe.sig"),
         "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
         "/bin/gaslr" => include_bytes!("../../userland/glibc/gaslr.sig"),
+        "/bin/gaslrx" => include_bytes!("../../userland/glibc/gaslrx.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
         "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),
@@ -11018,7 +11018,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     if exit_log {
         crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
     }
-    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+    dz_free_except(pml4, &child_keep_list(pml4));
     // ... and the child's own page tables under PML4[0] (pdpt, pd,
     // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
     crate::paging::free_fork_tables(pml4);
@@ -11241,7 +11241,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         let child_pml4 = Cr3::read().0.start_address().as_u64();
         let keep = shared_phys_sorted();
         irq_window();
-        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &keep);
+        dz_free_except(child_pml4, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
         crate::paging::flush_tlb_all();
     }
@@ -11390,7 +11390,7 @@ fn fork_in_flight_reclaim(task: usize) {
     mm_changed();
     let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
     if pml4 != 0 {
-        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        dz_free_except(pml4, &child_keep_list(pml4));
         crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
     }
@@ -11474,7 +11474,7 @@ fn do_glibc_fork() -> u64 {
     let undo_fork = |why: &str| {
         fork_in_flight_done(me);
         let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
-        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        dz_free_except(pml4, &child_keep_list(pml4));
         crate::paging::free_fork_tables(pml4);
         crate::procpool::free_range(child_arena, arena_frames);
         crate::procpool::free(pml4);
@@ -11499,7 +11499,7 @@ fn do_glibc_fork() -> u64 {
         v
     };
     let private = |va: u64| !windows.iter().any(|&(b, e)| va >= b && va < e);
-    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window, &private) {
+    if !dz_clone(parent_pml4, pml4, &mut irq_window, &private) {
         crate::serial_println!("[fork] clone_demand_region OOM");
         undo_fork("no memory for the copy of the demand pages");
         return (-12i64) as u64;
@@ -11613,6 +11613,144 @@ const DEMAND_SIZE: u64 = 480 * (1 << 30);
 // arena window, which never gives back, and V8's 512 KiB zone segments ran it
 // dry in a YouTube renderer).
 const DEMAND_MIN_BYTES: u64 = 64 * 1024;
+
+// -- ASLR (docs/design/ASLR.md): the boot option aslr= and the demand zone -------
+
+/// The mode of the boot option `aslr=` (`euromm::layout::Mode::to_u8`; 0 = legacy).
+static ASLR_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+pub fn aslr_mode() -> euromm::layout::Mode {
+    euromm::layout::Mode::from_u8(ASLR_MODE.load(Ordering::Relaxed))
+}
+/// bootopt `aslr=`: set once, before the first process starts.
+pub fn aslr_set_mode(m: euromm::layout::Mode) {
+    ASLR_MODE.store(m.to_u8(), Ordering::Relaxed);
+}
+
+/// The PML4 slots of the demand region. S0: the one slot of before in every
+/// mode; the zone of `aslr=on` (PML4 64..191) comes with step S1.
+fn demand_slots() -> core::ops::Range<usize> {
+    DEMAND_PML4_IDX..DEMAND_PML4_IDX + 1
+}
+/// `paging::scan_demand_ro` over every slot of the demand region.
+fn dz_scan_ro(pml4: u64, age: bool, f: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    demand_slots().map(|s| crate::paging::scan_demand_ro(pml4, s, age, f)).sum()
+}
+/// `paging::demand_phys_sorted` over every slot of the demand region.
+fn dz_phys_sorted(pml4: u64) -> alloc::vec::Vec<u64> {
+    let mut v = alloc::vec::Vec::new();
+    for s in demand_slots() {
+        v.extend(crate::paging::demand_phys_sorted(pml4, s));
+    }
+    v.sort_unstable();
+    v
+}
+/// `paging::walk_demand_region` over every slot; returns the table frames.
+fn dz_walk(pml4: u64, f: &mut dyn FnMut(u64, u64)) -> usize {
+    demand_slots().map(|s| crate::paging::walk_demand_region(pml4, s, f)).sum()
+}
+/// `paging::free_demand_region_except` over every slot.
+fn dz_free_except(pml4: u64, keep: &[u64]) {
+    for s in demand_slots() {
+        crate::paging::free_demand_region_except(pml4, s, keep);
+    }
+}
+/// `paging::clone_demand_region` over every slot (fork).
+fn dz_clone(parent: u64, child: u64, between: &mut dyn FnMut(), private: &dyn Fn(u64) -> bool) -> bool {
+    demand_slots().all(|s| crate::paging::clone_demand_region(parent, child, s, between, private))
+}
+
+/// ASLR S1 (`[demand-slots]`): the demand functions over every PML4 slot of the
+/// demand zone of `aslr=on` (euromm::layout, PML4 64..191). Two scratch
+/// address spaces and a small demand pool of their own: four pages are mapped
+/// through the demand mapper in the first and the last slot of the zone,
+/// counted by the census walk, copied to the second space by the fork copy
+/// (two shared copy-on-write, two copied), listed by frame, then freed in both
+/// spaces: every frame must be back in the pool. With `aslr=legacy` the
+/// region is one slot and the check does not apply.
+pub fn demand_slots_selftest(falloc: &mut FrameAllocator) -> bool {
+    use euromm::layout::{zone, Mode};
+    let z = zone(Mode::On);
+    let last = (z.demand_slots().end as u64 - 1) << 39;
+    let pages = [z.demand_base + 0x1000, z.demand_base + 0x3F_F000, last + 0x40_0000_0000 + 0x2000, z.demand_end() - 0x1000];
+    let shared = |va: u64| va < z.demand_base + (1 << 39);
+    let pat = |k: usize| 0x5107_0000_0000_D00Du64 | ((k as u64) << 24);
+    if crate::procpool::demand_total_frames() != 0 {
+        crate::serial_println!("[demand-slots] a demand pool is installed: SKIPPED");
+        return false;
+    }
+    const POOL: usize = 256;
+    let Ok(dp) = falloc.allocate_contiguous(POOL) else {
+        crate::serial_println!("[demand-slots] no 1 MiB for a demand pool -> FAILED ✗");
+        return false;
+    };
+    crate::procpool::demand_install(dp, POOL);
+    let free0 = crate::procpool::demand_free_frames();
+    let mut why: Option<&str> = None;
+    let spaces = [crate::procpool::demand_alloc(), crate::procpool::demand_alloc()];
+    let (mut walked, mut tables, mut fa, mut fb) = (0usize, 0usize, 0usize, 0usize);
+    if let [Some(a), Some(b)] = spaces {
+        // SAFETY: two fresh pool frames, identity-mapped; never loaded in CR3.
+        unsafe {
+            core::ptr::write_bytes(a as *mut u8, 0, 4096);
+            core::ptr::write_bytes(b as *mut u8, 0, 4096);
+        }
+        for (k, &va) in pages.iter().enumerate() {
+            match crate::procpool::demand_alloc() {
+                // SAFETY: a fresh pool frame, identity-mapped.
+                Some(f) if crate::paging::map_demand_4k(a, va, f) => unsafe { (f as *mut u64).write_volatile(pat(k)) },
+                _ => why = why.or(Some("no frame or table for a page")),
+            }
+        }
+        tables = dz_walk(a, &mut |_, _| walked += 1);
+        if why.is_none() && walked != pages.len() {
+            why = Some("the census walk does not find every page");
+        }
+        if why.is_none() && !dz_clone(a, b, &mut || {}, &shared) {
+            why = Some("the fork copy failed");
+        }
+        if why.is_none() {
+            let rd = |s: u64, va: u64| crate::paging::translate_in(s, va).map(|p| unsafe { ((p & !0xFFF) as *const u64).read_volatile() });
+            let (pa, pb) = (dz_phys_sorted(a), dz_phys_sorted(b));
+            fa = pa.len();
+            fb = pb.len();
+            if pages.iter().enumerate().any(|(k, &va)| rd(a, va) != Some(pat(k)) || rd(b, va) != Some(pat(k))) {
+                why = Some("the copy in the second space does not hold the pages");
+            } else if fa != 4 || fb != 4 || pa.iter().filter(|f| pb.contains(f)).count() != 2 {
+                why = Some("frames: want 4 in each space, 2 of them shared");
+            }
+        }
+        dz_free_except(b, &[]);
+        dz_free_except(a, &[]);
+        crate::procpool::demand_free(b);
+        crate::procpool::demand_free(a);
+        crate::paging::flush_tlb_all();
+    } else {
+        why = Some("no frames for two scratch spaces");
+        for f in spaces.into_iter().flatten() {
+            crate::procpool::demand_free(f);
+        }
+    }
+    let free1 = crate::procpool::demand_free_frames();
+    if why.is_none() && free1 != free0 {
+        why = Some("frames were not all given back");
+    }
+    crate::procpool::demand_uninstall();
+    for i in 0..POOL as u64 {
+        let _ = falloc.free(dp + i * 4096);
+    }
+    let slots = demand_slots();
+    match why {
+        None => crate::serial_println!(
+            "[demand-slots] pages at {:#x} and {:#x} (PML4 {} and {}): census {walked} pages {tables} tables, fork copy {fa} -> {fb} frames (2 shared), freed in both, pool {free0} -> {free1}; demand slots {}..{} -> OK ✓",
+            pages[0], pages[3], pages[0] >> 39, pages[3] >> 39, slots.start, slots.end
+        ),
+        Some(w) => crate::serial_println!(
+            "[demand-slots] pages at {:#x} and {:#x} (PML4 {} and {}): {w}; census {walked} pages, frames {fa}/{fb}, pool {free0} -> {free1}; demand slots {}..{} (aslr={}) -> FAILED ✗",
+            pages[0], pages[3], pages[0] >> 39, pages[3] >> 39, slots.start, slots.end, aslr_mode().name()
+        ),
+    }
+    why.is_none()
+}
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
 /// The lowest demand address that can be committed this run (DEMAND_NEXT at
@@ -11979,7 +12117,7 @@ fn oom_kill() -> bool {
     let mut sizes: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
     for &(pid, _, pml4, _, _) in kids.iter() {
         let mut n = 0usize;
-        crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |_, pte| {
+        dz_walk(pml4, &mut |_, pte| {
             if pte & 3 == 3 {
                 n += 1;
             }
@@ -14432,6 +14570,26 @@ pub fn exit_flag_selftest(falloc: &mut FrameAllocator) {
     );
 }
 
+/// `[aslr-phys]` (aslrtest.rs): while set, `run_glibc` looks every address of
+/// the probe's first line up in the page tables of the process before it frees
+/// them, and keeps (address, physical address) in `PHYS_SEEN`.
+pub static PHYS_PROBE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub static PHYS_SEEN: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+fn phys_probe_note(pml4: u64, out: &str) {
+    let mut seen = PHYS_SEEN.lock();
+    seen.clear();
+    let Some(l) = out.lines().find(|l| l.starts_with("gaslr: ")) else { return };
+    for f in l.split(' ') {
+        if let Some((_, h)) = f.split_once("=0x") {
+            if let Ok(va) = u64::from_str_radix(h, 16) {
+                if va != 0 {
+                    seen.push((va, crate::paging::translate_in(pml4, va).unwrap_or(u64::MAX)));
+                }
+            }
+        }
+    }
+}
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -14724,6 +14882,9 @@ pub fn run_glibc(
     }
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
+    if PHYS_PROBE.load(Ordering::Relaxed) {
+        phys_probe_note(pml4, &out);
+    }
     // Tear down this run's demand pool: uninstall it and return its ENTIRE backing
     // region (committed pages, demand page tables, and all) to the main allocator in
     // one sweep — simpler and complete vs. walking PML4[2]. (The pml4 itself, incl.
@@ -16159,7 +16320,7 @@ fn census_walk(m: &mut ProcMem, pml4: u64, file: &euromm::FreeRanges, shared: &e
         (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let refs = crate::paging::cow_refs();
     let mut cow_units = 0usize;
-    m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
+    m.tables = dz_walk(pml4, &mut |va, pte| {
         if pte & 1 == 0 {
             sw += 1;
         } else if pte & crate::paging::COW != 0 {
@@ -16791,7 +16952,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     if exit_log {
                         crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
                     }
-                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                    dz_free_except(pml4, &child_keep_list(pml4));
                     // ... and the child's own page tables under PML4[0] (pdpt, pd,
                     // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
                     crate::paging::free_fork_tables(pml4);
