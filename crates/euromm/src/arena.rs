@@ -63,7 +63,7 @@ mod tests {
     /// The largest slides `aslr_slides` gives, none, and one in between.
     const SLIDES: [Slides; 3] = [
         Slides { brk: 0, mmap: 0, stack: 0 },
-        Slides { brk: 0xF << 16, mmap: 0x1F << 16, stack: 0xFF << 12 },
+        Slides { brk: 0xFF << 12, mmap: 0x1FF << 12, stack: 0xFF << 12 },
         Slides { brk: 7 << 16, mmap: 3 << 16, stack: 100 << 12 },
     ];
 

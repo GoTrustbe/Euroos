@@ -1,0 +1,12 @@
+# TCG combined-smp1-iommu-1g (1 GiB, smp 1, storage.nvme=user + megasas) repeated after the matrix run, self-test image of 48dfd05, same options (tcgq1.sh)
+matrix run (tcg/v1):
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: (no result line) (exit 0) · task table 38→38 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 → FAILED
+rerun rr1:
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 38→38 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 →
+combined-smp1-iommu-1g done 15:05:19 after 532s desktop=1 wd=0 nmi=0
+rerun rr2:
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 38→38 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 →
+combined-smp1-iommu-1g done 15:14:17 after 511s desktop=1 wd=0 nmi=0
+rerun rr3:
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 38→38 · thread-kstacks 0→0 · process-pool 40960→40960 · demand-pool 0→0 →
+combined-smp1-iommu-1g done 15:23:08 after 491s desktop=1 wd=0 nmi=0

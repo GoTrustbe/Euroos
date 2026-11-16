@@ -86,6 +86,8 @@ mod ps2;
 mod ring3;
 mod rtc;
 mod sched;
+mod apuser;
+mod schedstat;
 mod watchdog;
 mod serial;
 mod gdbstub;
@@ -100,6 +102,7 @@ mod tpm;
 mod entropy;
 mod linuxrand;
 mod renametest;
+mod aslrtest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -446,6 +449,30 @@ static FB_INFO: spin::Once<FbInfo> = spin::Once::new();
 ///
 /// The boot-phase run proved chrome CAN paint here; this is what makes it an app you
 /// open, next to the other windows, with the desktop routing input into it.
+/// BUG-220: the root disk could not be formatted; the boot runs from a RAM root.
+static ROOT_FALLBACK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// BUG-112: the live GTK demo of `--features live-demos` waits for the desktop loop to start it.
+static GTK_DEMO_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Start the live GTK demo as a hosted app, from the desktop loop (see `GTK_DEMO_PENDING`).
+fn launch_gtk_demo(mem: &mut euromm::FrameAllocator) {
+    let caps = ring3::CAP_CONSOLE | ring3::CAP_FILE | ring3::CAP_PROC_INFO | ring3::CAP_NET;
+    // A live window: its one-second timer must run in real time, not on the boot test's fast-forward.
+    ring3::TICKLESS_IDLE.store(false, core::sync::atomic::Ordering::Relaxed);
+    ring3::GLIBC_ARENA_MIB.store(384, core::sync::atomic::Ordering::Relaxed); // ~40 libs
+    // Whatever the boot stages for X clients stays out of this app.
+    while mouse::take_button_event().is_some() {}
+    // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen, so the desktop
+    // composites it as a framed window.
+    xserver::forget_clients();
+    xserver::set_windowed(true);
+    match ring3::spawn_glibc_persistent(mem, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps) {
+        Some(t) => serial_println!("[glibc] ggtk live on task {t} (started by the desktop loop)"),
+        None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
+    }
+}
+
 fn launch_chrome_app(mem: &mut euromm::FrameAllocator) -> (bool, String) {
     if !ring3::europack_has("/pack/chrome") {
         return (false, String::from("chrome: no /pack/chrome — attach the Chromium EuroPack disk"));
@@ -842,6 +869,7 @@ fn main() -> Status {
     // lean 512 MiB public image still boots. We only reserve up to ~1/5 of usable RAM.
     {
         let usable_frames = (allocator.usable_bytes() / 4096) as usize;
+        procpool::RAM_TOTAL_KB.store(allocator.usable_bytes() / 1024, core::sync::atomic::Ordering::Relaxed);
         // Cap at a quarter of RAM: at -m 3584M the fifth-cap rejected the 640 MiB
         // candidate and chrome multi-process fell to 160 MiB — not one 256 MiB
         // child arena fit, and every GPU/renderer launch died on [fork] alloc.
@@ -900,6 +928,27 @@ fn main() -> Status {
                     }
                 }
                 procpool::install_regions(&regions);
+                // Copy-on-write fork: one holder count per frame of RAM, in
+                // the kernel heap. Not from the frame allocator: 128 frames
+                // taken there at 1 GiB moved every later allocation (the
+                // arenas of the boot self-tests) and /bin/msock stopped
+                // answering in [bgnet-cap] (BUG-243).
+                {
+                    let entries = allocator.total_frames();
+                    match alloc::alloc::Layout::from_size_align(entries * 2, 4096) {
+                        Ok(l) => {
+                            // SAFETY: a fresh zeroed allocation, never freed.
+                            let t = unsafe { alloc::alloc::alloc_zeroed(l) } as u64;
+                            if t != 0 {
+                                paging::cow_init(t, entries);
+                                serial_println!("[cow] holder counts for {} MiB of RAM: {} KiB", entries / 256, entries * 2 / 1024);
+                            } else {
+                                serial_println!("[cow] no room for the holder counts: fork copies");
+                            }
+                        }
+                        Err(_) => serial_println!("[cow] no room for the holder counts: fork copies"),
+                    }
+                }
                 let mut line = alloc::format!("[mm] process frame pool: {} MiB @ {base:#x} (fork/exec)", want / 256);
                 for &(b, f) in regions.iter().skip(1) {
                     line.push_str(&alloc::format!(" + {} MiB @ {b:#x}", f / 256));
@@ -1096,7 +1145,8 @@ fn main() -> Status {
     };
     // The install media (~6 MiB) stays available so the user can install LATER
     // from the running desktop too (`euroinstall --to N`).
-    let on_disk = rootdev.is_disk();
+    let mut on_disk = rootdev.is_disk();
+    let mut rootdev = rootdev;
     rootdev.register_as_boot_disk(); // the A/B update path addresses this disk, on any bus
     // J1/3C-1: the live root FS runs THROUGH a write-through block cache (concurrent
     // read-lock hits, CLOCK eviction, dirty write-back). 256 × 4 KiB = 1 MiB.
@@ -1113,8 +1163,22 @@ fn main() -> Status {
             f
         }
         Err(_) => {
-            let mut f = EuroFs::format(BlockCache::new(rootdev, ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
-                .expect("EuroFS format");
+            // BUG-220: a disk root that can be neither mounted nor formatted (a read-only disk 0 after a
+            // failed install, a disk that refuses writes) is not a reason to panic: the boot goes on
+            // with a RAM root and says so, on the serial line and on the screen.
+            let mut f = match EuroFs::format(BlockCache::new(rootdev.for_cache(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch()) {
+                Ok(f) => f,
+                Err(e) if on_disk => {
+                    serial_println!("[euro] the install on disk 0 failed or the disk root cannot be formatted ({e:?}): booting a RAM root, nothing is saved on the disk");
+                    ROOT_FALLBACK.store(true, core::sync::atomic::Ordering::Relaxed);
+                    on_disk = false;
+                    rootdev = rootblk::RootBlk::ram(2048);
+                    rootdev.register_as_boot_disk();
+                    EuroFs::format(BlockCache::new(rootdev.for_cache(), ROOT_CACHE_BLOCKS), [0x5A; 16], rtc::epoch())
+                        .expect("EuroFS format (RAM root)")
+                }
+                Err(e) => panic!("EuroFS format: {e:?}"),
+            };
             populate_fs(&mut f);
             serial_println!(
                 "[euro] EuroFS formatted + populated{} (through 1 MiB block cache)",
@@ -1123,6 +1187,18 @@ fn main() -> Status {
             f
         }
     };
+    // BUG-250: the live RAM root is held once in the kernel heap (a copy of it
+    // costs a 1 GiB guest 8 MiB of the kernel memory its RAM files live in).
+    if !on_disk {
+        let alive = rootblk::ram_backing_bytes();
+        let root = (2048 * 4096) as usize;
+        serial_println!(
+            "[root-heap] RAM root of {} KiB: {} KiB of RAM-root backing alive in the kernel heap → {}",
+            root / 1024,
+            alive / 1024,
+            if alive <= root { "OK (held once) ✓" } else { "FAILED (the RAM root is held more than once)" }
+        );
+    }
 
     boottime::phase("storage-rootfs");
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
@@ -1417,6 +1493,8 @@ fn main() -> Status {
     // one seeding of a boot and it prints the one `[entropy]` status line.
     let tpm_up = tpm::init();
     entropy::init();
+    #[cfg(feature = "selftest")]
+    net::selftest_randid();
 
     // Login verification now runs via EuroID (Argon2id, memory-hard) instead of the old
     // iterated SHA-256 — proven by the [ae] self-test in `euroid::selftest()`.
@@ -1593,7 +1671,7 @@ fn main() -> Status {
         // ── DHCP: fetch a REAL lease (DISCOVER → OFFER → REQUEST → ACK). ──
         let any = Ipv4Addr([0, 0, 0, 0]);
         let bcast = Ipv4Addr([255, 255, 255, 255]);
-        let xid = 0x4505_5201u32;
+        let xid = net::dhcp_xid();
         let send_dhcp = |mt: u8, req: Option<Ipv4Addr>, sid: Option<Ipv4Addr>| {
             let payload = dhcp::build(mt, xid, my_mac.0, req, sid);
             let seg = UdpDatagram { src_port: 68, dst_port: 67, payload }.build(any, bcast);
@@ -1617,7 +1695,7 @@ fn main() -> Status {
                                     let dport = u16::from_be_bytes([ipl[2], ipl[3]]);
                                     if dport == 68 {
                                         if let Some(info) = dhcp::parse(&ipl[8..]) {
-                                            if info.msg_type == want {
+                                            if info.msg_type == want && info.answers(xid, my_mac.0) {
                                                 return Some(info);
                                             }
                                         }
@@ -2325,6 +2403,7 @@ fn main() -> Status {
     // TPM block.
     if SELFTEST {
         entropy::selftest();
+        entropy::reseed_selftest();
     }
     if SELFTEST {
         // 3D-7: Network Time Security (RFC 8915) authenticated-time core — proves the
@@ -3707,14 +3786,13 @@ fn main() -> Status {
             // a live GTK window on the desktop.
             let live_gtk_demo = cfg!(feature = "live-demos");
             if live_gtk_demo {
-                // WINDOWED: retain the GTK window's pixels instead of blitting fullscreen,
-                // so the desktop composites it as a framed window.
-                xserver::forget_clients();
-                xserver::set_windowed(true);
-                match ring3::spawn_glibc_persistent(&mut allocator, ring3::ggtk_bytes(), ring3::ldlinux_bytes(), &[b"ggtk"], &[b"DISPLAY=:0", b"PATH=/bin", b"HOME=/root", b"FONTCONFIG_PATH=/etc/fonts", b"GDK_BACKEND=x11", b"GTK_A11Y=none", b"NO_AT_BRIDGE=1"], caps_net) {
-                    Some(t) => serial_println!("[glibc] ggtk live on task {t}"),
-                    None => serial_println!("[glibc] ggtk spawn FAILED (no arena)"),
-                }
+                // BUG-112: not started here. The boot still has self-tests to run after this
+                // point, and they launch other glibc processes whose per-process globals (the
+                // address space, the arena, the main task, the break) replace those of a
+                // persistent app that is already running: the demo then failed to load a library
+                // or stopped after its first frame. The desktop loop starts it, once the boot is over.
+                GTK_DEMO_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+                serial_println!("[glibc] ggtk live-demo: starts when the desktop loop runs (after the boot self-tests)");
             } else {
                 serial_println!("[glibc] ggtk live-demo skipped (idle-friendly default; build --features live-demos to enable)");
             }
@@ -4182,6 +4260,8 @@ fn main() -> Status {
 
         // EuroInstall (Q1): prove the installer planner at boot.
         installer::selftest();
+        installer::selftest_targets();
+        interrupts::selftest_nmi_bound();
     }
 
     // EuroCA (O3): sovereign local certificate authority (TPM-seeded root).
@@ -4259,10 +4339,16 @@ fn main() -> Status {
         ring3::fdsem_selftest(&mut allocator);
         // BUG-150 to BUG-155: memory that comes back, and running out of it ([memt]).
         ring3::memt_selftest(&mut allocator);
+        // S3: a glibc process with a worker on every AP ([ap-user]; SMP scheduler design).
+        schedstat::apuser_test(&mut allocator, "apuser 1 10000 1000");
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
         linuxrand::selftest(&mut allocator);
         // BUG-091: rename over an existing file under open descriptors and mappings ([rename]).
         renametest::selftest(&mut allocator);
+        // BUG-111: a save by a Linux program reaches EuroFS and the next boot ([rename-disk]).
+        renametest::disk_selftest(&mut allocator, &mut vfs);
+        // BUG-088: how many address bits of a Linux program change per start ([aslr]).
+        aslrtest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
@@ -5401,6 +5487,9 @@ fn main() -> Status {
     );
     // A first notification so the shade is not empty and the toast channel shows.
     notify::push("Welcome to EuroOS", "Click here to see notifications", interrupts::ticks());
+    if ROOT_FALLBACK.load(core::sync::atomic::Ordering::Relaxed) {
+        notify::push("Disk not usable", "The disk could not be written: EuroOS runs from a RAM root, nothing is saved.", interrupts::ticks());
+    }
     // 3G-2: arm the live deadman watchdog (5 s grace at 100 Hz). The loop pets it
     // each iteration; the scheduler tick checks it independently.
     watchdog::arm(1500); // 15s: a full software render is a few seconds under TCG (fast on real HW)
@@ -5414,6 +5503,8 @@ fn main() -> Status {
         sched::deskwatch::mark(0);
         // 3G-2: the main loop is alive → pet the watchdog.
         watchdog::pet();
+        // BUG-089: once a second, the wall clock against the HPET (a restore).
+        entropy::poll_clock();
         // Service any pending network request from a graphics app (the browser):
         // the real HTTP/TLS/DNS fetch runs HERE, in the desktop-loop task context
         // (interrupts on, no bg lock), not inside the app's no-yield syscall.
@@ -5426,6 +5517,9 @@ fn main() -> Status {
         // A process that is to be ended for memory (BUG-155).
         ring3::oom_deferred_poll();
         sched::deskwatch::mark(1);
+        if GTK_DEMO_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            launch_gtk_demo(ctx.mem);
+        }
         // Interrupt-independent USB input HERE TOO: the boot launcher polls the
         // xHCI ring every iteration, but the desktop loop did not — so desktop
         // clicks still depended on the per-boot MSI-X delivery lottery (dt7: the
@@ -6133,6 +6227,12 @@ fn main() -> Status {
         // into the same scancode/mouse paths as PS/2 — before we read the keys.
         xhci::poll();
         crate::virtio_input::poll(); // virtio-tablet / virtio-keyboard (polled)
+        // BUG-115: the first-run tour gets the first look at what was typed, again, right before
+        // the readers below take it (an Esc that arrived after the tour's look at the top of the
+        // loop went to the focused window and the tour stayed up). While the tour is up the
+        // readers below leave the ring alone: the tour takes its own keys or closes on the rest.
+        if onboarding::pump_keys() { need_full = true; }
+        let tour_keys = onboarding::keys_reserved();
 
         // A graphical app (the DOOM port) owns the keyboard while it runs: route
         // RAW scancodes (press/release + arrows/ctrl, which poll_key's char
@@ -6198,7 +6298,7 @@ fn main() -> Status {
                 need_full = true;
             }
         }
-        let editor_focused = !files::prompt_open() && (text_focused || notes_focused)
+        let editor_focused = !files::prompt_open() && (text_focused || notes_focused) && !tour_keys
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open();
         // The install wizard takes rich keys (Tab, arrows, Esc) while it is on top.
         let installer_focused = !files::prompt_open()
@@ -6213,7 +6313,7 @@ fn main() -> Status {
             }
         }
         // T2-hook: EuroBeheer takes rich keys (Tab, arrows, Page keys) while it is on top.
-        let settings_keys = settings_focused && !files::prompt_open() && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open(); // T2-hook
+        let settings_keys = settings_focused && !tour_keys && !files::prompt_open() && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open(); // T2-hook
         if settings_keys { let fi = focused.unwrap(); while let Some(k) = ps2::poll_key_ex() { settings_ui::key(ctx.fs, windows[fi].x, windows[fi].y, windows[fi].w, windows[fi].h, k); need_full = true; } } // T2-hook
         if editor_focused {
             while let Some(k) = ps2::poll_key_ex() {
@@ -6235,7 +6335,7 @@ fn main() -> Status {
         let xclient_keys = focused.map(|i| windows[i].app == suite_ui::SuiteApp::XClient).unwrap_or(false)
             && ring3::persistent_running()
             && !symbolpicker::is_open() && !filedialog::is_open() && !launcher::is_open() && !files::prompt_open();
-        while let Some(k) = if editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
+        while let Some(k) = if tour_keys || editor_focused || installer_focused || settings_keys /* T2-hook */ || files::prompt_open() || xclient_keys { None } else { ps2::poll_key() } {
             // The symbol picker only needs Esc to dismiss.
             if symbolpicker::is_open() {
                 if k == '\u{1b}' { symbolpicker::close(); }
@@ -6706,8 +6806,9 @@ fn main() -> Status {
                                 }
                             }
                             let mem = &mut *ctx.mem;
-                            let (ec, o) = x86_64::instructions::interrupts::without_interrupts(|| {
-                                ring3::run_args(mem, &bytes, &argv, caps, abi)
+                            // BUG-111: the program sees EuroFS behind its file table.
+                            let (ec, o) = ring3::with_backing_fs(&mut *ctx.fs, || {
+                                x86_64::instructions::interrupts::without_interrupts(|| ring3::run_args(mem, &bytes, &argv, caps, abi))
                             });
                             ring3::set_stdout_redirect(None, false);
                             ring3::set_stdin(&[]);
@@ -6728,11 +6829,8 @@ fn main() -> Status {
                                 }
                             }
                             // Sync written files back to EuroFS.
-                            for (p, bytes) in ring3::take_dirty() {
-                                let n = bytes.len();
-                                if ctx.fs.write_file(&p, &bytes).is_ok() {
-                                    out.push(format!("[fs] {p} ({n} B) -> EuroFS synced"));
-                                }
+                            for l in ring3::write_back(&mut *ctx.fs) {
+                                out.push(l);
                             }
                             out.push(format!("[exit {ec}, abi={}]", if abi { "linux" } else { "native" }));
                         }
@@ -7359,6 +7457,21 @@ fn main() -> Status {
 
         sched::deskwatch::step("demos and the rest");
         sched::deskwatch::mark(4);
+        // BUG-114: a hosted app that ended by itself is closed like the close button does it:
+        // its last words to the log, memory back, frame gone. Without this the frame stayed with the
+        // last picture and `app run` answered "already running" until it was closed by hand.
+        if ring3::persistent_ended() {
+            for l in ring3::take_output().lines() {
+                serial_println!("[hosted] {l}");
+            }
+            let free_before = ctx.mem.free_bytes();
+            ring3::kill_persistent_glibc(ctx.mem);
+            windows[gtk_idx].visible = false;
+            order.retain(|&x| x != gtk_idx);
+            need_full = true;
+            serial_println!("[hosted] the app ended by itself: frame closed, free RAM {} -> {} MiB",
+                free_before / (1 << 20), ctx.mem.free_bytes() / (1 << 20));
+        }
         // A hosted app's own words, on the serial log. It never exits, so this is the
         // only place its stdout/stderr can appear at all. Alongside it: how much of the
         // machine the DESKTOP is using while the app runs. A browser that crawls when
@@ -7522,6 +7635,7 @@ fn main() -> Status {
         loop_iters += 1;
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         serial::kick();
+        sched::desktop_hosts_client(xserver::front_window_size().is_some());
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();

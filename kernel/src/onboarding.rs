@@ -305,29 +305,51 @@ pub fn pump(fs: &mut dyn eurofs::FileSystem, sw: usize, sh: usize, wizard_open: 
         dirty = true;
     }
 
-    // Keyboard: look, do not take, unless only tour keys are pending.
-    if matches!(*p, Phase::Active(_)) {
-        let mut buf = [0u8; 32];
-        let n = crate::ps2::peek_scancodes(&mut buf);
-        match classify(&buf[..n]) {
-            Keys::Nothing => {}
-            Keys::Typing => {
-                crate::serial_println!("[tour] closed by typing (scancodes {:02x?} stay for the desktop)", &buf[..n]);
-                *p = Phase::Off;
-                dirty = true;
-            }
-            Keys::Tour(acts) => {
-                for _ in 0..n {
-                    let _ = crate::ps2::poll_scancode();
-                }
-                for a in acts.into_iter().flatten() {
-                    apply(&mut *p, a);
-                }
-                dirty = true;
-            }
-        }
+    if keyboard(&mut p) {
+        dirty = true;
     }
     dirty
+}
+
+/// Keyboard: look, do not take, unless only tour keys are pending. True when the tour changed.
+fn keyboard(p: &mut Phase) -> bool {
+    if !matches!(*p, Phase::Active(_)) {
+        return false;
+    }
+    let mut buf = [0u8; 32];
+    let n = crate::ps2::peek_scancodes(&mut buf);
+    match classify(&buf[..n]) {
+        Keys::Nothing => false,
+        Keys::Typing => {
+            crate::serial_println!("[tour] closed by typing (scancodes {:02x?} stay for the desktop)", &buf[..n]);
+            *p = Phase::Off;
+            true
+        }
+        Keys::Tour(acts) => {
+            for _ in 0..n {
+                let _ = crate::ps2::poll_scancode();
+            }
+            for a in acts.into_iter().flatten() {
+                apply(p, a);
+            }
+            true
+        }
+    }
+}
+
+/// The tour looks at the keys again, right before the desktop loop's own key readers drain the
+/// ring (BUG-115). A key that arrived after the loop's first look (the virtio-input poll in the
+/// timer tick, the poll right before the readers) was taken by a reader before the tour saw it: an
+/// Esc went to the focused window and the tour stayed up. True when the desktop must repaint.
+pub fn pump_keys() -> bool {
+    let mut p = PHASE.lock();
+    keyboard(&mut p)
+}
+
+/// Is the tour up? While it is, the desktop's key readers leave the ring alone: the tour decides
+/// per batch whether the keys are its own (Esc, arrows: taken) or typing (it closes and the keys stay).
+pub fn keys_reserved() -> bool {
+    matches!(*PHASE.lock(), Phase::Active(_))
 }
 
 pub fn render(fb: &FrameBuffer, sw: usize, sh: usize) {

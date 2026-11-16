@@ -1,0 +1,22 @@
+# TCG matrix, R630, restrict=on, self-test image of 48dfd05
+user-smp1-iommu done 12:45:11 after 210s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 12:45:46 after 245s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 12:48:37 after 206s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 12:49:22 after 216s desktop=1 wd=0 nmi=0
+kernel-smp1 done 12:52:17 after 220s desktop=1 wd=0 nmi=0
+kernel-smp4 done 12:53:02 after 220s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 13:01:04 after 527s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 13:03:04 after 602s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 13:11:25 after 621s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 13:12:51 after 587s desktop=1 wd=0 nmi=0
+matrix v1 done 13:12:51
+user-smp4-iommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=9 inversions=0
+user-smp4-noiommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=9 inversions=0
+kernel-smp4: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=7 inversions=0
+storage-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 inversions=0
+combined-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 inversions=0
+user-smp1-iommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 inversions=0
+user-smp1-noiommu: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 inversions=0
+kernel-smp1: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=6 inversions=0
+storage-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=8 inversions=0
+combined-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 timer-frozen=0 fault-lines=0 FAILED-lines=9 inversions=0

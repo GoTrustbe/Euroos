@@ -1,0 +1,24 @@
+[loadtest] completed clean · results → /srv/euroos/reg-runs/soakr2/w/loadtest-results.csv · ltstat samples → /srv/euroos/reg-runs/soakr2/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 774020, "err": 0, "p50_ms": 5.6, "p99_ms": 435.0, "max_ms": 8321.9, "busy_windows": 348, "busy_s": 2942, "busy": {"ok": 321734, "err": 0, "p50_ms": 5.4, "p99_ms": 425.5, "max_ms": 1485.5}, "idle": {"ok": 452286, "err": 0, "p50_ms": 5.7, "p99_ms": 441.9, "max_ms": 8321.9}}
+[loadtest] host HTTP server served 1253 request(s)
+r2: 10866 commands over 125.0 min = 5217 per hour; by status {'ok': 10866}
+   churn proc    n=1392  median     1514 ms  mean     1482 ms  p10      857  p90     1939  max     4017
+   spawn worker  n=1044  median      594 ms  mean      607 ms  p10      560  p90      679  max      856
+   churn fs      n= 348  median     8276 ms  mean     8452 ms  p10     7863  p90     9245  max    10605
+   churn net     n= 348  median       70 ms  mean       97 ms  p10       49  p90      107  max     1027
+   sha256sum     n=1044  median      420 ms  mean      416 ms  p10      350  p90      460  max     1502
+   fetch         n=1044  median      272 ms  mean      280 ms  p10      112  p90      451  max      585
+d2: 6019 commands over 125.1 min = 2887 per hour; by status {'ok': 6019}
+   churn proc    n= 771  median     2857 ms  mean     2646 ms  p10     1592  p90     3259  max     5282
+   spawn worker  n= 578  median      702 ms  mean      715 ms  p10      632  p90      809  max     1253
+   churn fs      n= 193  median    18207 ms  mean    18593 ms  p10    17492  p90    19751  max    29549
+   churn net     n= 192  median       89 ms  mean      155 ms  p10       60  p90      136  max     1972
+   sha256sum     n= 578  median      982 ms  mean      966 ms  p10      761  p90     1096  max     3294
+   fetch         n= 578  median      102 ms  mean      109 ms  p10       96  p90      122  max      202
+KERNEL PANIC: 0
+NMI PROBE: 0
+WATCHDOG TRIPPED: 0
+timer-probe\] FROZEN: 0
+LOCK ORDER INVERSION: 0
+\[churn-proc\] FAILED: 0
+200M spins: 0

@@ -1,0 +1,3 @@
+gui-smoke: PASS
+kvm smp=4 mem=4G input=usb net=none seed=1794766252 soak=0.0 min, 229 s, max console latency 100 ms
+ok 67 FAIL 0

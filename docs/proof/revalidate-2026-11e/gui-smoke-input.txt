@@ -1,0 +1,5 @@
+# gui-smoke.py, run gs-input, KVM 4 GiB
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/reval-runs/runs/gs-input
+crash or watchdog lines: 0
+FAIL lines: 0
+[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues

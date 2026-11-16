@@ -1,0 +1,4 @@
+# cargo test (default members) on .16, feature/small-2026-11e
+binaries: 187
+passed 1364 failed 0 ignored 1
+test dhcp::tests::reply_is_matched_on_xid_and_mac ... ok

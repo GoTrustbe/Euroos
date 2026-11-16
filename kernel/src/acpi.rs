@@ -99,6 +99,58 @@ pub fn find_table(sig: &[u8; 4]) -> Option<u64> {
     None
 }
 
+/// Every ACPI table with signature `sig` (there can be many SSDTs); physical
+/// addresses, in the order of the XSDT/RSDT.
+pub fn tables(sig: &[u8; 4]) -> alloc::vec::Vec<u64> {
+    let mut v = alloc::vec::Vec::new();
+    let rsdp = RSDP.load(Ordering::Relaxed);
+    if rsdp == 0 {
+        return v;
+    }
+    unsafe {
+        let revision: u8 = rd(rsdp + 15);
+        let x: u64 = if revision >= 2 { rd(rsdp + 24) } else { 0 };
+        let (sdt, esize) = if x != 0 { (x, 8usize) } else { (rd::<u32>(rsdp + 16) as u64, 4) };
+        let len: u32 = rd(sdt + 4);
+        let entries = (len as usize).saturating_sub(36) / esize;
+        for i in 0..entries {
+            let ep = sdt + 36 + (i * esize) as u64;
+            let ptr = if esize == 8 { rd::<u64>(ep) } else { rd::<u32>(ep) as u64 };
+            if ptr != 0 && &signature(ptr) == sig {
+                v.push(ptr);
+            }
+        }
+    }
+    v
+}
+
+/// The guest-physical address of the 16-byte VM generation ID (ACPI device
+/// `VM_Gen_Counter`, QEMU `-device vmgenid`, Hyper-V, VMware): the SSDT names
+/// it as the DWORD `VGIA` that the firmware patched with the address of the
+/// buffer; the ID is 40 bytes into it (QEMU `VMGENID_GUID_OFFSET`, the `ADDR`
+/// method adds the same). `None` without such a device.
+pub fn vmgenid_addr() -> Option<u64> {
+    const PAT: [u8; 6] = [0x08, b'V', b'G', b'I', b'A', 0x0C]; // NameOp "VGIA" DWordPrefix
+    for t in tables(b"SSDT") {
+        let len = unsafe { rd::<u32>(t + 4) } as u64;
+        if len < 36 || len > 1 << 20 {
+            continue;
+        }
+        let mut i = 36;
+        while i + 10 <= len {
+            let hit = (0..6).all(|k| unsafe { rd::<u8>(t + i + k as u64) } == PAT[k]);
+            if hit {
+                let a = unsafe { rd::<u32>(t + i + 6) } as u64;
+                if a != 0 {
+                    return Some(a + 40);
+                }
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
 /// Fixed ACPI Description Table fields that we need for power management.
 pub struct Fadt {
     pub pm1a_cnt: u16, // PM1a control register port (S5/shutdown)

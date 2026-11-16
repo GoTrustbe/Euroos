@@ -1,0 +1,34 @@
+# [fuzz] FAILED / boots, short-boots.sh with the marker [fuzz] Linux-ABI (2 vCPU lanes, KVM, -nic none); images: v1 48dfd05, d11 validate-2026-11d, b8 d2 9cbebe8, x1 c70dddf, x2 0cf75e6, x3 f42be2a
+# fz/ : lanes on SMT-sibling pairs next to other guests (fv1* beside fd11*, fx1 beside the power legs); fz2/: a busy loop on every sibling; fz3/: repeat of fz/
+fz/fb8a: boots 20, [fuzz] FAILED 0
+fz/fb8b: boots 20, [fuzz] FAILED 0
+fz/fd11a: boots 20, [fuzz] FAILED 0
+fz/fd11b: boots 20, [fuzz] FAILED 0
+fz/fv1a: boots 20, [fuzz] FAILED 6
+fz/fv1b: boots 20, [fuzz] FAILED 2
+fz/fx1a: boots 14, [fuzz] FAILED 1
+fz/fx1b: boots 14, [fuzz] FAILED 2
+fz/fx2a: boots 14, [fuzz] FAILED 0
+fz/fx2b: boots 14, [fuzz] FAILED 0
+fz/fx3a: boots 14, [fuzz] FAILED 0
+fz/fx3b: boots 14, [fuzz] FAILED 0
+fz2/gb8: boots 16, [fuzz] FAILED 0
+fz2/gd11: boots 16, [fuzz] FAILED 0
+fz2/gv1: boots 16, [fuzz] FAILED 0
+fz2/gx1: boots 16, [fuzz] FAILED 0
+fz2/gx2: boots 16, [fuzz] FAILED 0
+fz2/gx3: boots 16, [fuzz] FAILED 0
+fz3/hb8a: boots 16, [fuzz] FAILED 3
+fz3/hd11a: boots 16, [fuzz] FAILED 0
+fz3/hd11b: boots 16, [fuzz] FAILED 0
+fz3/hv1a: boots 16, [fuzz] FAILED 3
+fz3/hv1b: boots 16, [fuzz] FAILED 3
+fz3/hx3a: boots 16, [fuzz] FAILED 3
+
+# a failing boot, the end of the fuzz run:
+[conn] @4125 sock_connect fd6 -> 0.0.0.0:63850
+[conn] @4678 sock_connect fd2 -> 0.0.0.0:0
+[glibc] TIMEOUT waiting for the process to exit | main t27 last=176(a1=0x20f339e0c43f4590)->0xffffffffffffffda
+[glibc] gfuzz (syscall fuzzer): exit=0 (want 171)
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+# the same stage ticks in passing KVM boots: validate-2026-11d [conn] @3297 sock_connect fd6  [conn] @3650 sock_connect fd2   | 48dfd05 [conn] @3240 sock_connect fd6  [conn] @3651 sock_connect fd2  

@@ -1,0 +1,8 @@
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-pc'=false user='anke'=false euroid-store=false → FAILED
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: the disk refused 51274 write(s) of the boot files (first at sector 0)
+[ro-install] PASS: install reported
+[ro-install] PASS: no kernel panic
+[ro-install]   [euro] the install on disk 0 failed or the disk root cannot be formatted (IoError): booting a RAM root, nothing is saved on the disk
+[ro-install] PASS: serial line: falls back to the RAM root
+[ro-install] PASS: boot reaches the desktop
+[ro-install] PASS: on-screen message queued ([notify] ... RAM root)

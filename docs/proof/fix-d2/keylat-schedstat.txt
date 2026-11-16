@@ -1,0 +1,20 @@
+# sched-stat over the 30 keys of the perf step (chrome-smoke-ss.py: sched-stat start/stop around the keys), smp 4
+== ss-f2 screen under 100 ms: median 400 ms
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 21.0 s: 2023 ticks (748 with the desktop loop idle), desktop loop halted 5613 ms, 2978 switches/s, 2906 syscalls/s
+[sched-stat]   t0 (kernel task): ran 46.8 % (7184 ms, in system calls and faults 0 ms), ticks user 0 kernel 462, 0 syscalls/s, 115 switches/s
+[sched-stat]   t4 (kernel task): ran 11.1 % (1705 ms, in system calls and faults 0 ms), ticks user 0 kernel 106, 0 syscalls/s, 46 switches/s
+[sched-stat]   t61: ran 9.2 % (1408 ms, in system calls and faults 107 ms), ticks user 191 kernel 3, 817 syscalls/s, 34 switches/s
+[sched-stat]   t92: ran 7.7 % (1176 ms, in system calls and faults 100 ms), ticks user 129 kernel 0, 708 syscalls/s, 46 switches/s
+== ss-vn0 screen under 100 ms: median 238 ms
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 15.9 s: 1563 ticks (903 with the desktop loop idle), desktop loop halted 6798 ms, 3193 switches/s, 3300 syscalls/s
+[sched-stat]   t0 (kernel task): ran 33.2 % (3008 ms, in system calls and faults 0 ms), ticks user 0 kernel 263, 0 syscalls/s, 81 switches/s
+[sched-stat]   t63: ran 14.9 % (1351 ms, in system calls and faults 111 ms), ticks user 115 kernel 2, 1077 syscalls/s, 50 switches/s
+[sched-stat]   t4 (kernel task): ran 9.3 % (841 ms, in system calls and faults 0 ms), ticks user 0 kernel 59, 0 syscalls/s, 50 switches/s
+[sched-stat]   t1: ran 9.2 % (831 ms, in system calls and faults 86 ms), ticks user 42 kernel 0, 475 syscalls/s, 94 switches/s
+
+# [fair] hogtest 5 10 8, browser images booted without chrome (no X client), KVM 4 vCPU (f2 = desktop nice -10, vn5 = -5, vn0 = 0)
+f2br [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.5 s (limit 12.6 s), lowest task 0 share 52 % -> OK ✓
+vn0br [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.3 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 16 % -> FAILED
+vn5br [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.6 s, worst 0.7 s (limit 12.6 s), lowest task 0 share 34 % -> FAILED

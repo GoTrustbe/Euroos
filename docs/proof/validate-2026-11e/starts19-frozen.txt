@@ -1,0 +1,15 @@
+[conn] @1727 sock_connect fd65538 -> 142.251.152.119:443
+[conn] @1727 TCP established to 142.251.152.119:443
+[conn] fd65536 closed 192.178.24.110:80 sport 51899: rx 1163 B, tx 402 B, open=true, unacked=0
+[conn] fd65537 closed 142.250.102.84:443 sport 53903: rx 4090 B, tx 1781 B, open=true, unacked=0
+[conn] fd65538 closed 142.251.152.119:443 sport 64833: rx 4054 B, tx 1776 B, open=true, unacked=0
+[conn] @1766 sock_connect fd65536 -> 142.250.102.84:443
+[conn] @1766 TCP established to 142.250.102.84:443
+[timer-probe] BUG-182: ISR words 0..7 = [00000000, 00000000, 00000800, 00000000, 00000000, 00000000, 00000000, 00000000]; 2224 Mcycles since the last timer tick was taken; 0 ticks added for late ticks so far
+[timer-probe] FROZEN: 2214 Mcycles since the previous NIC irq but only 0 ticks (now 1766): ISR[20..3f]=0x00000000 IRR[20..3f]=0x00000001 TPR=0x0 PPR=0x40 LVT_TIMER=0x00020020 CUR=35995 halted-at rip=0x100205609db IF=true
+[if0-window] 1009 ms cause=syscall 42 (steal 33 ms, disk wait with IF=0 0 ms (any 0 ms), faults +2 1 ms, task 39 last syscall 42, resumed at rip=0x100205609db cs=0x23) #1 longest 1009 ms
+[tick-late] #1 +99 ticks (2224 Mcycles) rip=0x100205609db cs=0x23 task 39 last-syscall=42(a1=0x16) faults-total=74951 (9217 Mcycles) lost-total=99
+[desk] #7 the desktop loop was away 1009 ms: its pass took 0 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 0, hosted window and console 0), then 1009 ms without the CPU (25 other tasks were ready)
+[tabs] page url="file:///tmp/input-test.html" title=""
+[tabs] 1 page(s)
+[cdp] input bridge attached (session B4A3BF577D1D5CE649C25829E758B076)

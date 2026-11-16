@@ -1,0 +1,7 @@
+# chrome-smoke --only sites --rounds 3 --smp 2, browser image of 732e5f5, one session (consent banners clicked by the harness)
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/rv/sites3
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0
+
+# informational: smpuser=on, --smp 4, same matrix
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/rv/sites-smp
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0

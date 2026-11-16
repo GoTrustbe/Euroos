@@ -170,6 +170,16 @@ pub fn init_ap(cpu: usize) {
     }
 }
 
+/// S3: TSS.rsp0 of AP `cpu`: where an interrupt from ring 3 lands on that core.
+pub fn set_ap_rsp0(cpu: usize, top: u64) {
+    // SAFETY: slot `cpu` belongs to that core; written on that core before it
+    // runs ring 3.
+    unsafe {
+        let tss = core::ptr::addr_of_mut!(AP_TSS[cpu % MAX_CPU]);
+        core::ptr::addr_of_mut!((*tss).privilege_stack_table[0]).write_volatile(VirtAddr::new(top));
+    }
+}
+
 /// The task register of this core (0 = no TSS loaded).
 pub fn task_register() -> u16 {
     let tr: u16;

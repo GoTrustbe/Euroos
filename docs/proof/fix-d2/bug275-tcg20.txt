@@ -1,0 +1,36 @@
+# BUG-275 rerun: TCG combined-smp1-iommu-1g (1 GiB, smp 1, intel-iommu, storage.nvme=user + megasas, e1000e restrict=on), self-test image of merged f53eec1, 20 boots at once on CPUs 10-19 and 30-39 (validation drivers/tcgboot.sh)
+c10 done 18:47:19 after 527s desktop=1 wd=0 nmi=0
+c11 done 18:46:59 after 507s desktop=1 wd=0 nmi=0
+c12 done 18:47:14 after 522s desktop=1 wd=0 nmi=0
+c13 done 18:47:09 after 517s desktop=1 wd=0 nmi=0
+c14 done 18:47:14 after 522s desktop=1 wd=0 nmi=0
+c15 done 18:46:58 after 506s desktop=1 wd=0 nmi=0
+c16 done 18:47:19 after 527s desktop=1 wd=0 nmi=0
+c17 done 18:47:09 after 517s desktop=1 wd=0 nmi=0
+c18 done 18:47:19 after 527s desktop=1 wd=0 nmi=0
+c19 done 18:46:58 after 506s desktop=1 wd=0 nmi=0
+c30 done 18:47:19 after 527s desktop=1 wd=0 nmi=0
+c31 done 18:47:18 after 526s desktop=1 wd=0 nmi=0
+c32 done 18:47:14 after 522s desktop=1 wd=0 nmi=0
+c33 done 18:46:59 after 507s desktop=1 wd=0 nmi=0
+c34 done 18:47:19 after 527s desktop=1 wd=0 nmi=0
+c35 done 18:47:04 after 512s desktop=1 wd=0 nmi=0
+c36 done 18:47:14 after 522s desktop=1 wd=0 nmi=0
+c37 done 18:46:58 after 506s desktop=1 wd=0 nmi=0
+c38 done 18:47:13 after 521s desktop=1 wd=0 nmi=0
+c39 done 18:47:08 after 516s desktop=1 wd=0 nmi=0
+
+[churn-forkthreads] verdicts:
+     20 OK
+
+FAILED lines over the 20 logs (tag, count):
+     20 [aslr]
+     40 [conn]
+     20 [glibc]
+     20 [linux-abi]
+     20 [udrv-crash]
+     20 [udrv-linux]
+     20 [udrv-net]
+crash lines: 0
+
+markers-compare against the validation rerun rr3 (48dfd05, PASS): WORSE summed over the 20 logs: 0; against the failing v1 run: 0 worse, churn-forkthreads FAIL -> OK

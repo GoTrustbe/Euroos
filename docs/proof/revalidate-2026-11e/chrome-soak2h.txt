@@ -1,0 +1,19 @@
+# chrome-mem-soak.py --no-video --free-video-seconds 0 --hours 2 --local-video-dir (vp9.webm only) --local-seconds 60, browser image of 732e5f5, 8 GiB, 2 vCPU, CPUs 0-1 (siblings idle)
+[chrome-mem-soak] round 1 done after 647 s: heap 123 MiB used, 388 MiB free; big 41/470 MiB (peak 43); files 43 MiB; demand 2501 MiB free
+[chrome-mem-soak] round 2 done after 1364 s: heap 123 MiB used, 388 MiB free; big 40/471 MiB (peak 47); files 43 MiB; demand 2510 MiB free
+[chrome-mem-soak] round 3 done after 2035 s: heap 123 MiB used, 388 MiB free; big 40/471 MiB (peak 47); files 43 MiB; demand 2478 MiB free
+[chrome-mem-soak] round 4 done after 2705 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 47); files 43 MiB; demand 2490 MiB free
+[chrome-mem-soak] round 5 done after 3373 s: heap 124 MiB used, 387 MiB free; big 39/472 MiB (peak 47); files 43 MiB; demand 2484 MiB free
+[chrome-mem-soak] round 6 done after 4040 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 47); files 43 MiB; demand 2485 MiB free
+[chrome-mem-soak] round 7 done after 4712 s: heap 124 MiB used, 387 MiB free; big 40/471 MiB (peak 47); files 43 MiB; demand 2480 MiB free
+[chrome-mem-soak] round 8 done after 5388 s: heap 124 MiB used, 387 MiB free; big 40/471 MiB (peak 47); files 43 MiB; demand 2474 MiB free
+[chrome-mem-soak] round 9 done after 6049 s: heap 124 MiB used, 387 MiB free; big 43/468 MiB (peak 47); files 43 MiB; demand 2457 MiB free
+[chrome-mem-soak] round 10 done after 6722 s: heap 124 MiB used, 387 MiB free; big 40/471 MiB (peak 48); files 43 MiB; demand 2469 MiB free
+[chrome-mem-soak] round 11 done after 7398 s: heap 124 MiB used, 387 MiB free; big 40/471 MiB (peak 48); files 43 MiB; demand 2471 MiB free
+[chrome-smoke] FAIL (1 step(s)) - 178/179 steps ok, report and screenshots in /dev/shm/rv/soak2h
+[chrome-mem-soak] FAIL (1 step(s)): 11 rounds in 7398 s
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0
+322 census samples over 122 min; pool 3231 MiB
+owner                   first   last    min    max    MiB/h
+heap_used                 123    124    123    125     +0.8
+verdict: NOT flat (in use +20.3 MiB/h = +0.6% of the pool per hour; 0 kill/exhaustion lines; 40 MiB without an owner at the worst)

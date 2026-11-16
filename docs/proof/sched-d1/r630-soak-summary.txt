@@ -1,0 +1,53 @@
+# loadtest soak, self-test image of 8fe1de9: --kvm --smp 4 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 7500
+ltstat samples: 4509, t = 3 .. 7502 s (125.0 min)
+heap_used first / at 10 min / last: 157 609 520 / 156 458 112 / 156 467 328
+heap slope after 10 min (least squares): +0.32 kB/min, range 1302 kB
+tasks: first 334, at 10 min 334, last 334, min 334, max 334 (after 10 min)
+files: first 1677, at 10 min 1677, last 1677, min 1677, max 1677 (after 10 min)
+kstacks: first 0, at 10 min 0, last 0, min 0, max 0 (after 10 min)
+procpool_free: first 887296, at 10 min 887296, last 887296, min 887296, max 887296 (after 10 min)
+frames_free: first 2962664, at 10 min 2979824, last 2979824, min 2963184, max 2979824 (after 10 min)
+bg_zombie: first 30, at 10 min 0, last 0, min 0, max 32 (after 10 min)
+bg_live: first 6, at 10 min 3, last 3, min 3, max 35 (after 10 min)
+commands: 11729; columns: id, command, status, elapsed_ms, output_lines, t_s
+by status: {'ok': 11729}
+churn proc commands: 1503
+serial: loadtest-serial-20261114-235511.log 13.3 MB
+  'GLIBC-DYNAMIC-OK': 24
+  'KERNEL PANIC': 0
+  'GENERAL PROTECTION': 0
+  '[idt] PAGE FAULT': 0
+  'DOUBLE FAULT': 0
+  'NMI PROBE': 0
+  '[watchdog]': 0
+  'refused to free': 0
+  'out of memory: page tables': 0
+  'no frames for page tables': 4
+  [churn-proc] verdict lines: 8648, with FAILED: 0
+  [lk] boot-total order inversions=0 (self-test provoked=2) task-lock-with-IF0=0
+--- end of the harness output:
+  : 0
+  : 0
+  : 0
+  : 0
+  : 0
+  : 0
+  : 0
+  : 3
+  : 3
+  : 0
+  [churn-proc] verdict lines: 1504, with FAILED: 0
+  churn proc 8 rounds (ms): 1127
+== desktop-loop gaps over 10 s
+[desk] #53 the desktop loop was away 10239 ms: its pass took 10229 ms (network and DevTools 0, devices and windows 9599, menus 0, keys and drawing 629, hosted window and console 0), then 9 ms without the CPU (6 other tasks were ready); longest step: scrub 603 ms; ticks of the loop at rip 0x70004241 x42, 0x7003c3e4 x72, 0x70003de8 x4, 0x7003c3b1 x8, 0x70000841 x1, 0x70003c73 x11; ticks of other tas
+== [if0-window] causes
+      4 cause=kernel 
+      1 cause=syscall 20 
+     11 cause=syscall 28 
+--- end of the harness output:
+  [11675/?] ✓ ok           523ms t= 7467.8s  spawn worker 32
+  [11700/?] ✓ ok            19ms t= 7483.2s  rm /home/euro/lt-soak/big2
+  [11725/?] ✓ ok            24ms t= 7501.8s  ltstat
+[loadtest] completed clean · results → /srv/euroos/sched-runs/soak/w/loadtest-results.csv · ltstat samples → /srv/euroos/sched-runs/soak/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 440262, "err": 0, "p50_ms": 60.9, "p99_ms": 362.9, "max_ms": 7810.6, "busy_windows": 376, "busy_s": 3227, "busy": {"ok": 201880, "err": 0, "p50_ms": 60.7, "p99_ms": 101.4, "max_ms": 1071.7}, "idle": {"ok": 238382, "err": 0, "p50_ms": 62.7, "p99_ms": 489.4, "max_ms": 7810.6}}
+[loadtest] host HTTP server served 1353 request(s)

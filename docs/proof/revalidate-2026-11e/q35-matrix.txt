@@ -1,0 +1,44 @@
+# CI q35 matrix, KVM, restrict=on (EK_RESTRICT=1 EK_ACCEL=kvm), self-test image of 732e5f5. First run: the default leg list (nvmeroot and ahciroot are not among the 13 of validation 2026-11e; tpm needs swtpm, which the R630 does not have, the harness crashed there), then the printer leg alone
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: nvmeroot
+  [nvmeroot] phase A FAILED; serial tail:
+  [nvmeroot] FAIL ✗
+[matrix] leg: ahciroot
+  [ahciroot] phase A FAILED; serial tail:
+  [ahciroot] FAIL ✗
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: tpm
+    p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
+FileNotFoundError: [Errno 2] No such file or directory: 'swtpm'
+--- printer leg alone (q35p)
+[matrix] leg: printer
+  [printer] PASS ✓
+  printer  PASS
+[matrix] ALL LEGS PASS ✓
+# nvmeroot leg on the 3ecde9e self-test image (same harness, KVM, restrict=on): the leg fails there too
+  [nvmeroot] phase A: installing EuroOS to the blank NVMe disk
+  [nvmeroot] phase A: reached loop=True, install-marker=False, nvme-root=False
+  [nvmeroot] phase A FAILED; serial tail:
+  [nvmeroot] FAIL ✗

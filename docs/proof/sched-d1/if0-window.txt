@@ -1,0 +1,37 @@
+# [if0-window] lines (BUG-182 attribution)
+== s0b
+[if0-window] 142 ms cause=blk (steal 0 ms, disk wait with IF=0 142 ms (any 142 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #1 longest 142 ms
+[if0-window] 231 ms cause=blk (steal 0 ms, disk wait with IF=0 230 ms (any 230 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #2 longest 231 ms
+[if0-window] 231 ms cause=blk (steal 0 ms, disk wait with IF=0 229 ms (any 229 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #3 longest 231 ms
+[if0-window] 231 ms cause=blk (steal 0 ms, disk wait with IF=0 229 ms (any 229 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #4 longest 231 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #5 longest 240 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #6 longest 240 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #7 longest 240 ms
+[if0-window] 239 ms cause=blk (steal 0 ms, disk wait with IF=0 239 ms (any 239 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #8 longest 240 ms
+[if0-window] 239 ms cause=blk (steal 0 ms, disk wait with IF=0 232 ms (any 232 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c39755 cs=0x8) #9 longest 240 ms
+== s0st
+[if0-window] 113 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #1 longest 113 ms
+[if0-window] 81 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #2 longest 113 ms
+[if0-window] 122 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #3 longest 122 ms
+[if0-window] 87 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #4 longest 122 ms
+[if0-window] 131 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #5 longest 131 ms
+[if0-window] 95 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #6 longest 131 ms
+[if0-window] 118 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #7 longest 131 ms
+[if0-window] 130 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #8 longest 131 ms
+[if0-window] 114 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #9 longest 131 ms
+[if0-window] 118 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #10 longest 131 ms
+[if0-window] 116 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #11 longest 131 ms
+[if0-window] 218 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x701c2303 cs=0x8) #12 longest 218 ms
+[if0-window] 110 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x701c37a5 cs=0x8) #13 longest 218 ms
+[if0-window] 135 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 60, resumed at rip=0x701c44ba cs=0x8) #14 longest 218 ms
+== s2if
+[if0-window] 142 ms cause=blk (steal 0 ms, disk wait with IF=0 142 ms (any 142 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #1 longest 142 ms
+[if0-window] 231 ms cause=blk (steal 0 ms, disk wait with IF=0 231 ms (any 231 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #2 longest 231 ms
+[if0-window] 231 ms cause=blk (steal 0 ms, disk wait with IF=0 231 ms (any 231 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #3 longest 231 ms
+[if0-window] 241 ms cause=blk (steal 0 ms, disk wait with IF=0 241 ms (any 241 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #4 longest 241 ms
+[if0-window] 241 ms cause=blk (steal 0 ms, disk wait with IF=0 241 ms (any 241 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #5 longest 241 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #6 longest 241 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #7 longest 241 ms
+[if0-window] 240 ms cause=blk (steal 0 ms, disk wait with IF=0 240 ms (any 240 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #8 longest 241 ms
+[if0-window] 239 ms cause=blk (steal 0 ms, disk wait with IF=0 239 ms (any 239 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x71c34af0 cs=0x8) #9 longest 241 ms
+== s8a

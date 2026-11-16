@@ -1,0 +1,21 @@
+# chrome-smoke --only interact --smp 2
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 17.2 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.7, first child process 6.5, renderer 10.7), 18 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] ok   omnibox: Ctrl+L, a URL, Enter: file:///tmp/input-test.html after 0.9 s
+[gui-smoke] ok   form: typed text arrives in the field (US): state ('Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', '', '-', 0)
+[gui-smoke] ok   clipboard: Ctrl+A, Ctrl+C in field A, Ctrl+V in field B: state ('Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', 'Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.j', 'paste', 0)
+[gui-smoke] ok   selection: double click selects a word on the page, copy, paste: field B = 'select'
+[gui-smoke] ok   selection: a drag with the button held selects text, copy, paste: field B = 'select-this-word '
+[gui-smoke] ok   scroll: wheel down, PageDown, End, Home, wheel down and up again: scrollY 480 -> 928 -> 1388 -> 0 -> 0
+[gui-smoke] ok   reload: F5 loads the page again: field A 'Hello EuroOS 2026, a/b?c=d&e-f_g:h;i.jx' -> title 'A=[] B=[] clip=- y=0'
+[gui-smoke] ok   form: be-azerty with AltGr characters: field A = 'azerty AZERTY 0123456789 m,;:=?./+ @#{}[]|€'
+[gui-smoke] ok   tabs: Ctrl+T, a page in the new tab, Ctrl+PageUp to the first, Ctrl+PageDown, Ctrl+W: two tabs ok, second loaded ok, typing in the first tab ok, the first tab is left ok
+[gui-smoke] ok   browser UI: the menu opens on a click at its button, Esc closes it: menu region: 239 colours while open
+[gui-smoke] ok   window: drag by the title bar, input lands in the moved window: frame at (289, 179), state ('moved', 'tab one', '-', 0)
+[gui-smoke] ok   window: maximise, chrome lays out for the new size, input lands: X window 1518x1008, menu button drawn at the new right edge: True, state ('maximised', 'tab one', '-', 0)
+[gui-smoke] ok   window: restore, input still lands: X window 800x600, frame at (289, 179), state ('maximised', 'restored', '-', 0)
+[gui-smoke] ok   link: a click on a link in the page navigates: page ready after 7.3 s; [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+[gui-smoke] ok   history: Alt+Left goes back, the toolbar's forward button goes forward: back ok, forward ok: [('https://euro-os.eu/en/#download', 'EuroOS: A sovereign operating system for Europe')]
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/val/interact
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0

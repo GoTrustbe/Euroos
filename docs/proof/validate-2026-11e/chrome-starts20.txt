@@ -1,0 +1,71 @@
+# chrome-smoke --starts 20 --smp 2, browser image of 48dfd05 (first run), KVM, R630, tmpfs work directories
+[chrome-smoke] start 1/20: PASS
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: PASS
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: PASS
+[chrome-smoke] start 11/20: PASS
+[chrome-smoke] start 12/20: PASS
+[chrome-smoke] start 13/20: PASS
+[chrome-smoke] start 14/20: PASS
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: PASS
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: CRASH/HANG: CRASH on serial: [timer-probe] FROZEN
+[chrome-smoke] start 20/20: PASS
+[chrome-smoke] starts: 19/20 PASS
+timer-probe FROZEN lines in the 20 starts: 1
+
+# second run, same image, started beside other load
+[chrome-smoke] start 1/20: PASS
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: PASS
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: PASS
+[chrome-smoke] start 11/20: PASS
+[chrome-smoke] start 12/20: PASS
+[chrome-smoke] start 13/20: PASS
+[chrome-smoke] start 14/20: PASS
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: PASS
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: PASS
+[chrome-smoke] start 20/20: PASS
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0
+
+# 3ecde9e (release 2026.11.14 code) browser image, same host, same time as the second run
+[chrome-smoke] start 1/20: PASS
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: PASS
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: PASS
+[chrome-smoke] start 11/20: PASS
+[chrome-smoke] start 12/20: PASS
+[chrome-smoke] start 13/20: PASS
+[chrome-smoke] start 14/20: PASS
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: PASS
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: PASS
+[chrome-smoke] start 20/20: PASS
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0

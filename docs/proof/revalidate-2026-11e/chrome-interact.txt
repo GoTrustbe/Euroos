@@ -1,0 +1,3 @@
+# chrome-smoke --only interact --smp 2
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/rv/interact
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0

@@ -241,6 +241,12 @@ renderer-trace, en die bereikt ons om vermoedelijk dezelfde reden niet
 - **Browser-UI-input** (omnibox, menu): werkt sinds BUG-090, 20 van 20 starts
   (`proof/chrome-2026-11/starts20.txt`).
 - **Een fd-ruimte voor de hele browser** (BUG-098): opgelost op 2026-11-13.
+- **Codecs, een besluit (BUG-161)**: EuroOS speelt alleen open codecs af: VP9, AV1,
+  Opus en Vorbis (en VP8). Geen H.264, AAC of HEVC, vanwege de patenten; de Chromium-
+  build staat daarom zonder `proprietary_codecs` en dat blijft zo. Een site die alleen
+  H.264/AAC aanbiedt (`.mp4`: `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`) speelt niet af.
+  YouTube levert aan zo'n browser VP9/AV1 met Opus. Videotests gebruiken de lokale
+  VP9+Opus-pagina (`chrome-mem-soak.py --local-video-dir`).
 - **YouTube**: de kijkpagina laadt (geen V8 OOM meer); video en geluid zijn niet
   gemeten, YouTube vraagt het testnetwerk om in te loggen.
 - **Tweede ronde van de sitematrix**: na de pdf-viewer crasht een nieuwe renderer

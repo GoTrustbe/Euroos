@@ -1,0 +1,153 @@
+# markers-compare.py: validate-2026-11d tcg-*.markers -> b6eb05d
+
+== user-smp4-iommu
+== base/tcg-user-smp4-iommu.markers  vs  /srv/euroos/d2-runs/out-a/tcg-user-smp4-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== user-smp4-noiommu
+== base/tcg-user-smp4-noiommu.markers  vs  /srv/euroos/d2-runs/out-a/tcg-user-smp4-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== kernel-smp4
+== base/tcg-kernel-smp4.markers  vs  /srv/euroos/d2-runs/out-a/tcg-kernel-smp4.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== storage-smp4-iommu-1g
+== base/tcg-storage-smp4-iommu-1g.markers  vs  /srv/euroos/d2-runs/out-a/tcg-storage-smp4-iommu-1g.markers
+-- WORSE: 3
+   app-policy: base OKx1 | new FAILx1
+   linux-abi: base FAILx1 | new FAILx11
+   rename: base OKx1 | new FAILx2
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: FAILx4
+   reseed: OKx1
+
+== combined-smp4-iommu-1g
+== base/tcg-combined-smp4-iommu-1g.markers  vs  /srv/euroos/d2-runs/out-a/tcg-combined-smp4-iommu-1g.markers
+-- WORSE: 3
+   app-policy: base OKx1 | new FAILx1
+   linux-abi: base FAILx1 | new FAILx14
+   rename: base OKx1 | new FAILx2
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: FAILx4
+   reseed: OKx1
+
+== user-smp1-iommu
+== base/tcg-user-smp1-iommu.markers  vs  /srv/euroos/d2-runs/out-a/tcg-user-smp1-iommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== user-smp1-noiommu
+== base/tcg-user-smp1-noiommu.markers  vs  /srv/euroos/d2-runs/out-a/tcg-user-smp1-noiommu.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== kernel-smp1
+== base/tcg-kernel-smp1.markers  vs  /srv/euroos/d2-runs/out-a/tcg-kernel-smp1.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: SKIPx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== storage-smp1-iommu-1g
+== base/tcg-storage-smp1-iommu-1g.markers  vs  /srv/euroos/d2-runs/out-a/tcg-storage-smp1-iommu-1g.markers
+-- WORSE: 3
+   app-policy: base OKx1 | new FAILx1
+   linux-abi: base FAILx1 | new FAILx14
+   rename: base OKx1 | new FAILx2
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: FAILx4
+   reseed: OKx1
+
+== combined-smp1-iommu-1g
+== base/tcg-combined-smp1-iommu-1g.markers  vs  /srv/euroos/d2-runs/out-a/tcg-combined-smp1-iommu-1g.markers
+-- WORSE: 3
+   app-policy: base OKx1 | new FAILx1
+   linux-abi: base FAILx1 | new FAILx14
+   rename: base OKx1 | new FAILx2
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: FAILx4
+   reseed: OKx1

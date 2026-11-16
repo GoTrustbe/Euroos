@@ -1,0 +1,41 @@
+# BUG-274: chrome-smoke --only perf (30 keys), median key to screen in ms per round, smp 4 (ka: smp 4 and smp 2), four guests at a time on 4-7/8-11/12-15/16-19, SMT siblings 24-39 idle, work dirs on tmpfs; slots rotate per round
+# images (browser = public + ui.tour=off;update.check=off): b0 = 3ecde9e; s0 = ab8e32c (S0); s1 = cdf5aff (S1); s2 = 80c0d69 (S2); sd1 = be87a0c (sched-d1); f1 = 1830a79; f2 = 4c8c363; vn0/vn5 = f2 with DESKTOP_NICE 0/-5; vk = f2 with DESK_KICK only on a yield; vq = f2 with DESK_KICK not after a yield in the same tick; vh = 48df3b0 (the fix)
+# ka: a = b0, b = f1 (-4 = smp 4, -2 = smp 2)
+== ka
+ka1-a-2 291 ms 0fz
+ka1-a-4 280 ms 0fz
+ka1-b-2 367 ms 0fz
+ka1-b-4 370 ms 0fz
+ka2-a-2 311 ms 0fz
+ka2-a-4 284 ms 0fz
+ka2-b-2 384 ms 0fz
+ka2-b-4 395 ms 0fz
+ka3-a-2 308 ms 0fz
+ka3-a-4  0fz
+ka3-b-2 399 ms 0fz
+ka3-b-4 348 ms 0fz
+done
+== kb
+0 b0br.img: 284 293 340 
+1 sd1br.img: 389 378 403 
+2 s1br.img: 351 353 359 
+3 s2br.img: 352 388 374 
+done
+== kc
+0 b0br.img: 348 313 318 
+1 s0br.img: 320 340 304 
+2 vn0br.img: 228 229 224 
+3 vn5br.img: 286 271 285 
+done
+== kd
+0 b0br.img: 310 311 340 
+1 f2br.img: 413 409 395 
+2 vkbr.img: 369 368 363 
+3 vqbr.img: 380 413 393 
+done
+== ke
+0 b0br.img: 343 305 289 
+1 f2br.img: 354 392 373 
+2 vhbr.img: 230 241 234 
+3 vn0br.img: 214 225 232 
+done

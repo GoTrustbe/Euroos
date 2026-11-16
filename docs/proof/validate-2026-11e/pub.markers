@@ -1,0 +1,81 @@
+[ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+[root-heap] RAM root of 8192 KiB: 8192 KiB of RAM-root backing alive in the kernel heap → OK (held once) ✓
+[boot-time] phase firmware-exit: 81.469 ms (at 81 ms)
+[boot-time] phase cpu-mm: 41.322 ms (at 122 ms)
+[boot-time] phase storage-rootfs: 57.142 ms (at 179 ms)
+[boot-time] phase storage-checks: 9.726 ms (at 189 ms)
+[entropy] CSPRNG seeded: 524 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (396 bits) · 0.794 ms → OK
+[boot-time] phase identity-config: 60.161 ms (at 249 ms)
+[boot-time] phase net: 26.215 ms (at 276 ms)
+[boot-time] phase userland-demos: 260.766 ms (at 536 ms)
+[boot-time] phase sched-init: 16.769 ms (at 553 ms)
+[ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[boot-time] phase acpi-pci-tpm: 71.356 ms (at 624 ms)
+[smp] parallel sum 0..2000000 over 4 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[boot-time] phase smp-timer: 596.628 ms (at 1221 ms)
+[boot-time] phase devices: 56.636 ms (at 1278 ms)
+[boot-time] phase drivers-late: 23.186 ms (at 1301 ms)
+[boot-time] phase glibc-suite: 1.805 ms (at 1303 ms)
+[boot-time] phase vfs-mounts: 3.869 ms (at 1307 ms)
+[intg] system integrity at boot: 33/33 files match the signed kernel image ✓
+[p3] append-only audit log: 41 events, persisted=true, append-only-flag=true, tamper-blocked=true, extend-OK=true, lines-on-disk 39→41 → OK (tamper-evident audit trail) ✓
+[x] EuroPol: policy 'firefox', caps 0b11111→0b01111 (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied=true, violation→P3-audit → OK (policy enforced as capabilities) ✓
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+[u] EuroVault: 2 secrets, master-from-TPM=false, read-with-cap=true, read-without-cap-denied=true, blob-without-plaintext=true, unseal-OK=true, wrong-key-fails=true → OK (capability-gated, encrypted, tamper-evident) ✓
+[n2] EuroVPN: handshake (4×X25519-DH → HKDF) + ChaCha20-Poly1305 transport, seeds-from-TPM=false, pubkey c9f30ea30bab5779…, encrypted=true, peer-decrypts=true, reply-ok=true → OK (forward-secret, mutually-authenticated tunnel) ✓
+[aa] EuroAgent: manifest 'facilitator' v1.0.0 (4 caps), MCP fs_write=allowed/exec=denied(cap), NET denied(policy)/EXEC denied(user-clamp), intent→facilitator, agent loop: 2 tool-calls/1 denied→'Summary saved.', Ed25519 bundle: valid-OK+tampered-rejected=true → OK (kernel trust boundary, capability-isolated, audited, LLM↔MCP loop, signed bundle, registry+anti-hijack) ✓
+[ca] EuroCA: root CA (seed-from-TPM=false), service cert 'vpn.euro-os.eu' issued+verified=true, refused-after-revocation=true, root-fpr c5ba2b2f4f17f63b… → OK (sovereign local certificate authority) ✓
+[o2] EuroAttest: quote over 2 PCRs (AK-seed-from-TPM=false), fresh-quote-accepted=true, replay-rejected=true, modified-state-rejected=true → OK (remote attestation — provable trusted state) ✓
+[v] EuroIDM: token 'anke'(users) issued+verified=true (IDM-seed-from-TPM=false), caps=read+net-no-write=true, escalation(add-group)-denied=true → OK (identity→capabilities, signed tokens, locally sovereign) ✓
+[wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS=true, with-cap fd_write+run()=55=true, without-cap host-call-denied=true → OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓
+[boot-time] phase subsystems: 104.294 ms (at 1411 ms)
+[3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+[boot-time] phase boot-good-scrub: 9.908 ms (at 1421 ms)
+[h2] display-server @ /run/eurodisplay.sock: 1 client(s), 1 app window(s) via AF_UNIX → compositor (5 windows total) ✓
+[h5] Wayland window (surface 5) → compositor (6 windows total) ✓
+[bb5] EuroSuite renderer: Writer/Calc/Impress rendering tested (demo documents, not on dock) ✓
+[b6] EuroWeb: usable browser (tabs + address bar) ready (open via dock; type a URL) ✓
+[rk] EuroReken REALLY interactive: 12+34*2 = 80 (engine, expected 80, with precedence) ✓
+[set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓
+[bb6] EuroAgent dispatch panel ready (intent → cap-gated agent loop + live audit; open via dock) ✓
+[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓
+[ag] EuroApps: EuroFiles (live FS @ /), EuroNotes (euronotes), EuroClock (RTC 12:44) — 3 windows + dock tiles 0/1/2 ✓
+[boot-time] phase desktop-build: 44.895 ms (at 1466 ms)
+[boot-time] phase lockscreen: 11.623 ms (at 1477 ms)
+[boot-time] phase first-frame: 147.116 ms (at 1624 ms)
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[boot-time] desktop after 1624 ms since kernel entry (HPET, release build): firmware-exit=81 cpu-mm=41 storage-rootfs=57 storage-checks=9 identity-config=60 net=26 userland-demos=260 sched-init=16 acpi-pci-tpm=71 smp-timer=596 devices=56 drivers-late=23 glibc-suite=1 vfs-mounts=3 subsystems=104 boot-good-scrub=9 desktop-build=44 lockscreen=11 first-frame=147 (ms per phase)
+[lk] boot-total heap (linked-list allocator): acq=9898 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=2080 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=12us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1197us hold-avg=26us
+[lk] boot-total vfs.mount_table: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=243 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+[lk] boot-total ring3.FILES (syscall file table): acq=171 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=94 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=12 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total unix.listeners: acq=5 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4us hold-avg=1us
+[lk] boot-total class Sched: acq=2080 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=12us hold-avg=0us
+[lk] boot-total class Process: acq=508 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+[lk] boot-total class Fs: acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1197us hold-avg=26us
+[lk] boot-total class FsMountTable: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class UnixTable: acq=17 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4us hold-avg=0us
+[lk] boot-total class UnixConn: acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total class Net: acq=1 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=18683 refills=87 flushes=14 parked=71 KiB
+[lk] boot-total order inversions=0 (self-test provoked=0) task-lock-with-IF0=0
+[lk] boot-total longest-held vfs.mount (per-mount): acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1197us hold-avg=26us
+[lk] boot-total longest-held ring3.BG (background processes): acq=243 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=35us hold-avg=0us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=2080 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=12us hold-avg=0us
+[lk] boot-total longest-held unix.listeners: acq=5 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=4us hold-avg=1us
+[lk] boot-total longest-held unix.conn (per-connection): acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total longest-held net.CFG: acq=1 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=171 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=94 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held heap (linked-list allocator): acq=9899 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held vfs.mount_table: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[intg] system integrity periodic: 33/33 files match the signed kernel image ✓
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓
+[xhci] MSI-X delivery confirmed: 1 interrupt(s) received ✓

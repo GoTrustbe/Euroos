@@ -1,0 +1,100 @@
+# BUG-251 final: chrome-smoke --only perf (30 keys, smpuser off), KVM, R630, work directories on tmpfs (cms.sh).
+# d1 = be87a0c (sched-d1), m3 = b6eb05d (integration), r1 = f42be2a (with --enable-low-end-device-mode), r1nl = f42be2a without it, r2 = 72976f7 (final)
+# Four runs at a time on separate CPUs (0-3, 10-13, 20-23, 30-33).
+
+## round: ks1-d1-4 ks1-r1-4 ks1-d1-2 ks1-r1-2
+== ks1-d1-4 median 345 ms  t4 ran 9.2 %  kern median 195906  faults faults-total=573456
+== ks1-r1-4 median 362 ms  t4 ran 8.9 %  kern median 222974  faults faults-total=509289
+== ks1-d1-2 median 330 ms  t4 ran 9.5 %  kern median 211928  faults faults-total=537491
+== ks1-r1-2 median 439 ms  t4 ran 17.2 %  kern median 202458  faults faults-total=518291
+== ks1-d1-4/serial.log total 579
+== ks1-r1-4/serial.log total 0
+== ks1-d1-2/serial.log total 511
+   kernel t4            n=  1 sum=    50 max=   50
+== ks1-r1-2/serial.log total 0
+UART forced open (200M spins): ks1-d1-4=0 ks1-r1-4=0 ks1-d1-2=0 ks1-r1-2=0 
+
+## round: ks2-d1-4 ks2-r1-4 ks2-d1-2 ks2-r1-2
+== ks2-d1-4 median 455 ms  t4 ran 13.2 %  kern median 247933  faults faults-total=534613
+== ks2-r1-4 median 410 ms  t4 ran 11.3 %  kern median 208172  faults faults-total=558960
+== ks2-d1-2 median 389 ms  t4 ran 9.7 %  kern median 211020  faults faults-total=550755
+== ks2-r1-2 median 389 ms  t4 ran 9.4 %  kern median 213648  faults faults-total=519372
+== ks2-d1-4/serial.log total 765
+   kernel t4            n=  1 sum=    50 max=   50
+== ks2-r1-4/serial.log total 0
+== ks2-d1-2/serial.log total 272
+== ks2-r1-2/serial.log total 0
+UART forced open (200M spins): ks2-d1-4=0 ks2-r1-4=0 ks2-d1-2=0 ks2-r1-2=0 
+
+## round: ks3-d1-4 ks3-r1-4 ks3-d1-2 ks3-r1-2
+== ks3-d1-4 median 420 ms  t4 ran 10.6 %  kern median 257397  faults faults-total=484047
+== ks3-r1-4 median 396 ms  t4 ran 10.2 %  kern median 203462  faults faults-total=496297
+== ks3-d1-2 median 343 ms  t4 ran 9.7 %  kern median 194338  faults faults-total=540781
+== ks3-r1-2 median 335 ms  t4 ran 9.2 %  kern median 189273  faults faults-total=517442
+== ks3-d1-4/serial.log total 555
+== ks3-r1-4/serial.log total 0
+== ks3-d1-2/serial.log total 695
+== ks3-r1-2/serial.log total 0
+UART forced open (200M spins): ks3-d1-4=0 ks3-r1-4=0 ks3-d1-2=0 ks3-r1-2=0 
+
+## round: kc1-m3-4 kc1-nl-4 kc1-m3-2 kc1-nl-2
+== kc1-m3-4 median 381 ms  t4 ran 8.1 %  kern median 219286  faults faults-total=578449
+== kc1-nl-4 median 357 ms  t4 ran 15.0 %  kern median 204512  faults faults-total=588701
+== kc1-m3-2 median 403 ms  t4 ran 9.9 %  kern median 223032  faults faults-total=563064
+== kc1-nl-2 median 391 ms  t4 ran 8.7 %  kern median 198855  faults faults-total=513235
+== kc1-m3-4/serial.log total 154
+== kc1-nl-4/serial.log total 0
+== kc1-m3-2/serial.log total 210
+== kc1-nl-2/serial.log total 52
+   kernel t4            n=  1 sum=    52 max=   52
+UART forced open (200M spins): kc1-m3-4=0 kc1-nl-4=0 kc1-m3-2=0 kc1-nl-2=0 
+
+## round: kc2-m3-4 kc2-nl-4 kc2-m3-2 kc2-nl-2
+== kc2-m3-4 median 383 ms  t4 ran 12.3 %  kern median 213276  faults faults-total=575218
+== kc2-nl-4 median 332 ms  t4 ran 8.8 %  kern median 180538  faults faults-total=588459
+== kc2-m3-2 median 381 ms  t4 ran 9.9 %  kern median 208533  faults faults-total=536220
+== kc2-nl-2 median 322 ms  t4 ran 11.4 %  kern median 197923  faults faults-total=585512
+== kc2-m3-4/serial.log total 215
+   kernel t4            n=  1 sum=    50 max=   50
+== kc2-nl-4/serial.log total 0
+== kc2-m3-2/serial.log total 104
+== kc2-nl-2/serial.log total 0
+UART forced open (200M spins): kc2-m3-4=0 kc2-nl-4=0 kc2-m3-2=0 kc2-nl-2=0 
+
+## round: kf1-d1-4 kf1-r2-4 kf1-d1-2 kf1-r2-2
+== kf1-d1-4 median 367 ms  t4 ran 12.2 %  kern median 200559  faults faults-total=509030
+== kf1-r2-4 median 390 ms  t4 ran 6.7 %  kern median 214694  faults faults-total=554143
+== kf1-d1-2 median 372 ms  t4 ran 10.7 %  kern median 220269  faults faults-total=528507
+== kf1-r2-2 median 372 ms  t4 ran 9.3 %  kern median 207994  faults faults-total=583126
+== kf1-d1-4/serial.log total 825
+== kf1-r2-4/serial.log total 0
+== kf1-d1-2/serial.log total 596
+== kf1-r2-2/serial.log total 0
+UART forced open (200M spins): kf1-d1-4=0 kf1-r2-4=0 kf1-d1-2=0 kf1-r2-2=0 
+
+## round: kf2-d1-4 kf2-r2-4 kf2-d1-2 kf2-r2-2
+== kf2-d1-4 median 386 ms  t4 ran 8.4 %  kern median 215071  faults faults-total=561221
+== kf2-r2-4 median 396 ms  t4 ran 11.7 %  kern median 216069  faults faults-total=581173
+== kf2-d1-2 median 363 ms  t4 ran 9.4 %  kern median 204903  faults faults-total=518976
+== kf2-r2-2 median 360 ms  t4 ran 9.0 %  kern median 198528  faults faults-total=567770
+== kf2-d1-4/serial.log total 470
+== kf2-r2-4/serial.log total 0
+== kf2-d1-2/serial.log total 329
+== kf2-r2-2/serial.log total 0
+UART forced open (200M spins): kf2-d1-4=0 kf2-r2-4=0 kf2-d1-2=0 kf2-r2-2=0 
+
+# The same harness with the work directories on the root disk while soaks ran (IO pressure 10-17 %):
+== kl1-d1-4 median 823 ms  t4 ran 15.1 %  kern median 557574  faults faults-total=484645
+== kl1-r1-4 median 834 ms  t4 ran 10.9 %  kern median 758238  faults faults-total=533955
+== kl1-d1-2 median 579 ms  t4 ran 13.7 %  kern median 435007  faults faults-total=462854
+== kl1-r1-2 median 767 ms  t4 ran 14.2 %  kern median 577962  faults faults-total=482177
+== kl2-d1-4 median 1083 ms  t4 ran 22.4 %  kern median 1079469  faults faults-total=431467
+== kl2-r1-4 median 749 ms  t4 ran 15.4 %  kern median 670662  faults faults-total=482210
+== kl2-d1-2 median 892 ms  t4   kern median 1398187  faults faults-total=517126
+== kl2-r1-2 median 790 ms  t4 ran 12.3 %  kern median 1290756  faults faults-total=483456
+== kl3-d1-4 median 879 ms  t4 ran 12.2 %  kern median 559748  faults faults-total=500580
+== kl3-r1-4 median 533 ms  t4 ran 11.1 %  kern median 348398  faults faults-total=498258
+== kl3-d1-2 median 1007 ms  t4 ran 15.1 %  kern median 687918  faults faults-total=530003
+== kl3-r1-2 median 415 ms  t4 ran 11.0 %  kern median 217629  faults faults-total=492372
+
+# [serial-tx] of r2 (sched.py: chatter on, dmesg, ramfiles, chatter):

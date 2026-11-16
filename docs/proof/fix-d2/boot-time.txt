@@ -1,0 +1,47 @@
+# boot-time.py, public images, KVM 2 vCPU, pin 18-19, alternating; a = 3ecde9e (b0pub), b = merged f53eec1 (m1pub); desktop = s from QEMU start to interactive loop started
+a-1 desktop 2.602 smp-timer: 44.223 ms [smp] 1/1 AP(s) idle
+b-1 desktop 2.788 smp-timer: 58.037 ms [smp] 1/1 AP(s) idle
+a-2 desktop 2.537 smp-timer: 44.275 ms [smp] 1/1 AP(s) idle
+b-2 desktop 2.694 smp-timer: 55.665 ms [smp] 1/1 AP(s) idle
+a-3 desktop 2.679 smp-timer: 44.204 ms [smp] 1/1 AP(s) idle
+b-3 desktop 2.245 smp-timer: 55.946 ms [smp] 1/1 AP(s) idle
+a-4 desktop 2.342 smp-timer: 44.672 ms [smp] 1/1 AP(s) idle
+b-4 desktop 2.324 smp-timer: 60.096 ms [smp] 1/1 AP(s) idle
+a-5 desktop 2.725 smp-timer: 44.232 ms [smp] 1/1 AP(s) idle
+b-5 desktop 2.238 smp-timer: 55.081 ms [smp] 1/1 AP(s) idle
+a-6 desktop 2.693 smp-timer: 44.404 ms [smp] 1/1 AP(s) idle
+b-6 desktop 2.277 smp-timer: 56.218 ms [smp] 1/1 AP(s) idle
+a-7 desktop 2.273 smp-timer: 44.421 ms [smp] 1/1 AP(s) idle
+b-7 desktop 2.702 smp-timer: 55.145 ms [smp] 1/1 AP(s) idle
+a-8 desktop 2.682 smp-timer: 44.158 ms [smp] 1/1 AP(s) idle
+b-8 desktop 2.214 smp-timer: 56.010 ms [smp] 1/1 AP(s) idle
+a-9 desktop 2.667 smp-timer: 44.507 ms [smp] 1/1 AP(s) idle
+b-9 desktop 2.493 smp-timer: 54.199 ms [smp] 1/1 AP(s) idle
+a-10 desktop 2.235 smp-timer: 44.443 ms [smp] 1/1 AP(s) idle
+b-10 desktop 2.712 smp-timer: 55.222 ms [smp] 1/1 AP(s) idle
+a n=10 median 2.63 min 2.23 max 2.73
+b n=10 median 2.41 min 2.21 max 2.79
+done
+
+# earlier series: a = 3ecde9e, b = 4c8c363 (p2)
+a-1     4.068 | smp-timer: 43.846 ms
+b-1     4.582 | smp-timer: 58.416 ms
+a-2     4.100 | smp-timer: 44.669 ms
+b-2     4.543 | smp-timer: 54.889 ms
+a-3     4.113 | smp-timer: 44.586 ms
+b-3     4.658 | smp-timer: 54.587 ms
+a-4     4.395 | smp-timer: 43.716 ms
+b-4     4.563 | smp-timer: 54.840 ms
+a-5     4.752 | smp-timer: 44.144 ms
+b-5     4.170 | smp-timer: 54.929 ms
+a-6     4.155 | smp-timer: 44.822 ms
+b-6     4.134 | smp-timer: 56.206 ms
+a-7     4.063 | smp-timer: 44.332 ms
+b-7     4.113 | smp-timer: 56.327 ms
+a-8     4.791 | smp-timer: 46.996 ms
+b-8     4.797 | smp-timer: 56.704 ms
+a-9     4.132 | smp-timer: 44.426 ms
+b-9     4.123 | smp-timer: 55.884 ms
+a-10     4.531 | smp-timer: 44.362 ms
+b-10     4.129 | smp-timer: 56.503 ms
+done

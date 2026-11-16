@@ -33,6 +33,10 @@ pub static TICKS: AtomicU64 = AtomicU64::new(0);
 /// Separate vector for the per-CPU AP timer (apart from the BSP scheduler stub on 0x20).
 const AP_TIMER_VECTOR: u8 = 0x41;
 // Cross-CPU IPI vectors (Run 2).
+/// Reschedule IPI (S2 of docs/design/SMP-SCHEDULER.md): a wake that should
+/// preempt the running task sends it to the BSP; it is taken at the first
+/// instruction with IF=1, so a system call in progress ends first.
+pub const IPI_RESCHED_VECTOR: u8 = 0x42;
 pub const IPI_PING_VECTOR: u8 = 0x43; // generic ping / wakeup
 pub const IPI_HALT_VECTOR: u8 = 0x44; // stop a core (cli; hlt)
 pub const IPI_TLB_VECTOR: u8 = 0x45; // TLB shootdown (reload CR3)
@@ -55,7 +59,7 @@ pub const SCI_VECTOR: u8 = 0x49; // ACPI SCI (power button etc.) — Metal M5-2
 pub const YIELD_VECTOR: u8 = 0x4A;
 /// No fixed vector lies inside the userspace-driver pool.
 const _: () = {
-    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
+    let fixed = [TIMER_VECTOR, KEYBOARD_VECTOR, MOUSE_VECTOR, AP_TIMER_VECTOR, IPI_RESCHED_VECTOR, IPI_PING_VECTOR, IPI_HALT_VECTOR, IPI_TLB_VECTOR, XHCI_MSIX_VECTOR, VIRTIO_BLK_MSIX_VECTOR, NVME_MSIX_VECTOR, SCI_VECTOR, YIELD_VECTOR, VIRTIO_NET_MSIX_VECTOR, 0xFF];
     let mut i = 0;
     while i < fixed.len() {
         assert!(!(fixed[i] >= UDRV_VECTOR_BASE && (fixed[i] as usize) < UDRV_VECTOR_BASE as usize + UDRV_VECTORS), "a fixed vector lies in the udrv pool");
@@ -141,6 +145,12 @@ static IDT: Lazy<InterruptDescriptorTable> = Lazy::new(|| {
     // SAFETY: ap_stub_addr() is a valid interrupt handler in our (shared) CS.
     unsafe {
         idt[AP_TIMER_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::ap_stub_addr()));
+    }
+    // S2: the reschedule IPI enters the same context switch as a yield
+    // (`resched_switch`, with an EOI). Set by raw address like the yield stub.
+    // SAFETY: resched_stub_addr() is a valid interrupt handler in our CS.
+    unsafe {
+        idt[IPI_RESCHED_VECTOR].set_handler_addr(x86_64::VirtAddr::new(crate::sched::resched_stub_addr()));
     }
     // Cross-CPU IPI handlers (Run 2).
     idt[IPI_PING_VECTOR].set_handler_fn(ipi_ping_handler);
@@ -370,6 +380,11 @@ pub fn init() {
     IDT.load();
 }
 
+/// The BSP's IDT (S3: the APs get a copy with their own exception stubs).
+pub fn bsp_idt() -> &'static InterruptDescriptorTable {
+    &IDT
+}
+
 extern "x86-interrupt" fn debug_handler(frame: InterruptStackFrame) {
     crate::memwatch::on_debug(
         frame.instruction_pointer.as_u64(),
@@ -393,6 +408,36 @@ extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
 pub static NMI_TEST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub static NMI_TEST_RSP: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 pub static NMI_TEST_TR: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
+/// How far the NMI probe may scan the interrupted stack upward from `rsp`: the
+/// most 2 KiB, never past `stack_top` when the interrupted stack is known, and
+/// when it is not (boot stack, AP stack, an IST stack) never out of the page
+/// `rsp` is in (BUG-202).
+pub fn nmi_scan_end(rsp: u64, stack_top: Option<u64>) -> u64 {
+    let wanted = rsp.saturating_add(0x800);
+    let limit = match stack_top {
+        Some(top) if top > rsp => top,
+        // The page of RSP is mapped (the CPU was just using it); the next one may be a guard.
+        _ => (rsp | 0xFFF).saturating_add(1),
+    };
+    wanted.min(limit) & !0x7
+}
+
+/// **[nmi-bound]** (BUG-202): the probe scan of a stack with RSP within 2 KiB of
+/// its top, and of an unknown stack near the end of a page, stays inside.
+pub fn selftest_nmi_bound() {
+    let top = 0x80_0001_9000u64; // page aligned top, like task 4 of the report
+    let rsp = top - 0x1e0; // 0x...18e20 in the report: 480 bytes below the top
+    let a = nmi_scan_end(rsp, Some(top));
+    let b = nmi_scan_end(top - 0x40, Some(top));
+    let c = nmi_scan_end(0x7000_0fe0, None); // unknown stack, 32 bytes below a page end
+    let d = nmi_scan_end(0x7000_0100, Some(0x7000_4000)); // far from the top: the full 2 KiB
+    let ok = a <= top && b <= top && c <= 0x7000_1000 && d == 0x7000_0900 && a > rsp && c > 0x7000_0fe0;
+    crate::serial_println!(
+        "[nmi-bound] probe scan end: near top {a:#x} (top {top:#x}), unknown stack near page end {c:#x}, far from top {d:#x} → {}",
+        if ok { "OK (scan stays inside the stack) ✓" } else { "FAILED (scan reads past the top)" }
+    );
+}
 
 extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     if NMI_TEST.load(Ordering::Acquire) {
@@ -490,7 +535,9 @@ extern "x86-interrupt" fn nmi_handler(frame: InterruptStackFrame) {
     serial_println!("[nmi] stack scan (return addresses):");
     let mut printed = 0;
     let mut p = rsp & !0x7;
-    let end = (rsp + 0x800) & !0x7; // scan 2 KiB of the interrupted stack
+    // At most 2 KiB, and never past the top of the interrupted stack: above it lies the
+    // guard page of the next stack, and reading that is a stack overflow to the #PF handler (BUG-202).
+    let end = nmi_scan_end(rsp, crate::sched::task_stack_top_containing(rsp));
     // A ring-3 stack holds no kernel return addresses (and is user memory).
     while cs & 3 != 3 && p < end && printed < 24 {
         let v = unsafe { (p as *const u64).read_volatile() };
@@ -681,6 +728,23 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // that touch a not-yet-committed demand page during a syscall).
     crate::ring3::FAULT_CODE.store(code.bits(), Ordering::Relaxed);
     crate::ring3::FAULT_RIP.store(frame.instruction_pointer.as_u64(), Ordering::Relaxed);
+    // Copy-on-write (fork): a write to an arena page shared with another
+    // process. The writer gets its copy, or, when the writer is the launched
+    // process, the children that share the page get theirs. From ring 3 and
+    // from a system call that copies into its caller alike.
+    if code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && code.contains(PageFaultErrorCode::CAUSED_BY_WRITE)
+        && addr >> 39 == 0
+    {
+        let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
+        match crate::paging::arena_cow_fault(cr3, addr, reserve) {
+            Some(true) => return,
+            Some(false) => serial_println!(
+                "[oom] no frame in the process pool for the copy of a shared arena page at {addr:#x} ({} frames free): the write fails",
+                crate::procpool::free_frames()),
+            None => {}
+        }
+    }
     // BUG-156: a page of the arena of a fork child that nobody touched yet. It
     // gets a zeroed frame from the process pool, for ring 3 and for a system
     // call that copies into its caller alike. A fault from ring 3 leaves the

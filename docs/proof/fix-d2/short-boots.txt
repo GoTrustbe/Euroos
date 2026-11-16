@@ -1,0 +1,3 @@
+# 100 short boots of the self-test image of merged f53eec1: short-boots.sh, marker [fuzz] Linux-ABI, KVM 2 vCPU 2 GiB, 16 lanes on CPUs 4-19 and their SMT siblings 24-39 (every lane shares its core with another guest: the load that reproduced BUG-273), 7 boots per lane
+boots: 112, end=marker 112, failed-lines>0: 0 (no [fuzz] FAILED), crash-lines>0: 0, CSPRNG seeded 112, [3d8] and [3d7] OK 112 ([3d3] and [linux-rand] come after the [fuzz] marker)
+seconds to the [fuzz] line: median 33.7 s, max 39.2 s

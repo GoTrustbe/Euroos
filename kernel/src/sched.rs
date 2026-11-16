@@ -9,7 +9,7 @@
 //! increasing counters prove they really run in parallel (interleaved).
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::segmentation::{Segment, CS, SS};
@@ -98,10 +98,197 @@ struct Task {
 /// kernel stack; if it changes, the stack has overflowed.
 const STACK_CANARY: u64 = 0x5350_524F_5547_4421; // "SPROUGD!" — recognizable in dumps
 
-/// vruntime step per turn, weighted on nice (-20..19 -> 64..2560). Equal nice =
-/// equal step = fair round-robin (behavior-preserving relative to the old scheduler).
-fn vstep(nice: i8) -> u64 {
-    ((nice as i64) + 21) as u64 * 64
+/// Load weight per nice level (-20..19), the table of Linux: 1024 at nice 0,
+/// about x1.25 per step. A task's vruntime grows by its run time x 1024 / weight
+/// (S1 of docs/design/SMP-SCHEDULER.md: time, not turns).
+const WEIGHTS: [u64; 40] = [
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15,
+];
+
+fn weight(nice: i8) -> u64 {
+    WEIGHTS[(nice.clamp(-20, 19) + 20) as usize]
+}
+
+/// The desktop loop (task 0) runs at the weight of nice -10: against five busy
+/// nice-0 tasks it is entitled to 65 % of the CPU (BUG-192: it got 2.5 %).
+pub const DESKTOP_NICE: i8 = -10;
+
+/// The userspace drivers (e1000d, nvmed, ...) run at the weight of nice -15
+/// (BUG-231). A driver is the device's interrupt handler in ring 3: its
+/// interrupt wakes it, it does a short pass and sleeps again. Under turn-based
+/// vruntime it was never charged (it always slept when it left the CPU) and so
+/// always ran first; charged by time at nice 0 it queued behind the desktop
+/// loop (nice -10) and every CPU-bound task until the next tick, and every frame
+/// of an inbound connection paid that (soak hammer p50 5.4 -> 60.9 ms). At -15
+/// a woken driver is ahead of the pack again; what it takes under a flood is
+/// still bounded by its weight.
+pub const DRIVER_NICE: i8 = -15;
+
+/// The driver budget (BUG-252). Nice -15 is what a driver needs to run when its
+/// interrupt wakes it; it is not meant as the weight of a driver that never
+/// sleeps. Under an inbound flood e1000d took 45 % of the CPU at that weight
+/// (each frame it hands on is a device exit, and under QEMU's user network that
+/// exit carries the host side's TCP work too) and the desktop loop's console
+/// commands ran at half their rate. A driver keeps nice -15 for the first
+/// `DRV_BUDGET_PCT` % of every window of `DRV_WINDOW_TICKS` ticks; past that it
+/// is charged at `DRIVER_OVER_NICE` (it runs when nobody else wants the CPU)
+/// for the rest of the window, and the next window starts it at the pack again
+/// (the debt of the throttled stretch is not carried over: the budget is the
+/// limit, not its vruntime). A driver that does a short pass per interrupt never
+/// reaches the budget, and under a flood most frames still go through at once:
+/// only those that come after the budget is spent wait for the next window.
+/// Default 10 % of 500 ms: in 25-minute soaks with the inbound hammer, 10 % of
+/// 100 ms left the hammer p50 at 8.9 ms (the throttled stretches were many and
+/// short), 30 % of 100 ms the console at 4 006 commands an hour; 10 % of 500 ms
+/// gave p50 5.7 ms and 5 232 commands an hour (fixed -15: 5.0 ms, 2 812).
+/// `sched.drvbudget=PCT` and `sched.drvwindow=TICKS` (boot options) and the
+/// shell command `drvbudget [PCT]` change it; 100 % is the old fixed weight.
+pub const DRIVER_OVER_NICE: i8 = 19;
+static DRV_WINDOW_TICKS: AtomicU64 = AtomicU64::new(DRV_WINDOW_DEFAULT);
+const DRV_WINDOW_DEFAULT: u64 = 50;
+static DRV_BUDGET_PCT: AtomicU64 = AtomicU64::new(DRV_BUDGET_DEFAULT);
+const DRV_BUDGET_DEFAULT: u64 = 10;
+/// The driver tasks (index + 1, 0 = free), their run time in the current window
+/// (TSC), and how often a driver went over its budget.
+const DRV_SLOTS: usize = 8;
+static DRV_TASK: [AtomicUsize; DRV_SLOTS] = [const { AtomicUsize::new(0) }; DRV_SLOTS];
+static DRV_RUN: [AtomicU64; DRV_SLOTS] = [const { AtomicU64::new(0) }; DRV_SLOTS];
+static DRV_OVER: AtomicU64 = AtomicU64::new(0);
+static DRV_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+
+fn drv_slot(idx: usize) -> Option<usize> {
+    (0..DRV_SLOTS).find(|&k| DRV_TASK[k].load(Ordering::Relaxed) == idx + 1)
+}
+
+/// Task `idx` is a userspace driver: nice -15 within its budget (see above).
+pub fn set_driver(idx: usize) {
+    set_nice(idx, DRIVER_NICE);
+    if drv_slot(idx).is_some() {
+        return;
+    }
+    for k in 0..DRV_SLOTS {
+        if DRV_TASK[k].compare_exchange(0, idx + 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            DRV_RUN[k].store(0, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+/// The driver budget in percent of a window (100: none).
+pub fn driver_budget() -> u64 {
+    DRV_BUDGET_PCT.load(Ordering::Relaxed)
+}
+
+pub fn set_driver_budget(pct: u64) {
+    DRV_BUDGET_PCT.store(pct.clamp(1, 100), Ordering::Relaxed);
+}
+
+/// The budget window in ticks.
+pub fn driver_window() -> u64 {
+    DRV_WINDOW_TICKS.load(Ordering::Relaxed)
+}
+
+pub fn set_driver_window(ticks: u64) {
+    DRV_WINDOW_TICKS.store(ticks.clamp(5, 1000), Ordering::Relaxed);
+}
+
+/// (driver tasks, times one went over its budget).
+pub fn driver_stats() -> (alloc::vec::Vec<usize>, u64) {
+    let v = (0..DRV_SLOTS).filter_map(|k| DRV_TASK[k].load(Ordering::Relaxed).checked_sub(1)).collect();
+    (v, DRV_OVER.load(Ordering::Relaxed))
+}
+
+/// The nice value a turn of task `idx` is charged at: its own, except for a
+/// driver past its budget in this window.
+/// BUG-274: the desktop loop hosts an X client's window (chrome) and spends its
+/// passes serving it (events, the hosted window, compositing its frames).
+static DESK_HOSTS_CLIENT: AtomicBool = AtomicBool::new(false);
+
+/// Set by the desktop loop once a pass: does a hosted X client window exist?
+pub fn desktop_hosts_client(on: bool) {
+    DESK_HOSTS_CLIENT.store(on, Ordering::Relaxed);
+}
+
+fn charge_nice(s: &Scheduler, idx: usize) -> i8 {
+    // BUG-274: S1 gave the desktop loop the weight of nice -10 so that its own
+    // work (the shell, menus, a foreground command: BUG-192) keeps 65 % against
+    // busy tasks. While it hosts an X client the busy tasks are mostly that
+    // client, and the loop's passes are work for it: at 9x the client's weight
+    // the loop took 47 % of the CPU while chrome waited for its turn, and key to
+    // screen went from 320 to 400 ms. Then it is charged like its client.
+    if idx == 0 && DESK_HOSTS_CLIENT.load(Ordering::Relaxed) {
+        return 0;
+    }
+    let n = s.tasks[idx].nice;
+    if n >= DRIVER_OVER_NICE {
+        return n;
+    }
+    let Some(k) = drv_slot(idx) else { return n };
+    let pct = DRV_BUDGET_PCT.load(Ordering::Relaxed);
+    if pct >= 100 {
+        return n;
+    }
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    if DRV_RUN[k].load(Ordering::Relaxed) > per * DRV_WINDOW_TICKS.load(Ordering::Relaxed) * pct / 100 {
+        DRIVER_OVER_NICE
+    } else {
+        n
+    }
+}
+
+/// A turn of `idx` of `cycles` ends: count it against a driver's budget, and
+/// start a new window when this one is over (a driver that ran past its budget
+/// starts it at the pack, not behind it).
+fn drv_account(s: &mut Scheduler, idx: usize, cycles: u64) {
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    let start = DRV_WINDOW_START.load(Ordering::Relaxed);
+    let win = DRV_WINDOW_TICKS.load(Ordering::Relaxed);
+    if now.wrapping_sub(start) >= win {
+        DRV_WINDOW_START.store(now, Ordering::Relaxed);
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let cap = per * win * DRV_BUDGET_PCT.load(Ordering::Relaxed) / 100;
+        for k in 0..DRV_SLOTS {
+            let was = DRV_RUN[k].swap(0, Ordering::Relaxed);
+            if was > cap {
+                if let Some(t) = DRV_TASK[k].load(Ordering::Relaxed).checked_sub(1) {
+                    if t < s.count && s.tasks[t].vruntime > s.min_vr {
+                        s.tasks[t].vruntime = s.min_vr;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(k) = drv_slot(idx) {
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let cap = per * win * DRV_BUDGET_PCT.load(Ordering::Relaxed) / 100;
+        let before = DRV_RUN[k].fetch_add(cycles, Ordering::Relaxed);
+        if before <= cap && before + cycles > cap {
+            DRV_OVER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// vruntime is in weighted nanoseconds. A task that waited gets ahead of the
+/// pack by half a slice at most: `max(vruntime, min_vr - WAKE_FLOOR)`.
+const WAKE_FLOOR: u64 = 5_000_000;
+
+/// TSC cycles of run time at `nice` as weighted nanoseconds of vruntime.
+fn vr_charge(cycles: u64, nice: i8) -> u64 {
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1) as u128;
+    // 10 ms per tick: ns = cycles * 10^7 / per.
+    let ns = cycles as u128 * 10_000_000 / per;
+    (ns * 1024 / weight(nice) as u128).min(u64::MAX as u128 / 4) as u64
+}
+
+/// Place a task that waited: never more than WAKE_FLOOR ahead of the pack.
+fn place_woken(s: &mut Scheduler, idx: usize) {
+    let floor = s.min_vr.saturating_sub(WAKE_FLOOR);
+    if s.tasks[idx].vruntime < floor {
+        s.tasks[idx].vruntime = floor;
+    }
 }
 
 /// Block the CURRENT task on the generic futex wait channel (FUTEX_WAIT).
@@ -306,24 +493,16 @@ pub fn block_on(chan: u64) {
     s.tasks[cur].state = State::Blocked(chan);
 }
 
-// -- Wake hand-off (W23, task 4: key to screen) --
+// -- Wake preemption (S2 of docs/design/SMP-SCHEDULER.md) --
 //
-// A thread that wakes another (futex wake, a write the other waits for)
-// used to keep the CPU until its tick ended or it blocked: up to 10 ms per
-// hand-off, and a key passes a dozen threads of the browser on its way to the
-// screen, all on the one CPU that runs ring 3. With WAKE_YIELD the waking
-// system call ends with a yield, and the scheduler picks the task with the
-// least vruntime as at any switch (the woken one, if it waited long enough
-// to deserve it). The shell command wakeyield on|off switches it at run time;
-// keylat shows how long woken tasks waited for the CPU.
-//
-// OFF by default: measured in one browser session (docs/proof/chrome-w23),
-// woken tasks then got the CPU within 0.1 ms instead of 1-10 ms, but the key
-// to screen of the harness went from 483 to 1102 ms (median): every waking
-// thread gave its turn away and waited a round of thirty for the next one.
-// What stays on is DESK_KICK: after the hosted window drew, the next yield
-// of any task goes to the desktop loop, which puts the drawing on the screen.
-pub static WAKE_YIELD: AtomicBool = AtomicBool::new(false);
+// A wake used to wait for the end of the waker's tick (up to 10 ms), or, with
+// the W23 hand-off `wakeyield`, the waker yielded inside its system call and
+// waited a round of thirty ready threads for its next turn (harness median
+// 483 -> 1102 ms; removed). Now a wake whose task is at least 1 ms of vruntime
+// behind the running one sends IPI_RESCHED to the BSP: from a system call the
+// IPI fires at `sysret`, the waker keeps its place in vruntime order and is
+// only preempted, and the woken task runs at once. DESK_KICK stays: after the
+// hosted window drew, the next switch goes to the desktop loop.
 static RESCHED: AtomicBool = AtomicBool::new(false);
 /// The desktop loop has something to put on the screen (the hosted window
 /// drew): the next switch goes to it even if it had its turn this tick.
@@ -334,10 +513,42 @@ static WOKEN_AT: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASK
 pub static WAKE_HIST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 pub const WAKE_HIST_MS: [&str; 8] = ["<0.1", "<1", "<5", "<10", "<20", "<50", "<100", ">=100"];
 
+/// A woken task preempts the running one when its vruntime is at least this far
+/// below the running task's (weighted ns): 1 ms.
+const WAKE_PREEMPT: u64 = 1_000_000;
+
+/// Nice value of task `idx` (None: no such task).
+pub fn nice_of(idx: usize) -> Option<i8> {
+    let s = SCHED.lock();
+    (idx < s.count).then(|| s.tasks[idx].nice)
+}
+
 fn woken(s: &Scheduler, idx: usize) {
-    WOKEN_AT[idx].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
-    if WAKE_YIELD.load(Ordering::Relaxed) && idx != s.current && s.current != 0 {
+    let now = rdtsc();
+    WOKEN_AT[idx].store(now, Ordering::Relaxed);
+    let cur = s.current;
+    if idx == cur || cur >= s.count {
+        return;
+    }
+    // The running task's vruntime including its turn so far. The desktop loop in
+    // its idle halt always gives way.
+    let want = if cur == 0 && T0_IDLE.load(Ordering::Relaxed) {
+        true
+    } else {
+        let live = s.tasks[cur].vruntime
+            .wrapping_add(vr_charge(now.saturating_sub(EXEC_START.load(Ordering::Relaxed)), charge_nice(s, cur)));
+        s.tasks[idx].vruntime.saturating_add(WAKE_PREEMPT) < live
+    };
+    if want {
         RESCHED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// After a wake (the scheduler lock dropped): send the reschedule IPI if the
+/// wake asked for preemption. From a system call it fires at `sysret`.
+fn kick_after_wake() {
+    if RESCHED.swap(false, Ordering::Relaxed) {
+        resched_ipi();
     }
 }
 
@@ -361,7 +572,9 @@ fn ran(idx: usize) {
     WAKE_HIST[b].fetch_add(1, Ordering::Relaxed);
 }
 
-/// Did the running system call wake someone it should hand the CPU to?
+/// Did the running system call wake someone it should hand the CPU to? The
+/// dispatch epilogue then sends the reschedule IPI (the wake functions already
+/// did when they could; this is the backstop).
 pub fn take_resched() -> bool {
     RESCHED.swap(false, Ordering::Relaxed)
 }
@@ -369,33 +582,121 @@ pub fn take_resched() -> bool {
 /// The hosted window drew: the desktop loop is next (see DESK_KICK).
 pub fn want_desktop() {
     DESK_KICK.store(true, Ordering::Relaxed);
-    if WAKE_YIELD.load(Ordering::Relaxed) {
-        RESCHED.store(true, Ordering::Relaxed);
+}
+
+/// S3: the entry stack of AP `cpu` (TSS.rsp0 there): slot 0 of its scheduler
+/// stacks, which the idle context never used (it runs on the AP boot stack) and
+/// which `ap_setup` registered with `percpu`.
+pub fn ap_entry_stack_top(cpu: usize) -> u64 {
+    let base = unsafe { core::ptr::addr_of!(AP_STACKS2[cpu % MAX_CPU][0]) as u64 };
+    (base + STACK_SIZE as u64) & !0xF
+}
+
+/// S3: save the FPU state of task `idx` (an AP switching it out).
+pub(crate) unsafe fn fpu_save_task(idx: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let p = (*areas.add(idx)).0.as_mut_ptr();
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xsave [{}]", in(reg) p, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxsave [{}]", in(reg) p, options(nostack, preserves_flags));
+    }
+    FPU_VALID[idx].store(true, Ordering::Release);
+}
+
+/// S3: load the FPU state of task `idx` (an AP switching it in).
+pub(crate) unsafe fn fpu_restore_task(idx: usize) {
+    let areas = core::ptr::addr_of_mut!(FPU_AREAS) as *mut FpuArea;
+    let src = if FPU_VALID[idx].load(Ordering::Acquire) {
+        (*areas.add(idx)).0.as_ptr()
+    } else {
+        core::ptr::addr_of!(FPU_TEMPLATE) as *const u8
+    };
+    if AVX_ENABLED.load(Ordering::Relaxed) {
+        core::arch::asm!("xrstor [{}]", in(reg) src, in("eax") 7u32, in("edx") 0u32, options(nostack, preserves_flags));
+    } else {
+        core::arch::asm!("fxrstor [{}]", in(reg) src, options(nostack, preserves_flags));
+    }
+}
+
+/// S3: may task `i` of the table leave for an AP now? A `Ready` ring-3 task
+/// whose saved frame is a user-mode frame at the top of its own kernel stack.
+fn ap_target(s: &Scheduler, i: usize) -> Option<usize> {
+    let t = &s.tasks[i];
+    if i == 0 || t.cr3 == 0 || t.kstack == 0 || t.rsp != t.kstack - (CONTEXT_WORDS as u64) * 8 {
+        return None;
+    }
+    let cs = unsafe { ((t.rsp + 16 * 8) as *const u64).read_volatile() };
+    crate::apuser::target(i, cs & 3 == 3, t.cr3)
+}
+
+/// S3: take back what the APs sent home (scheduler lock held).
+fn drain_locked(s: &mut Scheduler) {
+    if !crate::apuser::inbox_pending() {
+        return;
+    }
+    crate::apuser::drain_inbox(|i, r, f, tsc| {
+        s.tasks[i].rsp = r;
+        s.tasks[i].fs_base = f;
+        let c = vr_charge(tsc, s.tasks[i].nice);
+        s.tasks[i].vruntime = s.tasks[i].vruntime.wrapping_add(c);
+        place_woken(s, i);
+    });
+}
+
+/// S4: task `idx` is on an AP: bring it home before its state changes (kill,
+/// exit, a park, a reclaimed slot). Scheduler lock held; an AP never takes it.
+fn bring_home(s: &mut Scheduler, idx: usize) {
+    if idx < MAX_TASKS && !crate::apuser::on_bsp(idx) {
+        crate::apuser::evict_wait(idx);
+        drain_locked(s);
+    }
+}
+
+/// S4: while this lives, no task of address space `cr3` runs on an AP (fork
+/// copies it). Every task of it that is on an AP is brought home first.
+pub struct HoldMm(());
+impl HoldMm {
+    pub fn new(cr3: u64) -> Self {
+        let mut s = SCHED.lock();
+        if crate::apuser::hold_cr3(cr3) > 0 {
+            drain_locked(&mut s);
+        }
+        HoldMm(())
+    }
+}
+impl Drop for HoldMm {
+    fn drop(&mut self) {
+        crate::apuser::release_hold();
     }
 }
 
 /// Unblock task `idx` (FUTEX_WAKE on a specific task).
 pub fn unblock(idx: usize) {
+    {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
         woken(&s, idx);
     }
+    }
+    kick_after_wake();
 }
 
 /// Wake task `idx` from EITHER Blocked or Sleeping -> Ready. A timed futex waiter is
 /// parked as Sleeping(deadline) so it auto-wakes on timeout; an explicit FUTEX_WAKE
 /// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.
 pub fn unblock_any(idx: usize) {
+    {
     let mut s = SCHED.lock();
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
         woken(&s, idx);
     }
+    }
+    kick_after_wake();
 }
 
 /// [`unblock_any`] for interrupt context: never waits for the scheduler lock.
@@ -405,9 +706,11 @@ pub fn try_unblock_any(idx: usize) -> bool {
     let Some(mut s) = SCHED.try_lock() else { return false };
     if idx < s.count && matches!(s.tasks[idx].state, State::Blocked(c) if c != PARKED) || matches!(s.tasks[idx].state, State::Sleeping(_)) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
+        woken(&s, idx);
     }
+    drop(s);
+    kick_after_wake();
     true
 }
 
@@ -426,6 +729,7 @@ pub fn spawn_kernel(entry: extern "C" fn() -> !, nice: i8) -> Option<usize> {
     s.tasks[i].stack_bottom = task_stack_bottom(i);
     s.tasks[i].nice = nice;
     s.tasks[i].vruntime = s.min_vr;
+    crate::apuser::on_spawn(i, false);
     s.tasks[i].state = State::Ready;
     Some(i)
 }
@@ -448,7 +752,7 @@ pub fn idle_next_deadline(current: usize) -> Option<u64> {
             continue;
         }
         match s.tasks[i].state {
-            State::Ready => return None, // real work is runnable now
+            State::Ready if crate::apuser::on_bsp(i) => return None, // real work is runnable now
             State::Sleeping(w) => earliest = Some(earliest.map_or(w, |e| e.min(w))),
             State::Blocked(_) => any_blocked = true,
             _ => {}
@@ -472,10 +776,13 @@ pub fn wake(chan: u64, n: usize) -> usize {
         }
         if s.tasks[i].state == State::Blocked(chan) {
             s.tasks[i].state = State::Ready;
+            place_woken(&mut s, i);
             woken += 1;
-            WOKEN_AT[i].store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
+            self::woken(&s, i);
         }
     }
+    drop(s);
+    kick_after_wake();
     woken
 }
 
@@ -553,6 +860,7 @@ pub fn mark_current_dead() -> usize {
 /// Mark a specific task as terminated (e.g. `kill <pid>` from the shell).
 pub fn mark_dead(idx: usize) {
     let mut s = SCHED.lock();
+    bring_home(&mut s, idx); // S4: never mark a task dead that an AP still runs
     if idx < s.count {
         s.tasks[idx].state = State::Dead;
     }
@@ -807,9 +1115,74 @@ global_asm!(
     "iretq",
 );
 
+// S2: the reschedule IPI (IPI_RESCHED_VECTOR). Identical to `yield_switch`; its
+// Rust callee sends the EOI (a hardware interrupt) and switches like a tick that
+// does not count time: the woken task with the least vruntime runs now instead
+// of at the next tick.
+global_asm!(
+    ".global resched_switch",
+    "resched_switch:",
+    "cld",
+    "push rax", "push rbx", "push rcx", "push rdx", "push rsi", "push rdi", "push rbp",
+    "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+    "mov rdi, rsp",
+    "and rsp, -16",
+    "call resched_tick",
+    "mov rsp, rax",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+    "iretq",
+);
+
 extern "C" {
     fn timer_switch();
     fn yield_switch();
+    fn resched_switch();
+}
+
+/// Address of the reschedule-IPI stub (IPI_RESCHED_VECTOR in the IDT).
+pub fn resched_stub_addr() -> u64 {
+    resched_switch as usize as u64
+}
+
+/// Reschedule IPIs taken.
+pub static RESCHED_IPIS: AtomicU64 = AtomicU64::new(0);
+
+/// S8: windows in which a tick or a reschedule IPI must not switch tasks (a
+/// system call with IF=0 that waits for a disk completion with interrupts on),
+/// and a reschedule IPI that came in such a window.
+static NO_PREEMPT: AtomicU64 = AtomicU64::new(0);
+static RESCHED_DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// Guard of a no-preemption window (BSP only, interrupts off when made).
+pub struct NoPreempt(());
+impl NoPreempt {
+    pub fn new() -> Self {
+        NO_PREEMPT.fetch_add(1, Ordering::Relaxed);
+        NoPreempt(())
+    }
+}
+impl Drop for NoPreempt {
+    fn drop(&mut self) {
+        if NO_PREEMPT.fetch_sub(1, Ordering::Relaxed) == 1 && RESCHED_DEFERRED.swap(false, Ordering::Relaxed) {
+            resched_ipi();
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "sysv64" fn resched_tick(rsp: u64) -> u64 {
+    note_df(rsp);
+    crate::apic::eoi();
+    RESCHED_IPIS.fetch_add(1, Ordering::Relaxed);
+    schedule_core(rsp, false, false)
+}
+
+/// Ask the BSP to reschedule: a fixed IPI on IPI_RESCHED_VECTOR. From a system
+/// call (IF=0) it stays pending until `sysret`: the waker finishes its call and
+/// is preempted on its first user instruction (no yield inside the call).
+pub fn resched_ipi() {
+    crate::apic::send_ipi(crate::percpu::bsp_apic_id(), crate::interrupts::IPI_RESCHED_VECTOR);
 }
 
 pub fn stub_addr() -> u64 {
@@ -836,10 +1209,14 @@ pub fn any_other_ready() -> bool {
         None => return true, // contended: assume someone is runnable
     };
     let cur = s.current;
-    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready)
+    (0..s.count).any(|i| i != cur && s.tasks[i].state == State::Ready && crate::apuser::on_bsp(i))
 }
 
+#[track_caller]
 pub fn yield_now() {
+    if current_lockfree() == 0 {
+        note_t0_yield(core::panic::Location::caller());
+    }
     // SAFETY: YIELD_VECTOR is wired to `yield_switch` in the IDT (interrupts::init).
     // No options: the software interrupt pushes a frame (uses the stack) and the
     // context switch reads/writes scheduler memory; the switch preserves all GP
@@ -930,6 +1307,9 @@ static SCHED_LOG_CTR: AtomicU64 = AtomicU64::new(0);
 /// The desktop loop (task 0) left the CPU while it still had something to poll
 /// (a yield, or preempted at work), not halted in an idle machine.
 static T0_WANTS: AtomicBool = AtomicBool::new(false);
+/// The desktop loop yielded in this tick: no second pass before the next tick
+/// (unless the hosted window drew, DESK_KICK).
+static T0_YIELDED: AtomicBool = AtomicBool::new(false);
 /// The desktop loop is in its idle halt (set right before the hlt, cleared
 /// after it). A tick that finds it so was not work (see idle_tick).
 static T0_IDLE: AtomicBool = AtomicBool::new(false);
@@ -938,7 +1318,12 @@ static T0_IDLE: AtomicBool = AtomicBool::new(false);
 /// scheduler know that the time is idle, not work.
 pub fn desktop_idle_hlt() {
     T0_IDLE.store(true, Ordering::Relaxed);
+    T0_HLT_START.store(rdtsc(), Ordering::Relaxed);
     x86_64::instructions::hlt();
+    let st = T0_HLT_START.swap(0, Ordering::Relaxed);
+    if st != 0 {
+        T0_HLT_ACC.fetch_add(rdtsc().saturating_sub(st), Ordering::Relaxed);
+    }
     T0_IDLE.store(false, Ordering::Relaxed);
 }
 /// The tick in which the desktop loop was last given the CPU by the scheduler.
@@ -959,6 +1344,134 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+
+// -- S0 measurement (docs/design/SMP-SCHEDULER.md) --
+// Run time per task on the TSC (a short turn right after a tick is never seen by
+// the tick ledger), the ticks split by ring, switches, and where the desktop loop
+// gives the CPU away. All lock-free; read by `sched-stat` and `hogtest`.
+/// TSC cycles each task ran, charged at every switch away from it (task 0's
+/// idle halt not included).
+pub static RUN_TSC: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// TSC at which the running task's turn began (or was last charged).
+static EXEC_START: AtomicU64 = AtomicU64::new(0);
+/// The running task has an address space of its own (a ring-3 task).
+static CUR_USER: AtomicBool = AtomicBool::new(false);
+/// Ticks that found each task in ring 3, and in ring 0 (task 0's idle halt apart).
+pub static UTICKS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+pub static KTICKS: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+pub static IDLE_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Times each task was given the CPU.
+pub static SWITCHES_IN: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+/// TSC the desktop loop spent halted in all; the start of a halt in progress;
+/// halted time not yet taken off its run time.
+pub static T0_IDLE_TSC: AtomicU64 = AtomicU64::new(0);
+static T0_HLT_START: AtomicU64 = AtomicU64::new(0);
+static T0_HLT_ACC: AtomicU64 = AtomicU64::new(0);
+
+fn rdtsc() -> u64 {
+    // SAFETY: rdtsc has no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+/// Idle time of the desktop loop since the last charge, up to `now`.
+fn t0_idle_take(now: u64) -> u64 {
+    let mut idle = T0_HLT_ACC.swap(0, Ordering::Relaxed);
+    let st = T0_HLT_START.load(Ordering::Relaxed);
+    if st != 0 {
+        idle += now.saturating_sub(st);
+        T0_HLT_START.store(now, Ordering::Relaxed);
+    }
+    T0_IDLE_TSC.fetch_add(idle, Ordering::Relaxed);
+    idle
+}
+
+/// Run time of task `idx` so far, the running task's turn included.
+pub fn run_tsc_now(idx: usize) -> u64 {
+    let base = RUN_TSC[idx].load(Ordering::Relaxed);
+    if current_lockfree() == idx {
+        base + rdtsc().saturating_sub(EXEC_START.load(Ordering::Relaxed))
+    } else {
+        base
+    }
+}
+
+/// Bumped each time a slot gets a new task: `hogtest` tells the processes
+/// started in its window from the tasks that were there before.
+pub static SPAWN_GEN: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+
+/// Kernel time of ring-3 tasks on the TSC (system calls and demand faults). A
+/// system call runs with IF=0, so no tick ever samples it: the tick ledger
+/// cannot see this share. KSTART: when the task's current stretch in a system
+/// call began (0 = not in one, 1 = in one but switched away).
+pub static KTSC: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+static KSTART: [AtomicU64; MAX_TASKS] = [const { AtomicU64::new(0) }; MAX_TASKS];
+
+/// A system call of task `t` begins / ends (ring3::linux_dispatch).
+pub fn syscall_enter(t: usize) {
+    if t < MAX_TASKS {
+        KSTART[t].store(rdtsc().max(2), Ordering::Relaxed);
+    }
+}
+pub fn syscall_exit(t: usize) {
+    if t < MAX_TASKS {
+        let st = KSTART[t].swap(0, Ordering::Relaxed);
+        if st > 1 {
+            KTSC[t].fetch_add(rdtsc().saturating_sub(st), Ordering::Relaxed);
+        }
+    }
+}
+/// A demand fault of task `t` outside a system call took `cycles`.
+pub fn fault_time(t: usize, cycles: u64) {
+    if t < MAX_TASKS && KSTART[t].load(Ordering::Relaxed) == 0 {
+        KTSC[t].fetch_add(cycles, Ordering::Relaxed);
+    }
+}
+
+/// Is the running task a ring-3 task (lock-free, for the tick)?
+pub fn task_is_user(idx: usize) -> bool {
+    idx == current_lockfree() && CUR_USER.load(Ordering::Relaxed)
+}
+
+/// Where the desktop loop yielded (`#[track_caller]` of `yield_now`): the
+/// address of the `Location` and a count, 16 sites.
+static T0_YIELD_KEY: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+static T0_YIELD_N: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+fn note_t0_yield(loc: &'static core::panic::Location<'static>) {
+    let key = loc as *const _ as u64;
+    for i in 0..16 {
+        let k = T0_YIELD_KEY[i].load(Ordering::Relaxed);
+        if k == key || (k == 0 && T0_YIELD_KEY[i].compare_exchange(0, key, Ordering::Relaxed, Ordering::Relaxed).is_ok()) {
+            T0_YIELD_N[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+/// The yield sites of the desktop loop so far: (key, count).
+pub fn t0_yield_sites() -> alloc::vec::Vec<(u64, u64)> {
+    (0..16)
+        .map(|i| (T0_YIELD_KEY[i].load(Ordering::Relaxed), T0_YIELD_N[i].load(Ordering::Relaxed)))
+        .filter(|x| x.0 != 0)
+        .collect()
+}
+
+/// `file:line` of a yield site key.
+pub fn site_name(key: u64) -> alloc::string::String {
+    // SAFETY: keys are addresses of `&'static Location` stored by note_t0_yield.
+    let loc = unsafe { &*(key as *const core::panic::Location<'static>) };
+    alloc::format!("{}:{}", loc.file(), loc.line())
+}
+
+/// Stop a Ready task until [`start_parked`] (the scheduler tests' hogs). Not
+/// for the running task.
+pub fn park(idx: usize) {
+    let mut s = SCHED.lock();
+    bring_home(&mut s, idx);
+    if idx < s.count && idx != s.current && s.tasks[idx].state == State::Ready {
+        s.tasks[idx].state = State::Blocked(PARKED);
+    }
+}
 /// TSC at the timer interrupt that was taken last (BUG-182).
 pub fn last_tick_tsc() -> u64 {
     LAST_TICK_TSC.load(Ordering::Relaxed)
@@ -977,6 +1490,8 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // minutes while the timer itself was fine.
     let now_tsc = unsafe { core::arch::x86_64::_rdtsc() };
     let prev_tsc = LAST_TICK_TSC.swap(now_tsc, Ordering::Relaxed);
+    // S0: [if0-window], the cause of a late tick (steal, disk wait, faults, syscall).
+    crate::schedstat::on_tick(prev_tsc, now_tsc, rsp);
     let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed);
     let mut add = 1u64;
     if prev_tsc != 0 && per != 0 {
@@ -1037,10 +1552,19 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     unsafe {
         let rip = *((rsp + 120) as *const u64);
         let cs = *((rsp + 128) as *const u64);
+        let c = current_lockfree();
         if cs & 3 == 3 {
             crate::ring3::sample_user_rip(current(), rip);
+            if c < MAX_TASKS {
+                UTICKS[c].fetch_add(1, Ordering::Relaxed);
+            }
         } else {
             crate::ring3::sample_kernel_rip(rip);
+            if c == 0 && T0_IDLE.load(Ordering::Relaxed) {
+                IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
+            } else if c < MAX_TASKS {
+                KTICKS[c].fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     // BUG-007: the timer must NEVER block on SCHED. Task-context code (the desktop loop,
@@ -1049,7 +1573,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
     // the lock holder, the very task we just preempted, can never run to release it
     // (total silence, no fault). So TRY the lock and, if it's held, skip this preemption
     // tick: the holder frees it within microseconds and the next tick schedules normally.
-    schedule_core(rsp, false)
+    schedule_core(rsp, false, true)
 }
 
 /// Cooperative YIELD: a task that just blocked/slept itself calls this to switch
@@ -1060,7 +1584,7 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
 #[no_mangle]
 pub extern "sysv64" fn yield_tick(rsp: u64) -> u64 {
     note_df(rsp);
-    schedule_core(rsp, true)
+    schedule_core(rsp, true, false)
 }
 
 extern "C" {
@@ -1098,7 +1622,16 @@ pub fn in_kernel_image(a: u64) -> bool {
 /// The shared scheduling core: save the outgoing rsp, pick the next runnable task
 /// (mini-CFS) and return its rsp. Used by both the timer tick and a cooperative
 /// yield. Does NO EOI — the caller owns interrupt acknowledgement.
-fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
+fn schedule_core(rsp: u64, via_yield: bool, tick: bool) -> u64 {
+    // S8: a system call that waits for the disk with interrupts on keeps the CPU
+    // (the timer still ran its prelude). A reschedule asked meanwhile is sent
+    // again when the window ends.
+    if !via_yield && NO_PREEMPT.load(Ordering::Relaxed) != 0 {
+        if !tick {
+            RESCHED_DEFERRED.store(true, Ordering::Relaxed);
+        }
+        return rsp;
+    }
     let mut s = match SCHED.try_lock() {
         Some(g) => g,
         None => {
@@ -1122,6 +1655,19 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         sched_state_corrupt(cur, count, pc, rsp);
     }
     s.tasks[cur].rsp = rsp;
+    // S0: charge the outgoing task's turn on the TSC (task 0's idle halt apart).
+    let now_tsc = rdtsc();
+    let mut ran_tsc = now_tsc.saturating_sub(EXEC_START.swap(now_tsc, Ordering::Relaxed));
+    if cur == 0 {
+        ran_tsc = ran_tsc.saturating_sub(t0_idle_take(now_tsc));
+    }
+    RUN_TSC[cur].fetch_add(ran_tsc, Ordering::Relaxed);
+    // Kernel time: a task switched away inside a system call stops the clock.
+    let ks = KSTART[cur].load(Ordering::Relaxed);
+    if ks > 1 {
+        KTSC[cur].fetch_add(now_tsc.saturating_sub(ks), Ordering::Relaxed);
+        KSTART[cur].store(1, Ordering::Relaxed);
+    }
     // Save the OUTGOING task's in-flight syscall state (it may be mid-syscall, having
     // yielded from futex/epoll) so a concurrent thread's syscall cannot clobber its
     // user-return state; restored when this task is scheduled again.
@@ -1140,14 +1686,16 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     // of the incoming one — this way each preemptive musl process keeps its own TLS.
     let mut fs = Msr::new(IA32_FS_BASE);
     s.tasks[cur].fs_base = unsafe { fs.read() };
+    // S3: tasks the APs sent home (a system call, a fault, an eviction): their
+    // saved user frame and TLS come back into the table, their AP time is charged.
+    drain_locked(&mut s);
     // 1. Wake sleepers: Sleeping -> Ready as soon as their wake time is reached.
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     for i in 0..s.count {
         if let State::Sleeping(w) = s.tasks[i].state {
             if now >= w {
                 s.tasks[i].state = State::Ready;
-                let floor = s.min_vr.saturating_sub(64);
-                if s.tasks[i].vruntime < floor { s.tasks[i].vruntime = floor; }
+                place_woken(&mut s, i);
             }
         }
     }
@@ -1170,20 +1718,28 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     // - BUG-136: the read touched whatever the frame said (a frame of another
     //   layout, a user rip), with SCHED held; a page fault there asks the
     //   scheduler who runs and waits for its own lock.
-    let idle_tick = cur == 0 && !via_yield && T0_IDLE.load(Ordering::Relaxed);
-    if cur == 0 && via_yield {
-        // The desktop loop hands the CPU on after one pass of polling: that is
-        // not a turn's worth of work. It stays at the pack (never behind it:
-        // tasks it starts inherit its vruntime).
-        if s.tasks[0].vruntime < s.min_vr { s.tasks[0].vruntime = s.min_vr; }
-    } else if s.tasks[cur].state == State::Ready && !idle_tick {
-        let step = vstep(s.tasks[cur].nice);
-        s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(step);
-    }
+    // S1: every turn is charged by its length on the TSC (`ran_tsc` above, task
+    // 0's idle halt already taken off), weighted on nice, whether the task stays
+    // Ready, blocks, sleeps or yields: a thread that yields after 50 us pays 50 us,
+    // not a turn. The desktop loop never banks idle time: when it leaves the CPU
+    // it is placed like a task that waited (at most half a slice ahead).
+    // BUG-252: a driver is charged at nice -15 within its budget, at
+    // DRIVER_OVER_NICE past it (the turn that crosses it counts as within).
+    let cn = charge_nice(&s, cur);
+    drv_account(&mut s, cur, ran_tsc);
+    let charge = vr_charge(ran_tsc, cn);
+    s.tasks[cur].vruntime = s.tasks[cur].vruntime.wrapping_add(charge);
     if cur == 0 {
-        T0_WANTS.store(!idle_tick, Ordering::Relaxed);
+        place_woken(&mut s, 0);
+        if via_yield {
+            T0_YIELDED.store(true, Ordering::Relaxed);
+        }
     }
-    if !via_yield {
+    if tick {
+        // A new tick: the desktop loop may have a pass again.
+        T0_YIELDED.store(false, Ordering::Relaxed);
+    }
+    if tick {
         deskwatch::tick_sample(cur, rsp, s.tasks[0].state);
     }
     // 3. Mini-CFS: pick the runnable task with the SMALLEST vruntime. Start the scan at
@@ -1205,39 +1761,53 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     let mut best = cur;
     let mut bestv = u64::MAX;
     let mut found = false;
-    let t0_had_turn = T0_TURN_TICK.load(Ordering::Relaxed) == now;
-    if !via_yield && cur != 0 && s.tasks[0].state == State::Ready && T0_WANTS.load(Ordering::Relaxed) {
-        best = 0;
-        found = true;
-        T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
-    } else {
-        for k in 1..=s.count {
-            let i = (cur + k) % s.count;
-            if i == 0 && ((cur != 0 && via_yield && t0_had_turn) || (cur == 0 && via_yield)) {
+    let t0_out = T0_YIELDED.load(Ordering::Relaxed);
+    // S3: Ready tasks in user context that go to an AP instead (offloaded at the
+    // end of this switch, after the outgoing task's FPU state is saved).
+    let ap_mode = crate::apuser::mode() != crate::apuser::OFF;
+    let mut leave = [(0u16, 0u8); 16];
+    let mut nleave = 0usize;
+    for k in 1..=s.count {
+        let i = (cur + k) % s.count;
+        if i == 0 && t0_out {
+            continue;
+        }
+        if s.tasks[i].state == State::Ready && !crate::apuser::on_bsp(i) {
+            continue; // an AP owns it
+        }
+        if ap_mode && nleave < leave.len() && s.tasks[i].state == State::Ready {
+            if let Some(c) = ap_target(&s, i) {
+                leave[nleave] = (i as u16, c as u8);
+                nleave += 1;
                 continue;
             }
-            if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
-                bestv = s.tasks[i].vruntime;
-                best = i;
-                found = true;
-            }
         }
-        if found {
-            s.min_vr = bestv;
+        if s.tasks[i].state == State::Ready && s.tasks[i].vruntime < bestv {
+            bestv = s.tasks[i].vruntime;
+            best = i;
+            found = true;
         }
+    }
+    if found && bestv > s.min_vr {
+        s.min_vr = bestv;
     }
     // The hosted window drew (want_desktop): at the next yield of any task the
     // desktop loop puts it on the screen, not after the next tick.
-    if via_yield && cur != 0 && s.tasks[0].state == State::Ready && DESK_KICK.swap(false, Ordering::Relaxed) {
+    if !tick && cur != 0 && s.tasks[0].state == State::Ready && DESK_KICK.swap(false, Ordering::Relaxed) {
         best = 0;
         found = true;
     }
     if best == 0 && cur != 0 {
         T0_TURN_TICK.store(now, Ordering::Relaxed);
+        if tick {
+            T0_TICK_TURNS.fetch_add(1, Ordering::Relaxed);
+        }
     }
     if !found {
-        best = if s.tasks[cur].state == State::Ready { cur } else { 0 };
+        let cur_leaves = leave[..nleave].iter().any(|&(t, _)| t as usize == cur);
+        best = if s.tasks[cur].state == State::Ready && !cur_leaves && crate::apuser::on_bsp(cur) { cur } else { 0 };
     }
+    crate::apuser::picked_on_bsp(best);
     if best != cur {
         ran(best);
     }
@@ -1265,6 +1835,16 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
     if best != cur {
         unsafe { fpu_switch(cur, best) };
     }
+    if KSTART[best].load(Ordering::Relaxed) == 1 {
+        KSTART[best].store(now_tsc.max(2), Ordering::Relaxed);
+    }
+    if best != cur {
+        SWITCHES_IN[best].fetch_add(1, Ordering::Relaxed);
+        if best == 0 && T0_HLT_START.load(Ordering::Relaxed) != 0 {
+            T0_HLT_START.store(now_tsc, Ordering::Relaxed);
+        }
+    }
+    CUR_USER.store(s.tasks[best].cr3 != 0, Ordering::Relaxed);
     s.current = best;
     CURRENT_MIRROR.store(best as u64, Ordering::Relaxed);
     let next = s.current;
@@ -1293,6 +1873,16 @@ fn schedule_core(rsp: u64, via_yield: bool) -> u64 {
         s.tasks[next].sc_saved_regs,
         ks,
     );
+    // S3: hand the leaving tasks to their APs. The outgoing task's FPU state was
+    // saved by fpu_switch above (it is not `next`: it was no pick candidate).
+    for &(t, c) in &leave[..nleave] {
+        let t = t as usize;
+        if t == next {
+            continue;
+        }
+        let tk = &s.tasks[t];
+        crate::apuser::offload(t, c as usize, tk.rsp, tk.fs_base, tk.cr3, tk.kstack);
+    }
     s.tasks[next].rsp
 }
 
@@ -1330,6 +1920,29 @@ fn init_stack(index: usize, entry: extern "C" fn() -> !) -> u64 {
     ctx
 }
 
+/// The top of the scheduler-task kernel stack that contains `addr`, or `None` when `addr`
+/// is on no such stack (boot stack, AP stacks, IST stacks, a ring-3 address). Lock-free:
+/// the NMI probe calls it (BUG-202) and the scheduler lock may be what is wedged.
+pub fn task_stack_top_containing(addr: u64) -> Option<u64> {
+    for i in 0..MAX_TASKS {
+        let g = TASK_GUARDED_TOP[i].load(Ordering::Acquire);
+        if g != 0 {
+            let top = g & !0xF;
+            if addr >= top - STACK_SIZE as u64 && addr <= top {
+                return Some(top);
+            }
+        }
+    }
+    // SAFETY: only the address of the static is taken.
+    let base = unsafe { core::ptr::addr_of!(STACKS) as u64 };
+    let end = base + (MAX_TASKS * STACK_SIZE) as u64;
+    if addr >= base && addr < end {
+        let slot = (addr - base) / STACK_SIZE as u64;
+        return Some((base + (slot + 1) * STACK_SIZE as u64) & !0xF);
+    }
+    None
+}
+
 /// The stack bottom (canary location / lowest address) of task slot `index` —
 /// guarded base if set, otherwise the BSS `STACKS`. Must match `init_stack`.
 fn task_stack_bottom(index: usize) -> u64 {
@@ -1346,6 +1959,7 @@ pub fn init() {
     // Where the table lives, for the census that takes no lock (BUG-157).
     SCHED_PEEK.store(&*SCHED.lock() as *const Scheduler as u64, Ordering::Relaxed);
     let mut s = SCHED.lock();
+    s.tasks[0].nice = DESKTOP_NICE;
     // The kernel demo tasks (S2 priority a/b/c, the S2 sleeper, the G1 guarded-stack
     // overflow) are dev self-tests: they prove the mini-CFS priority ordering and
     // kernel-stack-overflow recovery. task_a/b/c busy-spin (until they park ~2.5 s in)
@@ -1500,6 +2114,11 @@ fn alloc_slot(s: &mut Scheduler) -> Option<usize> {
     // The new occupant starts in the launcher's fd space; a spawner that gives
     // it another one does so before the task can run (ring3/fdspace.rs).
     crate::ring3::fd_space_slot_reset(i);
+    SPAWN_GEN[i].fetch_add(1, Ordering::Relaxed);
+    KSTART[i].store(0, Ordering::Relaxed);
+    if let Some(k) = drv_slot(i) {
+        DRV_TASK[k].store(0, Ordering::Relaxed);
+    }
     Some(i)
 }
 
@@ -1538,6 +2157,7 @@ fn alloc_slot_raw(s: &mut Scheduler) -> Option<usize> {
 /// Dead and not current. Idempotent (won't double-list a slot).
 pub fn reclaim_task(idx: usize) {
     let mut s = SCHED.lock();
+    bring_home(&mut s, idx);
     if idx < s.count && idx != s.current && s.tasks[idx].state == State::Dead && !s.free_slots.contains(&idx) {
         s.free_slots.push(idx);
         // A reused slot must start with a clean FPU/SSE state, not the dead task's:
@@ -1568,8 +2188,7 @@ pub fn start_parked(idx: usize) {
     let mut s = SCHED.lock();
     if idx < s.count && s.tasks[idx].state == State::Blocked(PARKED) {
         s.tasks[idx].state = State::Ready;
-        let floor = s.min_vr.saturating_sub(64);
-        if s.tasks[idx].vruntime < floor { s.tasks[idx].vruntime = floor; }
+        place_woken(&mut s, idx);
     }
 }
 
@@ -1607,6 +2226,7 @@ fn spawn_user_in(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: u64
     // (see the `else boot` fallback in `switch`) would run its ring-3 code on the boot
     // PML4, where the user arena is supervisor-only -> fault/hang. Mirrors spawn_thread.
     s.tasks[idx].cr3 = cr3;
+    crate::apuser::on_spawn(idx, spawn_migratable());
     s.tasks[idx].state = initial;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr); // at the pack, never behind it
     s.tasks[idx].nice = 0;
@@ -1661,10 +2281,31 @@ pub fn spawn_thread(rip: u64, rsp: u64, cs: u64, ss: u64, kstack_top: u64, cr3: 
     s.tasks[idx].kstack = kstack_top;
     s.tasks[idx].cr3 = cr3; // SHARED address space with the process
     s.tasks[idx].fs_base = fs_base; // own TLS
+    crate::apuser::on_spawn(idx, spawn_migratable());
     s.tasks[idx].state = State::Ready;
     s.tasks[idx].vruntime = s.tasks[s.current].vruntime.max(s.min_vr);
     s.tasks[idx].nice = 0;
     idx
+}
+
+/// S3: tasks spawned while this is false never leave the BSP (the musl and
+/// EuroOS background paths, drivers, the demo counters). The glibc launchers
+/// and clone() set it around their spawn (`MigratableSpawn`).
+static SPAWN_MIGRATABLE: AtomicBool = AtomicBool::new(false);
+fn spawn_migratable() -> bool {
+    SPAWN_MIGRATABLE.load(Ordering::Relaxed)
+}
+/// Guard: tasks spawned while it lives are glibc tasks that may run on an AP.
+pub struct MigratableSpawn(bool);
+impl MigratableSpawn {
+    pub fn new() -> Self {
+        MigratableSpawn(SPAWN_MIGRATABLE.swap(true, Ordering::Relaxed))
+    }
+}
+impl Drop for MigratableSpawn {
+    fn drop(&mut self) {
+        SPAWN_MIGRATABLE.store(self.0, Ordering::Relaxed);
+    }
 }
 
 /// S6 self-test: overwrite the stack canary of a task (simulates an overflow)
@@ -1856,6 +2497,9 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
     note_df(rsp);
     crate::apic::eoi();
     let cpu = this_cpu();
+    if AP_PARKED[cpu].load(Ordering::Acquire) {
+        return crate::apuser::ap_tick(cpu, rsp);
+    }
     let mut s = AP_SCHED[cpu].lock();
     if s.count == 0 {
         return rsp;
@@ -1885,6 +2529,12 @@ pub extern "sysv64" fn ap_schedule_tick(rsp: u64) -> u64 {
 /// J1: park the AP demo workers (see `ap_schedule_tick`).
 static AP_PARK: AtomicBool = AtomicBool::new(false);
 static AP_PARKED: [AtomicBool; MAX_CPU] = [const { AtomicBool::new(false) }; MAX_CPU];
+
+/// True once AP `cpu` dropped its demo workers and runs only its idle/kwork
+/// loop (and, with smpuser, ring-3 tasks through `apuser::ap_tick`).
+pub fn ap_parked(cpu: usize) -> bool {
+    AP_PARKED[cpu % MAX_CPU].load(Ordering::Acquire)
+}
 
 /// Park the demo workers on every listed AP; returns how many cores confirmed
 /// (waits up to ~0.5 s). Called by `smp::init` after its counters were reported.

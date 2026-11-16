@@ -1,0 +1,55 @@
+[gui-smoke] ok   boot: desktop after 5 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 15.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4), 18 colours in the content area
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[chrome-smoke]   omnibox selection seen 0.6 s after Ctrl+L (178 px run)
+[gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.3 s, load finished 3.6 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 186 ms; fds: 7 processes, 365 descriptors, 328 objects, 210/4096 file objects; RAM files: 102 files, 1 MiB of bytes, 0 MiB of holes; kernel st
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.8 s, load finished 8.4 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 172 ms; fds: 10 processes, 474 descriptors, 420 objects, 257/4096 file objects; RAM files: 103 files, 1 MiB of byte
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.3 s, load finished 24.4 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 233 ms; fds: 11 processes, 540 descriptors, 472 objects, 289/4096 file objects; RAM files: 104 files, 1 MiB of by
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tout refuser', False), ('alle ablehnen', False), ('reject all', False), (
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.2 s, load finished 15.8 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 227 ms; fds: 13 processes, 693 descriptors, 600 objects, 374/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; 
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.8 s, load finished 4.5 s later; content 2288 colours, commonest 36%; desktop loop: slowest console answer 115 ms; fds: 11 processes, 621 descriptors, 537 objects, 338/4096 file objects; RAM files: 109 files, 1 MiB of bytes
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 3.1 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 169 ms; fds: 14 processes, 763 descriptors, 6
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (498 px run)
+[gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 3.8 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 108 ms; fds: 12 processes, 688 descriptors, 589 objects, 373/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; kernel s
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 5.1 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 205 ms; fds: 12 processes, 684 descriptors, 588 objects, 371/4096 file objects; RAM files: 109 files, 1 MiB of byte
+[chrome-smoke]   omnibox selection seen 0.1 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 20.7 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 182 ms; fds: 12 processes, 689 descriptors, 590 objects, 374/4096 file objects; RAM files: 109 files, 1 MiB of by
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.6 s, load finished 13.3 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 222 ms; fds: 13 processes, 753 descriptors, 644 objects, 406/4096 file objects; kernel stopwatch: longest gap between desktop passes 1
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.0 s, load finished 4.6 s later; content 2288 colours, commonest 36%; desktop loop: slowest console answer 249 ms; fds: 12 processes, 684 descriptors, 582 objects, 374/4096 file objects; RAM files: 109 files, 1 MiB of bytes
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 3.4 s later; content 52 colours, commonest 55%; desktop loop: slowest console answer 42 ms; fds: 15 processes, 778 descriptors, 670
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (498 px run)
+[gui-smoke] ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.1 s, load finished 0.0 s later; content 1389 colours, commonest 29%; desktop loop: slowest console answer 220 ms; fds: 12 processes, 685 descriptors, 586 objects, 371/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; kernel sto
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.0 s later; content 593 colours, commonest 78%; desktop loop: slowest console answer 202 ms; fds: 12 processes, 680 descriptors, 584 objects, 368/4096 file objects; RAM files: 109 files, 1 MiB of byte
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.9 s, load finished 22.3 s later; content 479 colours, commonest 90%; desktop loop: slowest console answer 222 ms; fds: 12 processes, 686 descriptors, 587 objects, 372/4096 file objects; RAM files: 109 files, 1 MiB of by
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.5 s, load finished 15.8 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 247 ms; fds: 13 processes, 752 descriptors, 643 objects, 408/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; 
+[chrome-smoke]   omnibox selection seen 0.3 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.0 s, load finished 4.0 s later; content 2288 colours, commonest 36%; desktop loop: slowest console answer 246 ms; fds: 13 processes, 709 descriptors, 604 objects, 385/4096 file objects; kernel stopwatch: longest gap betwee
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2.8 s later; content 52 colours, commonest 55%; desktop loop: slowest console answer 59 ms; fds: 16 processes, 816 descriptors, 705
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /srv/euroos/d2-runs/runs/sites-b8

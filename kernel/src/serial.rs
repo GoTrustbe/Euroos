@@ -35,11 +35,16 @@ struct Uart {
 /// page loaded. Its lines now go into this queue (memory only) and the task
 /// `tx_task` sends them, one load at a time, with interrupts on in between.
 ///
-/// Only task 0 defers. Everything else prints as before, so the order of the
-/// lines of one task is kept, and the lines of the desktop loop may come a
-/// moment later than those of other tasks. A fault, a panic, the NMI probe and
-/// a shutdown call `emergency()`: the queue is sent at once and nothing is
-/// deferred from then on.
+/// Once the desktop loop runs, every print defers (BUG-251), not only task 0's:
+/// a direct print polled the line status with interrupts off until the
+/// transmitter took each load, and while the host's side of the port did not
+/// drain (a screendump, a slow reader of the serial socket) a census line of
+/// another task, or a `[tick-late]` line of the timer interrupt, held the CPU
+/// for 50 ms to seconds. The queue is one FIFO, so the order of all lines is
+/// kept. A fault, a panic, the NMI probe and a shutdown call `emergency()`: the
+/// queue is sent at once and nothing is deferred from then on. A print nested
+/// in another print on the same CPU (a fault inside a print) still writes
+/// past the lock, to the port.
 ///
 /// The queue is only touched with the UART lock held.
 const TXQ_CAP: usize = 256 * 1024;
@@ -67,6 +72,19 @@ static TX_FULL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::n
 /// line of the desktop loop reached the port.
 static TX_BUSY_SINCE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static TX_BUSY_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// BUG-251: the sender found the transmitter busy (it went to sleep instead of
+/// polling with interrupts off), and the longest load with interrupts off (TSC).
+static TX_BUSY_SKIPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_LOAD_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// (times the sender found the transmitter busy and slept, longest load with
+/// interrupts off in microseconds since the last call).
+pub fn take_tx_stats() -> (u64, u64) {
+    let c = TX_LOAD_MAX.swap(0, Ordering::Relaxed);
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    (TX_BUSY_SKIPS.load(Ordering::Relaxed), c * 10_000 / per)
+}
 
 /// The longest time (ms) the queue was not empty since the last call.
 pub fn take_queue_delay_ms() -> u64 {
@@ -106,7 +124,7 @@ pub fn kick() {
     let mut sent = 0usize;
     while sent < 256 && TX_PENDING.load(Ordering::Relaxed) > 0 {
         let n = drain_load();
-        if n == 0 {
+        if n == 0 || n == TX_BUSY {
             break;
         }
         sent += n;
@@ -127,8 +145,13 @@ pub fn emergency() {
         if PRINTING_CPU.load(Ordering::Acquire) == crate::apic::lapic_id().wrapping_add(1) {
             return; // inside a print of this cpu: the queue is in use below us
         }
-        if let Some(mut u) = UART.try_lock() {
-            u.finish_queue(true);
+        // Another cpu may be appending a line right now: give it a bounded moment instead of losing the queue.
+        for _ in 0..200_000 {
+            if let Some(mut u) = UART.try_lock() {
+                u.finish_queue(true);
+                break;
+            }
+            core::hint::spin_loop();
         }
     });
 }
@@ -141,22 +164,75 @@ pub fn resume() {
     EMERGENCY.store(false, Ordering::Relaxed);
 }
 
+/// `drain_load`: the transmitter has not taken the last load yet.
+const TX_BUSY: usize = usize::MAX;
+
 /// Send one transmitter-load from the queue. Returns the bytes sent (0: the
-/// queue is empty). Interrupts are off only for this one load.
+/// queue is empty, `TX_BUSY`: the transmitter is still busy). Interrupts are
+/// off only for this one load, and it never waits for the transmitter: one
+/// status read, then one string output of at most a FIFO's worth (BUG-251).
+/// It used to poll the line status with interrupts off until the transmitter
+/// was empty. Under a hypervisor each poll is an exit that takes the device
+/// lock of the host, and while the host's side of the port does not drain (a
+/// screendump, a slow reader of the serial socket) that loop held the CPU with
+/// interrupts off for 50 ms to seconds and kept the host's own device thread
+/// from the lock it needed to drain the port.
+///
+/// The port accesses happen outside the UART lock: the lock only guards the
+/// queue in memory, so a print (which only appends to the queue) never waits
+/// for a port access that the host is slow to answer. `TX_PORT` keeps the
+/// senders (this function on any cpu) from interleaving their loads.
 fn drain_load() -> usize {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let Some(mut u) = UART.try_lock() else { return 1 };
-        u.send_from_queue(14)
+        if TX_PENDING.load(Ordering::Relaxed) == 0 {
+            return 0;
+        }
+        if TX_PORT.swap(true, Ordering::Acquire) {
+            return 1; // another sender is at the port
+        }
+        let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+        // SAFETY: a read of the line status register.
+        let n = if unsafe { Port::<u8>::new(COM1 + 5).read() } & 0x20 == 0 {
+            TX_BUSY_SKIPS.fetch_add(1, Ordering::Relaxed);
+            TX_BUSY
+        } else {
+            let mut out = [0u8; 16];
+            let taken = match UART.try_lock() {
+                Some(mut u) => u.take_load(&mut out),
+                None => Err(1), // a print is appending: next time
+            };
+            match taken {
+                Ok((o, n)) => {
+                    Uart::burst_out(&out[..o]);
+                    n
+                }
+                Err(n) => n,
+            }
+        };
+        TX_PORT.store(false, Ordering::Release);
+        let d = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(t0);
+        TX_LOAD_MAX.fetch_max(d, Ordering::Relaxed);
+        n
     })
 }
 
+/// A sender is at the port outside the UART lock (`drain_load`).
+static TX_PORT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// The sender of the deferred output. Sleeps two ticks when there is nothing
-/// (and is woken earlier by `kick`).
+/// (and is woken earlier by `kick`), one tick when the transmitter is busy.
 extern "C" fn tx_task() -> ! {
     loop {
-        if drain_load() == 0 {
-            crate::sched::sleep_ticks(2);
-            crate::sched::yield_now();
+        match drain_load() {
+            0 => {
+                crate::sched::sleep_ticks(2);
+                crate::sched::yield_now();
+            }
+            TX_BUSY => {
+                crate::sched::sleep_ticks(1);
+                crate::sched::yield_now();
+            }
+            _ => {}
         }
     }
 }
@@ -371,6 +447,75 @@ impl Uart {
         n
     }
 
+    /// Take one load off the queue into `out`: `Ok((bytes in out, queued bytes
+    /// taken))`, or `Err(n)` with what `drain_load` returns (0: empty; without a
+    /// FIFO the byte was sent here, as before). The caller found the
+    /// transmitter empty and holds the UART lock; it sends `out` after it let
+    /// the lock go.
+    fn take_load(&mut self, out: &mut [u8; 16]) -> Result<(usize, usize), usize> {
+        // SAFETY: UART lock held (we are a method of the locked Uart).
+        let q = unsafe { txq() };
+        if q.len == 0 {
+            return Err(0);
+        }
+        let room = TX_BURST.load(Ordering::Relaxed).min(16);
+        if room < 2 {
+            // No FIFO (a load is one byte): one byte at a time, as before.
+            return Err(self.send_from_queue(1));
+        }
+        let mut o = 0;
+        let mut n = 0;
+        while q.len > 0 {
+            let b = q.buf[q.head];
+            let need = if b == b'\n' { 2 } else { 1 };
+            if o + need > room {
+                break;
+            }
+            if b == b'\n' {
+                out[o] = b'\r';
+                out[o + 1] = b'\n';
+                o += 2;
+            } else {
+                out[o] = b;
+                o += 1;
+            }
+            q.head = (q.head + 1) % TXQ_CAP;
+            q.len -= 1;
+            n += 1;
+            if b == b'\n' {
+                break;
+            }
+        }
+        if n == 0 {
+            return Err(TX_BUSY);
+        }
+        q.midline = out[o - 1] != b'\n';
+        TX_PENDING.store(q.len, Ordering::Relaxed);
+        if q.len == 0 {
+            let since = TX_BUSY_SINCE.swap(0, Ordering::Relaxed);
+            if since != 0 {
+                let d = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(since);
+                TX_BUSY_MAX.fetch_max(d, Ordering::Relaxed);
+            }
+        }
+        Ok((o, n))
+    }
+
+    /// One string output of `bytes` (at most a transmitter-load) to the data
+    /// register, without looking at the line status (the caller did).
+    fn burst_out(bytes: &[u8]) {
+        // SAFETY: COM1 data port; `bytes` is a valid buffer of that length.
+        unsafe {
+            core::arch::asm!(
+                "rep outsb",
+                in("dx") COM1,
+                inout("rsi") bytes.as_ptr() => _,
+                inout("rcx") bytes.len() => _,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+    }
+
     /// Send the whole queue (`all`), or only the rest of a line that was sent
     /// in part, so that a direct print does not land in the middle of it.
     fn finish_queue(&mut self, all: bool) {
@@ -508,11 +653,11 @@ pub fn _print(args: fmt::Arguments) {
         // takes SCHED (run 39 wedged in exactly that nested print).
         let task = crate::sched::current_lockfree();
         PRINTING_TASK.store(task, Ordering::Relaxed);
-        // The desktop loop's lines go into the queue (BUG-129); every other
-        // print goes to the port, after the rest of a queued line that was
-        // sent in part, or after the whole queue in an emergency.
+        // Every print goes into the queue once the desktop loop defers (BUG-129,
+        // BUG-251); before that, and in an emergency, a print goes to the port,
+        // after the whole queue in an emergency.
         let emergency = EMERGENCY.load(Ordering::Relaxed);
-        let defer = task == 0 && !emergency && DEFER.load(Ordering::Relaxed);
+        let defer = !emergency && DEFER.load(Ordering::Relaxed);
         if !defer {
             uart.finish_queue(emergency);
         }

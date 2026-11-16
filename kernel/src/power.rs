@@ -42,11 +42,15 @@ pub fn s5_from_aml() -> bool {
 /// PM1a control register from the FADT; SLP_TYP comes from the AML `\_S5` (or 0 on QEMU).
 /// With fallbacks to the known QEMU ports. Never returns.
 pub fn shutdown() -> ! {
+    // BUG-270: since BUG-251 the prints wait in a queue for the sender task; the machine is off before
+    // that gets a turn. Send what waits now and print synchronously from here on.
+    crate::serial::emergency();
     crate::rootblk::cache_flush(); // write out the dirty disk cache before poweroff
     crate::virtio_blk::flush(); // + force the disk's own cache to the medium (durable)
     let s5 = s5_pm1a_value();
     serial_println!("[power] shutting down system (ACPI S5, PM1a={s5:#06x} from \\_S5-AML)...");
     let port = crate::acpi::fadt().map(|f| f.pm1a_cnt).filter(|&p| p != 0).unwrap_or(0x604);
+    crate::serial::emergency(); // the last line above (and the flush prints) must be out before PM1a is written
     unsafe {
         // SLP_EN (bit13) | SLP_TYPa<<10, with SLP_TYPa from the AML-evaluated \_S5.
         Port::<u16>::new(port).write(s5);
@@ -116,9 +120,11 @@ pub fn sci_is_power_button() -> bool {
 /// Restart the system. Uses the FADT reset register if supported,
 /// otherwise the PCI reset port 0xCF9 and finally the keyboard controller (0xFE).
 pub fn reboot() -> ! {
+    crate::serial::emergency(); // BUG-270: drain the deferred serial queue before the reset
     crate::rootblk::cache_flush(); // write out the dirty disk cache before reboot
     crate::virtio_blk::flush(); // + force the disk's own cache to the medium (durable)
     serial_println!("[power] restarting system...");
+    crate::serial::emergency(); // the line above must be out before any reset register is written
     if let Some(f) = crate::acpi::fadt() {
         if f.reset_supported && f.reset_is_io && f.reset_addr != 0 {
             unsafe { Port::<u8>::new(f.reset_addr as u16).write(f.reset_val) };

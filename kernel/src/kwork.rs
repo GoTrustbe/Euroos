@@ -49,6 +49,17 @@ pub static JOBS_STOLEN: [AtomicU64; MAX_CPU] = [const { AtomicU64::new(0) }; MAX
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
 
 /// The APs that can take jobs right now (core indexes, BSP excluded).
+/// S3: AP `cpu` runs no job and has none queued (its idle context may give
+/// the core to a user task).
+pub fn ap_quiet(cpu: usize) -> bool {
+    !BUSY[cpu].load(Ordering::Acquire) && PENDING[cpu].load(Ordering::Acquire) == 0
+}
+
+/// S3: AP `cpu` has a job queued (its user task makes room for it).
+pub fn ap_pending(cpu: usize) -> bool {
+    PENDING[cpu].load(Ordering::Acquire) != 0
+}
+
 pub fn online_aps() -> alloc::vec::Vec<usize> {
     (0..MAX_CPU).filter(|&c| ONLINE[c].load(Ordering::Acquire)).collect()
 }
@@ -72,6 +83,16 @@ pub fn submit(cpu: usize, job: Job) -> Result<(), Job> {
     PENDING[cpu].fetch_add(1, Ordering::Release);
     // Wake the core if it sleeps in hlt (the ping vector only counts and EOIs).
     crate::apic::send_ipi(cpu as u8, crate::interrupts::IPI_PING_VECTOR);
+    // BUG-271: an idle AP halts without its tick (S6), so it no longer looks for
+    // work to steal on its own. A job queued behind a running one wakes one idle
+    // AP as well, which steals it (`steal`).
+    if BUSY[cpu].load(Ordering::Acquire) {
+        if let Some(t) = (1..MAX_CPU).map(|k| (cpu + k) % MAX_CPU).find(|&v| {
+            ONLINE[v].load(Ordering::Acquire) && !BUSY[v].load(Ordering::Acquire) && PENDING[v].load(Ordering::Acquire) == 0
+        }) {
+            crate::apic::send_ipi(t as u8, crate::interrupts::IPI_PING_VECTOR);
+        }
+    }
     Ok(())
 }
 
@@ -84,6 +105,15 @@ fn pop_local(cpu: usize) -> Option<Job> {
         PENDING[cpu].fetch_sub(1, Ordering::Release);
     }
     j
+}
+
+/// Another core is busy with a job and has more queued behind it: core `cpu`
+/// could steal one (the idle wait checks this with interrupts off).
+pub fn steal_ready(cpu: usize) -> bool {
+    ACCEPTING.load(Ordering::Acquire)
+        && (1..MAX_CPU).map(|k| (cpu + k) % MAX_CPU).any(|v| {
+            ONLINE[v].load(Ordering::Acquire) && BUSY[v].load(Ordering::Acquire) && PENDING[v].load(Ordering::Acquire) != 0
+        })
 }
 
 /// Take work from a core that is busy with another job. `try_lock` only: an
@@ -119,7 +149,9 @@ pub fn ap_idle_loop(cpu: usize) -> ! {
             }
             // `sti; hlt` is atomic with respect to interrupt delivery: a ping that
             // arrives after the check above still wakes this hlt.
-            None => x86_64::instructions::interrupts::enable_and_hlt(),
+            // S6: the idle wait of an AP (polling briefly under KVM, then a
+            // halt with its timer masked when nothing can come but an IPI).
+            None => crate::apuser::ap_idle_wait(cpu),
         }
     }
 }
@@ -160,8 +192,14 @@ pub fn parallel(n: usize, f: Arc<dyn Fn(usize) + Send + Sync>) -> usize {
 /// general kernel code), and one AP steals a job queued behind a busy one.
 pub fn selftest() {
     let aps = online_aps();
-    if aps.is_empty() || !ACCEPTING.load(Ordering::Acquire) {
+    if aps.is_empty() {
         crate::serial_println!("[kwork] no APs accepting work (single core) — per-CPU queues idle");
+        return;
+    }
+    if !ACCEPTING.load(Ordering::Acquire) {
+        // BUG-271: APs are online but `smp::init` never opened their queues (the
+        // demo workers did not park): the per-CPU queues sit idle on every boot.
+        crate::serial_println!("[kwork] {} AP(s) online but not accepting work (demo workers not parked) -> FAILED", aps.len());
         return;
     }
     let hits = Arc::new(AtomicU64::new(0));

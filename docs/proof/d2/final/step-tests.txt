@@ -1,0 +1,260 @@
+== b3-a
+[sched.py] console up after 260 s
+[sched.py] $ apuser 2: ok 9671 ms
+[sched.py] $ smpstat: ok 92 ms
+[sched.py] $ apuser 1 10000 100 cow: ok 8350 ms
+[sched.py] $ smpstat: ok 44 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30767, page faults 0, other 0; AP user time 432 ms of 7456 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 6 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 6/6, ran on its own AP (CPUID from ring 3) 6/6, also seen on the BSP 0; bounces: system calls 67579, page faults 0, other 0; AP user time 890 ms of 9502 ms; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 98346 sent home 98346
+[smpstat] cpu1: switch-ins 33085 user 424 ms, bounces syscall 32840 fault 0 other 0, evictions 0, ticks user 144 idle 26550, queued 0, running idle
+[smpstat] cpu2: switch-ins 32998 user 429 ms, bounces syscall 32848 fault 0 other 0, evictions 0, ticks user 173 idle 26518, queued 0, running idle
+[smpstat] cpu3: switch-ins 32721 user 468 ms, bounces syscall 32658 fault 0 other 0, evictions 0, ticks user 127 idle 26567, queued 0, running idle
+[cow-smp]   APUSER thread 0 apic-mask=0x2 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 1 apic-mask=0x4 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 2 apic-mask=0x8 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER cow child=ok parent-pages-changed=0
+[cow-smp] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 38165, page faults 1, other 0; AP user time 560 ms of 8281 ms; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 136512 sent home 136512
+[smpstat] cpu1: switch-ins 45860 user 618 ms, bounces syscall 45606 fault 1 other 0, evictions 0, ticks user 220 idle 27313, queued 0, running idle
+[smpstat] cpu2: switch-ins 45815 user 602 ms, bounces syscall 45665 fault 0 other 0, evictions 0, ticks user 295 idle 27236, queued 0, running idle
+[smpstat] cpu3: switch-ins 45303 user 661 ms, bounces syscall 45240 fault 0 other 0, evictions 0, ticks user 179 idle 27355, queued 0, running idle
+== b3-t
+[sched.py] console up after 280 s
+[sched.py] $ tlbsmp 1000: ok 120372 ms
+[sched.py] $ smpstat: ok 92 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 31047, page faults 0, other 0; AP user time 470 ms of 6531 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=1000 stale=1000 max_us=50014
+[tlb-smp]   TLBSMP mode=remap rounds=1000 stale=0 max_us=15
+[tlb-smp] reader on cpu1, 1000 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 0 → FAILED
+[smpstat] smpuser=off offloads 31050 sent home 31050
+[smpstat] cpu1: switch-ins 10335 user 120170 ms, bounces syscall 10334 fault 0 other 0, evictions 1, ticks user 12054 idle 27564, queued 0, running idle
+[smpstat] cpu2: switch-ins 10375 user 108 ms, bounces syscall 10375 fault 0 other 0, evictions 0, ticks user 7 idle 39612, queued 0, running idle
+[smpstat] cpu3: switch-ins 10340 user 215 ms, bounces syscall 10340 fault 0 other 0, evictions 0, ticks user 27 idle 39592, queued 0, running idle
+== b3-k
+[sched.py] console up after 262 s
+[sched.py] $ killsmp 100: ok 120395 ms
+[sched.py] $ smpstat: ok 117 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 33874, page faults 0, other 0; AP user time 540 ms of 6798 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[kill-smp] 100 rounds of a child with 8 threads spinning on 3 AP(s) ended by exit_group or SIGKILL: AP switch-ins 21189, live tasks 11 -> 11; exit 0 → FAILED
+[smpstat] smpuser=off offloads 34021 sent home 34013
+[smpstat] cpu1: switch-ins 19727 user 119695 ms, bounces syscall 12471 fault 2 other 0, evictions 3, ticks user 11973 idle 25943, queued 2, running idle
+[smpstat] cpu2: switch-ins 17373 user 119810 ms, bounces syscall 10743 fault 0 other 0, evictions 3, ticks user 12045 idle 25871, queued 3, running idle
+[smpstat] cpu3: switch-ins 17969 user 119773 ms, bounces syscall 10788 fault 0 other 0, evictions 3, ticks user 11973 idle 25944, queued 3, running idle
+== b3-s
+[sched.py] console up after 261 s
+[sched.py] $ spread: ok 16909 ms
+[sched.py] $ apidle: ok 10158 ms
+[sched.py] $ smpstat: ok 60 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 33726, page faults 0, other 0; AP user time 500 ms of 6769 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[spread] 8 threads x 2000 units: smpuser=off 8422 ms, smpuser=on 8429 ms, ratio 1.00 (want <= 0.40); user time on the APs: cpu1 0 ms, cpu2 0 ms, cpu3 0 ms → FAILED
+[ap-idle] timer interrupts per AP in 10 s with nothing to run: cpu1 1000, cpu2 1000, cpu3 1000 (want < 5) → FAILED
+[smpstat] smpuser=off offloads 33726 sent home 33726
+[smpstat] cpu1: switch-ins 12197 user 137 ms, bounces syscall 12197 fault 0 other 0, evictions 0, ticks user 11 idle 28491, queued 0, running idle
+[smpstat] cpu2: switch-ins 10800 user 183 ms, bounces syscall 10800 fault 0 other 0, evictions 0, ticks user 65 idle 28437, queued 0, running idle
+[smpstat] cpu3: switch-ins 10729 user 177 ms, bounces syscall 10729 fault 0 other 0, evictions 0, ticks user 17 idle 28485, queued 0, running idle
+== b3-2
+[sched.py] console up after 259 s
+[sched.py] $ apuser 2: ok 10426 ms
+[sched.py] $ smpstat: ok 133 ms
+[ap-parity] 1 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 1 worker thread(s) pinned to 1 AP(s): result equal to the BSP run 1/1, ran on its own AP (CPUID from ring 3) 1/1, also seen on the BSP 0; bounces: system calls 10007, page faults 0, other 0; AP user time 103 ms of 5469 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 2 worker thread(s) pinned to 1 AP(s): result equal to the BSP run 2/2, ran on its own AP (CPUID from ring 3) 2/2, also seen on the BSP 0; bounces: system calls 37786, page faults 0, other 0; AP user time 321 ms of 10331 ms; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 47793 sent home 47793
+[smpstat] cpu1: switch-ins 47806 user 424 ms, bounces syscall 47793 fault 0 other 0, evictions 0, ticks user 73 idle 26544, queued 0, running idle
+== b3-8
+[sched.py] console up after 255 s
+[sched.py] $ apuser 1: ok 9591 ms
+[sched.py] $ smpstat: ok 132 ms
+[ap-parity] 7 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 7 worker thread(s) pinned to 7 AP(s): result equal to the BSP run 7/7, ran on its own AP (CPUID from ring 3) 7/7, also seen on the BSP 0; bounces: system calls 78473, page faults 0, other 0; AP user time 1240 ms of 8659 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 7 worker thread(s) pinned to 7 AP(s): result equal to the BSP run 7/7, ran on its own AP (CPUID from ring 3) 7/7, also seen on the BSP 0; bounces: system calls 92479, page faults 0, other 0; AP user time 1443 ms of 9341 ms; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 170952 sent home 170952
+[smpstat] cpu1: switch-ins 24377 user 372 ms, bounces syscall 24377 fault 0 other 0, evictions 0, ticks user 139 idle 26040, queued 0, running idle
+[smpstat] cpu2: switch-ins 24363 user 389 ms, bounces syscall 24363 fault 0 other 0, evictions 0, ticks user 183 idle 25992, queued 0, running idle
+[smpstat] cpu3: switch-ins 24423 user 386 ms, bounces syscall 24423 fault 0 other 0, evictions 0, ticks user 102 idle 26076, queued 0, running idle
+[smpstat] cpu4: switch-ins 24433 user 385 ms, bounces syscall 24433 fault 0 other 0, evictions 0, ticks user 183 idle 25993, queued 0, running idle
+[smpstat] cpu5: switch-ins 24536 user 376 ms, bounces syscall 24536 fault 0 other 0, evictions 0, ticks user 306 idle 25869, queued 0, running idle
+[smpstat] cpu6: switch-ins 24438 user 384 ms, bounces syscall 24438 fault 0 other 0, evictions 0, ticks user 134 idle 26044, queued 0, running idle
+[smpstat] cpu7: switch-ins 24382 user 387 ms, bounces syscall 24382 fault 0 other 0, evictions 0, ticks user 205 idle 25972, queued 0, running idle
+== c4-a
+[sched.py] console up after 248 s
+[sched.py] $ apuser 2: ok 9422 ms
+[sched.py] $ apuser 1 10000 100 cow: ok 7245 ms
+[sched.py] $ manysmp: ok 748 ms
+[sched.py] $ smpstat: ok 41 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30805, page faults 61, other 0; AP user time 373 ms of 6151 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 6 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 6/6, ran on its own AP (CPUID from ring 3) 6/6, also seen on the BSP 0; bounces: system calls 69749, page faults 47, other 0; AP user time 907 ms of 9265 ms; exit 77 → OK ✓
+[cow-smp]   APUSER thread 0 apic-mask=0x3 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 1 apic-mask=0x5 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 2 apic-mask=0x9 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=10000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER cow child=ok parent-pages-changed=0
+[cow-smp] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 3; bounces: system calls 26698, page faults 76, other 0; AP user time 364 ms of 7133 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[many-threads] smpuser=test: threads pinned to 3 AP(s) in turn, AP switch-ins 3545
+[smpstat] smpuser=off offloads 130950 sent home 130950, shootdowns 564 (564 IPIs, 0 late), tasks brought home 0
+[smpstat] cpu1: switch-ins 43247 user 572 ms, bounces syscall 43098 fault 68 other 0, evictions 0, ticks user 123 idle 26142, queued 0, running idle
+[smpstat] cpu2: switch-ins 44230 user 555 ms, bounces syscall 44089 fault 49 other 0, evictions 0, ticks user 198 idle 26065, queued 0, running idle
+[smpstat] cpu3: switch-ins 43882 user 556 ms, bounces syscall 43579 fault 67 other 0, evictions 0, ticks user 88 idle 26177, queued 0, running idle
+== c4-n
+[sched.py] console up after 257 s
+[sched.py] $ smpuser noshoot: ok 30 ms
+[sched.py] $ tlbsmp 100: ok 74258 ms
+[sched.py] $ apuser 1 2000 100 cow: ok 1769 ms
+[sched.py] $ smpuser shoot: ok 21 ms
+[sched.py] $ apuser 1 2000 100 cow: ok 18465 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 32191, page faults 55, other 0; AP user time 496 ms of 6741 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[smpuser] off (3 AP(s) can run ring 3), TLB shootdown and fork hold OFF (test knob)
+[tlb-smp]   TLBSMP mode=dontneed rounds=100 stale=100 max_us=50016
+[tlb-smp]   TLBSMP mode=remap rounds=100 stale=0 max_us=0
+[tlb-smp]   TLBSMP mode=cowbreak rounds=100 stale=15 max_us=3890641
+[tlb-smp] reader on cpu1, 100 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 1 → FAILED
+[cow-smp]   APUSER thread 0 apic-mask=0x2 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 1 apic-mask=0x4 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 2 apic-mask=0x8 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER cow child=ok parent-pages-changed=0
+[cow-smp] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 7792, page faults 47, other 0; AP user time 127 ms of 1673 ms; exit 77 → OK ✓
+[smpuser] off (3 AP(s) can run ring 3)
+[cow-smp]   APUSER thread 0 apic-mask=0x1 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 1 apic-mask=0x1 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER thread 2 apic-mask=0x1 sum=0xefb6abe61a94cd6f ref=0xefb6abe61a94cd6f syscalls=2000 faults=100 cow-bad=0 ok
+[cow-smp]   APUSER cow child=ok parent-pages-changed=0
+[cow-smp] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 0/3, also seen on the BSP 3; bounces: system calls 449, page faults 35, other 0; AP user time 9704 ms of 18401 ms; exit 77 → FAILED
+== c4-2
+[sched.py] console up after 253 s
+[sched.py] $ apuser 2: ok 13445 ms
+[sched.py] $ tlbsmp 300: ok 120455 ms
+[sched.py] $ killsmp 100: ok 120313 ms
+[ap-parity] 1 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 1 worker thread(s) pinned to 1 AP(s): result equal to the BSP run 1/1, ran on its own AP (CPUID from ring 3) 1/1, also seen on the BSP 0; bounces: system calls 10033, page faults 1, other 0; AP user time 83 ms of 4950 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 2 worker thread(s) pinned to 1 AP(s): result equal to the BSP run 2/2, ran on its own AP (CPUID from ring 3) 2/2, also seen on the BSP 0; bounces: system calls 57866, page faults 3, other 0; AP user time 424 ms of 13354 ms; exit 77 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=300 stale=300 max_us=52899
+[tlb-smp]   TLBSMP mode=remap rounds=300 stale=0 max_us=1
+[tlb-smp] reader on cpu1, 300 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 0 → FAILED
+[kill-smp] 100 rounds of a child with 8 threads spinning on 1 AP(s) ended by exit_group or SIGKILL: AP switch-ins 9565, live tasks 11 -> 11; exit 0 → FAILED
+== c4-8
+[sched.py] console up after 261 s
+[sched.py] $ apuser 1: ok 9337 ms
+[sched.py] $ tlbsmp 300: ok 120444 ms
+[sched.py] $ killsmp 200: ok 113220 ms
+[sched.py] $ smpstat: ok 83 ms
+[ap-parity] 7 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 7 worker thread(s) pinned to 7 AP(s): result equal to the BSP run 7/7, ran on its own AP (CPUID from ring 3) 7/7, also seen on the BSP 0; bounces: system calls 78955, page faults 102, other 0; AP user time 1213 ms of 8870 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-user] 7 worker thread(s) pinned to 7 AP(s): result equal to the BSP run 7/7, ran on its own AP (CPUID from ring 3) 7/7, also seen on the BSP 0; bounces: system calls 82706, page faults 159, other 0; AP user time 1060 ms of 9163 ms; exit 77 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=300 stale=300 max_us=50515
+[tlb-smp]   TLBSMP mode=remap rounds=300 stale=0 max_us=25
+[tlb-smp] reader on cpu1, 300 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 0 → FAILED
+[kill-smp]   KILLSMP rounds=200 exit_group=100 sigkill=100 reaped=200
+[kill-smp] 200 rounds of a child with 8 threads spinning on 7 AP(s) ended by exit_group or SIGKILL: AP switch-ins 16423, live tasks 11 -> 11; exit 77 → OK ✓
+[smpstat] smpuser=off offloads 176762 sent home 176762, shootdowns 635 (863 IPIs, 0 late), tasks brought home 1717
+[smpstat] cpu1: switch-ins 25600 user 58287 ms, bounces syscall 25055 fault 75 other 0, evictions 226, ticks user 5882 idle 44125, queued 0, running idle
+[smpstat] cpu2: switch-ins 25390 user 38986 ms, bounces syscall 24916 fault 31 other 0, evictions 202, ticks user 3942 idle 46064, queued 0, running idle
+[smpstat] cpu3: switch-ins 25504 user 38679 ms, bounces syscall 24986 fault 61 other 0, evictions 205, ticks user 3883 idle 46124, queued 0, running idle
+[smpstat] cpu4: switch-ins 25393 user 39105 ms, bounces syscall 24911 fault 32 other 0, evictions 204, ticks user 4036 idle 45971, queued 0, running idle
+[smpstat] cpu5: switch-ins 25454 user 38707 ms, bounces syscall 24920 fault 63 other 0, evictions 203, ticks user 3977 idle 46029, queued 0, running idle
+[smpstat] cpu6: switch-ins 25629 user 38894 ms, bounces syscall 24990 fault 162 other 0, evictions 208, ticks user 3954 idle 46050, queued 0, running idle
+[smpstat] cpu7: switch-ins 25400 user 38931 ms, bounces syscall 24900 fault 37 other 0, evictions 204, ticks user 3933 idle 46073, queued 0, running idle
+== c5-s
+[sched.py] console up after 248 s
+[sched.py] $ spread: ok 10335 ms
+[sched.py] $ smpuser on: ok 102 ms
+[sched.py] $ apuser 2: ok 8478 ms
+[sched.py] $ smpstat: ok 38 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30574, page faults 25, other 0; AP user time 320 ms of 5641 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[spread] 8 threads x 2000 units: smpuser=off 6801 ms, smpuser=on 3440 ms, ratio 0.51 (want <= 0.40); user time on the APs: cpu1 1494 ms, cpu2 1585 ms, cpu3 1603 ms → FAILED
+[smpuser] on (3 AP(s) can run ring 3)
+[ap-user] 6 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 6/6, ran on its own AP (CPUID from ring 3) 6/6, also seen on the BSP 0; bounces: system calls 70305, page faults 53, other 0; AP user time 1021 ms of 8403 ms; exit 77 → OK ✓
+[smpstat] smpuser=on offloads 100987 sent home 100987, shootdowns 889 (906 IPIs, 0 late), tasks brought home 0, stays 100961
+[smpstat] cpu1: switch-ins 33656 (stolen 1) user 1968 ms, bounces syscall 33496 fault 12 other 0, evictions 0, ticks user 229 idle 26096, queued 0, running idle
+[smpstat] cpu2: switch-ins 34213 (stolen 1) user 1986 ms, bounces syscall 33886 fault 44 other 0, evictions 0, ticks user 273 idle 26052, queued 0, running idle
+[smpstat] cpu3: switch-ins 33709 (stolen 5) user 2067 ms, bounces syscall 33527 fault 22 other 0, evictions 0, ticks user 280 idle 26046, queued 0, running idle
+== c6
+[sched.py] console up after 250 s
+[sched.py] $ apidle: ok 10061 ms
+[sched.py] $ smpuser on: ok 126 ms
+[sched.py] $ apidle: ok 10038 ms
+[sched.py] $ apuser 2: ok 8445 ms
+[sched.py] $ spread: ok 10890 ms
+[sched.py] $ smpstat: ok 66 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30457, page faults 37, other 0; AP user time 428 ms of 5981 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[ap-idle] timer interrupts per AP in 10 s with nothing to run: cpu1 0, cpu2 0, cpu3 0 (want < 5) → OK ✓
+[smpuser] on (3 AP(s) can run ring 3)
+[ap-idle] timer interrupts per AP in 10 s with nothing to run: cpu1 0, cpu2 0, cpu3 0 (want < 5) → OK ✓
+[ap-user] 6 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 6/6, ran on its own AP (CPUID from ring 3) 6/6, also seen on the BSP 0; bounces: system calls 62060, page faults 156, other 0; AP user time 886 ms of 8352 ms; exit 77 → OK ✓
+[spread] 8 threads x 2000 units: smpuser=off 7051 ms, smpuser=on 3800 ms, ratio 0.54 (want <= 0.40); user time on the APs: cpu1 1692 ms, cpu2 1662 ms, cpu3 1568 ms → FAILED
+[smpstat] smpuser=on offloads 92740 sent home 92740, shootdowns 906 (910 IPIs, 0 late), tasks brought home 0, stays 92663
+[smpstat] cpu1: switch-ins 31095 (stolen 1, from polling 25223, tickless halts 4834) user 2116 ms, bounces syscall 30928 fault 66 other 0, evictions 0, ticks user 931 idle 256, queued 0, running idle
+[smpstat] cpu2: switch-ins 31105 (stolen 1, from polling 23456, tickless halts 5327) user 2098 ms, bounces syscall 30830 fault 112 other 0, evictions 0, ticks user 655 idle 466, queued 0, running idle
+[smpstat] cpu3: switch-ins 30835 (stolen 5, from polling 23975, tickless halts 5245) user 2019 ms, bounces syscall 30789 fault 15 other 0, evictions 0, ticks user 907 idle 203, queued 0, running idle
+== c6s
+[sched.py] console up after 256 s
+[sched.py] $ spread 8 6000: ok 30371 ms
+[sched.py] $ spread 3 6000: ok 24626 ms
+[sched.py] $ smpstat: ok 71 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 32800, page faults 274, other 0; AP user time 302 ms of 5862 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[spread] 8 threads x 6000 units: smpuser=off 18860 ms, smpuser=on 11390 ms, ratio 0.60 (want <= 0.40); user time on the APs: cpu1 4737 ms, cpu2 4689 ms, cpu3 4492 ms → FAILED
+[spread] 3 threads x 6000 units: smpuser=off 15331 ms, smpuser=on 9149 ms, ratio 0.60 (want <= 0.40); user time on the APs: cpu1 2485 ms, cpu2 2452 ms, cpu3 0 ms → FAILED
+[smpstat] smpuser=off offloads 33118 sent home 33118, shootdowns 646 (646 IPIs, 0 late), tasks brought home 0, stays 33096
+[smpstat] cpu1: switch-ins 11384 (stolen 2, from polling 1090, tickless halts 3719) user 7324 ms, bounces syscall 10963 fault 155 other 0, evictions 0, ticks user 1063 idle 36, queued 0, running idle
+[smpstat] cpu2: switch-ins 11351 (stolen 2, from polling 998, tickless halts 3703) user 7242 ms, bounces syscall 10962 fault 50 other 0, evictions 0, ticks user 973 idle 110, queued 0, running idle
+[smpstat] cpu3: switch-ins 10988 (stolen 4, from polling 1052, tickless halts 3656) user 4588 ms, bounces syscall 10919 fault 69 other 0, evictions 0, ticks user 790 idle 26, queued 0, running idle
+== c7-2
+[sched.py] console up after 259 s
+[sched.py] $ tlbsmp 300: ok 163383 ms
+[sched.py] $ killsmp 200: ok 578249 ms
+[ap-parity] 1 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 1 worker thread(s) pinned to 1 AP(s): result equal to the BSP run 1/1, ran on its own AP (CPUID from ring 3) 1/1, also seen on the BSP 0; bounces: system calls 10007, page faults 1, other 0; AP user time 133 ms of 6150 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=300 stale=300 max_us=450080
+[tlb-smp]   TLBSMP mode=remap rounds=300 stale=0 max_us=8
+[tlb-smp]   TLBSMP mode=cowbreak rounds=300 stale=299 max_us=703094
+[tlb-smp] reader on cpu1, 300 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 1 → FAILED
+[kill-smp]   KILLSMP rounds=200 exit_group=100 sigkill=100 reaped=200
+[kill-smp] 200 rounds of a child with 8 threads spinning on 1 AP(s) ended by exit_group or SIGKILL: AP switch-ins 47045, live tasks 11 -> 11; exit 77 → OK ✓
+== c7-8
+[sched.py] console up after 259 s
+[sched.py] $ tlbsmp 300: ok 165647 ms
+[sched.py] $ killsmp 300: ok 177466 ms
+[ap-parity] 7 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 7 worker thread(s) pinned to 7 AP(s): result equal to the BSP run 7/7, ran on its own AP (CPUID from ring 3) 7/7, also seen on the BSP 0; bounces: system calls 73520, page faults 84, other 0; AP user time 1147 ms of 8503 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[tlb-smp]   TLBSMP mode=dontneed rounds=300 stale=300 max_us=449963
+[tlb-smp]   TLBSMP mode=remap rounds=300 stale=0 max_us=3
+[tlb-smp]   TLBSMP mode=cowbreak rounds=300 stale=300 max_us=393167
+[tlb-smp] reader on cpu1, 300 rounds per mode (dontneed, remap, cowbreak): new contents within 1 ms, never the old frame; exit 1 → FAILED
+[kill-smp]   KILLSMP rounds=300 exit_group=150 sigkill=150 reaped=300
+[kill-smp] 300 rounds of a child with 8 threads spinning on 7 AP(s) ended by exit_group or SIGKILL: AP switch-ins 25386, live tasks 11 -> 11; exit 77 → OK ✓
+== c7-k
+[sched.py] console up after 256 s
+[sched.py] $ killsmp 1000: ok 901080 ms
+[sched.py] $ smpstat: ok 96 ms
+[ap-parity] 3 AP(s) against the BSP: CR0 0x80010023 CR4 0x340620 EFER 0xd00 XCR0 0x7 PAT 0x7040600070406; EFER.SCE BSP 1 APs 0 (system calls bounce) → OK ✓
+[ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BSP run 3/3, ran on its own AP (CPUID from ring 3) 3/3, also seen on the BSP 0; bounces: system calls 30350, page faults 64, other 0; AP user time 437 ms of 6551 ms; exit 77 → OK ✓
+[many-threads] 320 threads of one process alive at once: 320 of 320 threads alive at once, 320 joined -> PASS (exit 77) · thread-kstacks 0→0 → OK ✓
+[kill-smp] 1000 rounds of a child with 8 threads spinning on 3 AP(s) ended by exit_group or SIGKILL: AP switch-ins 156140, live tasks 11 -> 11; exit 0 → FAILED
+[smpstat] smpuser=off offloads 102962 sent home 102962, shootdowns 62 (97 IPIs, 0 late), tasks brought home 7411, stays 94638
+[smpstat] cpu1: switch-ins 97046 (stolen 0, from polling 25388, tickless halts 8209) user 597898 ms, bounces syscall 62776 fault 950 other 0, evictions 1812, ticks user 64930 idle 149, queued 0, running idle
+[smpstat] cpu2: switch-ins 47209 (stolen 0, from polling 10570, tickless halts 2401) user 646023 ms, bounces syscall 15862 fault 1 other 0, evictions 1894, ticks user 66394 idle 161, queued 0, running idle
+[smpstat] cpu3: switch-ins 42299 (stolen 0, from polling 10664, tickless halts 2407) user 621762 ms, bounces syscall 15935 fault 38 other 0, evictions 1801, ticks user 63804 idle 90, queued 0, running idle

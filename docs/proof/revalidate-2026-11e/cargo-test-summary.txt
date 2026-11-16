@@ -1,0 +1,3 @@
+# cargo test (default members), 732e5f5
+binaries: 188
+1381 passed, 0 failed, 1 ignored

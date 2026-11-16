@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod arena;
 pub mod bulk;
+pub mod cow;
 pub mod frame;
 pub mod oom;
 pub mod pagecache;

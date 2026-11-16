@@ -1,0 +1,20 @@
+--- /srv/euroos/fix190-runs/scripts/chrome-smoke.py	2026-11-14 15:19:30.017566810 +0000
++++ scripts/chrome-smoke.py	2026-11-14 22:56:46.651144068 +0000
+@@ -876,6 +876,9 @@
+         region = (fx, fy, fx + 580, fy + 40)
+         k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+         lat, dump_ms = [], []
++        # sched-d1: the kernel numbers of the same keys (sched-stat: the kernel share of
++        # the ring-3 tasks, the S7 gate; keylat: the kernel path of each key)
++        self.scon("keylat reset"); self.scon("sched-stat start")
+         self.nap(1.2)                      # past the caret's first blink
+         for i in range(n_keys):
+             before = self.digest(self.shot(), region)
+@@ -893,6 +896,7 @@
+             if dt is not None:
+                 lat.append(dt)
+             time.sleep(0.25)
++        self.scon("sched-stat"); self.nap(1.0); self.scon("keylat"); self.nap(1.0)
+         typed = self.field("A") or ""
+         if lat:
+             lat.sort()

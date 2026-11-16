@@ -1,0 +1,8 @@
+# inst.py: phase 0 of rename-persist.py alone (public image installs itself on a blank 4 GiB virtio disk, KVM 2 vCPU, 2 GiB), ten at once on eight host CPUs (20-27)
+== 48dfd05 public image
+      4 [inst] OK up=True done=True install 28s :: [q1x3] EuroInstall 
+      5 [inst] OK up=True done=True install 29s :: [q1x3] EuroInstall 
+      1 [inst] OK up=True done=True install 7s :: [q1x3] EuroInstall →
+== 2026.11.14 download
+      5 [inst] OK up=True done=True install 29s :: [q1x3] EuroInstall 
+      5 [inst] OK up=True done=True install 30s :: [q1x3] EuroInstall 

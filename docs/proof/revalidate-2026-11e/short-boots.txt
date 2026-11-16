@@ -1,0 +1,4 @@
+# short-boots.sh: boots of the self-test image of 732e5f5 until [fuzz] Linux-ABI (KVM, 2 vCPU, 2 GiB, -nic none), 12 lanes of two CPUs on cores 4-9 and 14-19 AND their SMT siblings (24-29, 34-39): every lane shares its cores with another guest (the load that reproduced BUG-273); 9 boots per lane
+boots: 108  end=marker: 108  with a FAILED line: 0  crash lines in any: 0
+CSPRNG seeded: 108  [3d8]/[3d7] OK: 108
+seconds to the [fuzz] line: median 35.024455551 max 39.605086425

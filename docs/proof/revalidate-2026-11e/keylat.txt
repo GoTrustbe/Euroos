@@ -1,0 +1,16 @@
+# keylat: chrome-smoke --only perf (30 keys), browser images, 3ecde9e (b0) against 732e5f5 (v2), four runs at a time, tmpfs work dirs, siblings idle, smp 4 (b0 CPUs 34-37, v2 2-5) and smp 2 (b0 38-39, v2 28-29); median key to screen ms
+## round 1
+== kq1-b0-4 median 316 ms  t4   kern   faults faults-total=517296
+== kq1-v2-4 median 250 ms  t4   kern   faults faults-total=601394
+== kq1-b0-2 median 305 ms  t4   kern   faults faults-total=483649
+== kq1-v2-2 median 237 ms  t4   kern   faults faults-total=585696
+## round 2
+== kq2-b0-4 median 311 ms  t4   kern   faults faults-total=489287
+== kq2-v2-4 median 247 ms  t4   kern   faults faults-total=574113
+== kq2-b0-2 median 339 ms  t4   kern   faults faults-total=483967
+== kq2-v2-2 median 271 ms  t4   kern   faults faults-total=619726
+## round 3
+== kq3-b0-4 median 272 ms  t4   kern   faults faults-total=520550
+== kq3-v2-4 median 219 ms  t4   kern   faults faults-total=542767
+== kq3-b0-2 median 347 ms  t4   kern   faults faults-total=488073
+== kq3-v2-2 median 293 ms  t4   kern   faults faults-total=601567

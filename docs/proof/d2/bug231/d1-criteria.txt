@@ -1,0 +1,13 @@
+b1-sched.out:[sched.py] console up after 265 s
+b1-sched.out:[sched.py] $ hogtest 5 30 8: ok 43423 ms
+b1-sched.out:  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 44 % -> FAILED
+b1-sched.out:[sched.py] $ wakelat 200: ok 13797 ms
+b1-sched.out:  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.05 ms p99 0.07 ms max 0.08 ms, round trip p50 3.10 ms p99 20.99 ms; hogs kept 89 % of their CPU share -> OK ���
+b1-sched.out:[sched.py] $ sched-stat start: ok 28 ms
+b1-sched.out:[sched.py] $ sleepwait 3: ok 3 ms
+b1-sched.out:[sched.py] $ sched-stat: ok 42 ms
+b1-sched1.out:[sched.py] console up after 262 s
+b1-sched1.out:[sched.py] $ hogtest 5 30 8: ok 43456 ms
+b1-sched1.out:  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.6 s (limit 12.6 s), lowest task 0 share 43 % -> FAILED
+b1-sched1.out:[sched.py] $ wakelat 200: ok 13752 ms
+b1-sched1.out:  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.05 ms p99 0.10 ms max 0.11 ms, round trip p50 3.10 ms p99 11.05 ms; hogs kept 89 % of their CPU share -> OK ���

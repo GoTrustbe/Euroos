@@ -1,0 +1,7 @@
+[matrix] image=/srv/euroos/fix270-runs/pw/after-2/disk.raw legs=power work=/srv/euroos/fix270-runs/pw/after-2/ek-matrix-61lmgmtm
+[matrix] leg: power
+  [power] PASS ✓
+
+[matrix] result:
+  power    PASS
+[matrix] ALL LEGS PASS ✓

@@ -1,0 +1,8 @@
+after-1 |   [power] PASS ✓ | pbp=1 sd=1
+after-2 |   [power] PASS ✓ | pbp=1 sd=1
+after-3 |   [power] PASS ✓ | pbp=1 sd=1
+after-4 |   [power] PASS ✓ | pbp=1 sd=1
+after-5 |   [power] PASS ✓ | pbp=1 sd=1
+before-1 |   [power] FAIL ✗ | pbp=0 sd=0
+before-2 |   [power] FAIL ✗ | pbp=0 sd=0
+before-3 |   [power] FAIL ✗ | pbp=0 sd=0

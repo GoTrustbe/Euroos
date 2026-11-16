@@ -1,0 +1,7 @@
+# [rename-disk] on the image of 340f185 (the test, before the fix), KVM 4 GiB, R630
+[rename-disk]   save 1: exit 0 write-back ["[fs] /tmp/euro-glibc.txt (37 B) -> EuroFS synced", "[fs] /tmp/gu_b (3 B) -> EuroFS synced", "[fs] /tmp/gscm_payload (11 B) -> EuroFS synced", "[fs] \u{1} (0 B) -> EuroFS synced", "[fs] \u{4} (0 B) -> EuroFS synced", "[fs] /tmp/gfdsem-a (8 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l1 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l2 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-l3 (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-b (5 B) -> EuroFS synced", "[fs] /tmp/gfdsem-d (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-c (1 B) -> EuroFS synced", "[fs] /tmp/gfdsem-s (8 B) -> EuroFS synced", "[fs] /tmp/rendisk/a.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/b.txt (21 B) -> EuroFS synced", "[fs] /tmp/rendisk/c.txt (21 B) -> EuroFS synced"]; EuroFS a="document a version 1" b="document b version 1" c="document c version 1" tmp=0
+[rename-disk]   save 2: exit 0 write-back []; EuroFS a="document a version 1" b="document b version 1" c="document c version 1" tmp=0
+[rename-disk]   check 2 with a table that does not know /tmp/rendisk: exit 1 write-back []
+[rename-disk]     renprobe: check a.txt holds the version FAILED version 2 0
+[rename-disk]     renprobe: check b.txt holds the version FAILED version 2 0
+[rename-disk] a Linux program's save (create; rename over, unlink + rename, unlink) on EuroFS: save 1 ok, save 2 WRONG, seen by the next boot WRONG → FAILED

@@ -1,0 +1,804 @@
+[loader] EuroOS two-stage A/B loader (G4)
+[loader] slot_config → boot slot A
+[loader] slot image unusable — trying the other slot partition
+[loader] kernel image from the ESP file (Ed25519 verified)
+[loader] kernel image loaded — LoadImage + StartImage...
+[euro] EuroKernel bring-up — heap (512 MiB) + COM1 active
+[euro] anchor dump_registers_and_backtrace @ 0x0000000071b74520
+[euro] frame allocator: 3374 MiB usable RAM
+[bootopt] no euroos-boot.conf (defaults): net.driver=user, storage.nvme=kernel
+[euro] GOP 1920x1080 stride=1920 Bgr
+[acpi] RSDP @ 0x7fb7e014
+[inst] single-disk boot (1 disk(s)) — no install target, media preload skipped
+[euro] ExitBootServices...
+[euro] >>> UEFI left — kernel mode <<<
+[euro] GDT+TSS loaded
+[euro] IDT loaded
+[euro] framebuffer @ 0x80000000 — loading our own page tables...
+[euro] CR3 loaded (PML4 @ 0x100000) — our own paging active
+[a2] guarded kernel stack: top 0x8000005000, guard 0x8000000000 — stack writable=true, guard not-present=true
+[mm] process frame pool: 1152 MiB @ 0x1780000 (fork/exec) + 258 MiB @ 0x100000000 + 258 MiB @ 0x110200000
+[mm] big-block heap pool: 64 MiB @ 0x49780000
+[blk] no virtio-blk device found
+[iommu] domain virtio-blk: 0 PCI function(s), 0 DMA page(s) registered
+[iommu] domain nvme: 0 PCI function(s), 0 DMA page(s) registered
+[iommu] domain ahci: 1 PCI function(s), 17 DMA page(s) registered
+[ahci] disk 0 (port 0): 'QEMU HARDDISK', 524288 sectors = 256 MiB, partitioned (boot signature)
+[ahci] disk 0 read-only self-test (boot sector via DMA): OK ✓
+[euro] no installable/EuroFS SATA disk — booting a RAM root (disks left intact)
+[euro] EuroFS formatted + populated in RAM (live) (through 1 MiB block cache)
+[boot-time] phase firmware-exit: 68.563 ms (at 68 ms)
+[boot-time] phase cpu-mm: 39.229 ms (at 107 ms)
+[boot-time] phase storage-rootfs: 54.197 ms (at 161 ms)
+[euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261114
+[g4] raw-block slot_config not readable (no virtio-blk?)
+[boot-time] phase storage-checks: 9.457 ms (at 171 ms)
+[    0.00 INF] observability active — kmsg ring 512 lines, leveled logging + dmesg
+[    0.00 INF] [hpet] HPET active @ 100 MHz — 1M spin iterations = 21401 us (high-resolution HAL time source)
+[tpm] no TPM @ 0xfed40000 (intf-id=0x00000000, DID_VID=0x00000000)
+[entropy] CSPRNG seeded: 546 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 128 bits, at most half the threshold), jitter=4 batches of 512 samples (418 bits) · 0.706 ms → OK
+[euroid] no /etc/euroid/users.db on the root — live medium, built-in demo store (euro/alice/bob)
+[euro] boot #1 (live/RAM)
+[net] /etc/hosts: 3 name->IP mapping(s) loaded
+[prefs] system settings applied: /etc/euroos/settings.conf (0 key(s), 0 broken line(s) skipped), time zone UTC, region en, EuroGuard saved rules: 0 domain change(s), 0 app rule(s)
+[boot-time] phase identity-config: 55.315 ms (at 226 ms)
+[net] no virtio-net device found
+[iommu] domain nic: 0 PCI function(s), 0 DMA page(s) registered
+[net] virtio-net NIC not found
+[boot-time] phase net: 24.583 ms (at 251 ms)
+[euro] loading /bin/hello from EuroFS...
+[euro] /bin/hello Ed25519: VERIFIED (pubkey ed852b80…)
+[euro] tamper-test: 1 byte changed -> REJECTED (correct)
+[sec] SMEP ON · SMAP ON (CR4; ring 0 can no longer execute/touch user pages, except in a short syscall window)
+[ring3->sys_write] EuroOS userspace program (C, ring 3) — via syscalls:
+[ring3->sys_write]   getpid() = 
+[ring3->sys_write] 1
+[ring3->sys_write] 
+[ring3->sys_write]   uname()  = 
+[ring3->sys_write] EuroKernel 0.1-alpha x86_64
+[ring3->sys_write] 
+[ring3->sys_write]   read(/etc/hostname, 
+[ring3->sys_write] 11
+[ring3->sys_write]  bytes) = 
+[ring3->sys_write] eurokernel
+[cap] syscall 60 DENIED — missing capability
+[ring3->sys_write]   net()    = DENIED by kernel (process lacks CAP_NET)
+[ring3->sys_write]   malloc() = 
+[ring3->sys_write] dynamic memory via sbrk()/malloc()!
+[ring3->sys_write] 
+[euro] /bin/hello done: exit=0, 259 bytes via sys_write
+[ring3->sys_write] cat /etc/eurokernel.conf:
+[ring3->sys_write] version=0.1
+[exec] /bin/cat (abi=native, ed25519=ok) exit=0 (53 bytes)
+[linux-abi] Hello via the LINUX syscall ABI (write=1, getpid=39, exit=60)!
+[linux-abi]   Linux getpid()      = [linux-abi] 1[linux-abi] 
+[linux-abi]   Linux uname.sysname = [linux-abi] Linux[linux-abi]   release = [linux-abi] 6.6.0-euroos[linux-abi] 
+[linux-abi]   Linux getuid()      = [linux-abi] 1000[linux-abi] 
+[linux-abi]   Linux gettimeofday  = [linux-abi] 1794698044[linux-abi]  (Unix-epoch seconds)
+[linux-abi]   --- /proc (live kernel info) ---
+[linux-abi]   [linux-abi] /proc/version[linux-abi] : [linux-abi] Linux version 6.6.0-euroos (euro@eurokernel) (EuroToolchain rustc) #1 SMP EuroOS[linux-abi] 
+[linux-abi]   [linux-abi] /proc/cpuinfo[linux-abi] : [linux-abi] processor	: 0[linux-abi] 
+[linux-abi]   [linux-abi] /proc/meminfo[linux-abi] : [linux-abi] MemTotal:       262144 kB[linux-abi] 
+[linux-abi]   [linux-abi] /proc/uptime[linux-abi] : [linux-abi] 0.00 0.00[linux-abi] 
+[linux-abi]   [linux-abi] /proc/loadavg[linux-abi] : [linux-abi] 0.00 0.00 0.00 1/1 1[linux-abi] 
+[linux-abi]   readlink(/proc/self/exe) = [linux-abi] /bin/linuxprog[linux-abi] 
+[linux-abi]   --- /etc (system config) ---
+[linux-abi]   [linux-abi] /etc/os-release[linux-abi] : [linux-abi] NAME="EuroOS"[linux-abi] 
+[linux-abi]   [linux-abi] /etc/passwd[linux-abi] : [linux-abi] root:x:0:0:root:/root:/bin/eurosh[linux-abi] 
+[linux-abi]   --- getdents64(/etc) ---
+[linux-abi]     [d] [linux-abi] .[linux-abi] 
+[linux-abi]     [d] [linux-abi] ..[linux-abi] 
+[linux-abi]     [f] [linux-abi] hostname[linux-abi] 
+[linux-abi]     [f] [linux-abi] hosts[linux-abi] 
+[linux-abi]     [f] [linux-abi] eurokernel.conf[linux-abi] 
+[linux-abi]     [f] [linux-abi] passwd[linux-abi] 
+[linux-abi]     [f] [linux-abi] group[linux-abi] 
+[linux-abi]     [f] [linux-abi] os-release[linux-abi] 
+[linux-abi]     [d] [linux-abi] euroguard[linux-abi] 
+[linux-abi]     [f] [linux-abi] system.ver[linux-abi] 
+[linux-abi]     [f] [linux-abi] mmap-test[linux-abi] 
+[exec] /bin/linuxprog (abi=linux, ed25519=ok) exit=0 (862 bytes)
+[linux-abi] arch_prctl SET_FS = 0x200400
+[linux-abi] arch_prctl(SET_FS): TLS set up OK
+[linux-abi]   %fs:0 reads the thread pointer back: OK
+[linux-abi]   set_tid_address -> tid [linux-abi] 1[linux-abi] 
+[linux-abi]   mmap(4096) OK, write+read from new page: [linux-abi] Hi
+[linux-abi]   writev: part-1[linux-abi] + part-2 (musl stdio path)[linux-abi] mmap(fd=3, off=0, 4096 B) file-backed -> 0x281000 (35 B copied)
+[linux-abi]   file-backed mmap: mapped file bytes MATCH -> FILE-BACKED-MMAP-OK
+[exec] /bin/muslprog (abi=linux, ed25519=ok) exit=0 (258 bytes)
+[ring3->sys_write] SysV stack read by the process:
+[ring3->sys_write]   argc = 
+[ring3->sys_write] 1
+[ring3->sys_write] 
+[ring3->sys_write]   argv[0] = 
+[ring3->sys_write] /bin/argvprog
+[ring3->sys_write] 
+[ring3->sys_write]   envc = 
+[ring3->sys_write] 9
+[ring3->sys_write] 
+[ring3->sys_write]   auxv AT_PAGESZ = 
+[ring3->sys_write] 4096
+[ring3->sys_write] 
+[ring3->sys_write]   auxv AT_RANDOM[0..1] = 
+[ring3->sys_write] 192
+[ring3->sys_write] ,
+[ring3->sys_write] 34
+[ring3->sys_write] 
+[exec] /bin/argvprog (abi=native, ed25519=ok) exit=0 (136 bytes)
+[elf] 3 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[ring3->sys_write] PIE with relocations is running. Relocated pointers:
+[ring3->sys_write]   - 
+[ring3->sys_write] sovereign
+[ring3->sys_write] 
+[ring3->sys_write]   - 
+[ring3->sys_write] European
+[ring3->sys_write] 
+[ring3->sys_write]   - 
+[ring3->sys_write] operating system
+[ring3->sys_write] 
+[exec] /bin/pieprog (abi=native, ed25519=ok) exit=0 (101 bytes)
+[elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x20aa38
+[linux-abi] Hello from a REAL musl-libc binary on EuroKernel![linux-abi] 
+[linux-abi]   argc=1, argv[0]=/bin/muslreal[linux-abi] 
+[mm-fail] #1 t0 "?" process 0: brk(0x2000) = 0 | arena mmap window 1024 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 1668 MiB free | kernel heap 11 MiB used 500 MiB free, big blocks 9/54 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi]   buffer (38 bytes): malloc + strcpy + printf via musl libc[linux-abi] 
+[linux-abi]   sum(1..10) = 55[linux-abi]  (musl runs ordinary C runtime)
+[exec] /bin/muslreal (abi=linux, ed25519=ok) exit=0 (191 bytes)
+[elf] 12 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x20a658
+[linux-abi] musl reads /etc/eurokernel.conf[linux-abi]  via fopen/fgets:
+[mm-fail] #2 t0 "?" process 0: brk(0x2000) = 0 | arena mmap window 1024 KiB left of 1 MiB, brk 0 KiB left | demand addresses 0 of 480 GiB handed out | demand pool 0 MiB free, process pool 1668 MiB free | kernel heap 11 MiB used 500 MiB free, big blocks 9/54 MiB
+[mm-fail]   demand addresses given back and free for reuse: 0 MiB in 0 ranges; reused so far: 0 MiB
+[linux-abi]   | [linux-abi] version=0.1
+[linux-abi]   | [linux-abi] encryption=off
+[linux-abi]   (2[linux-abi]  lines read, fclose OK)
+[exec] /bin/muslfile (abi=linux, ed25519=ok) exit=0 (112 bytes)
+[elf] 16 R_X86_64_RELATIVE relocations applied @ base 0x200000
+[linux-abi] arch_prctl SET_FS = 0x208698
+[linux-abi] getenv via musl libc:[linux-abi] 
+[linux-abi]   EUROOS_VERSION  = 0.1-alpha[linux-abi] 
+[linux-abi]   LANG            = nl_BE.UTF-8[linux-abi] 
+[linux-abi]   TERM            = euroterm[linux-abi] 
+[linux-abi]   USER            = euro[linux-abi] 
+[linux-abi]   SHELL           = /bin/sh[linux-abi] 
+[linux-abi]   (9[linux-abi]  variables in environ)
+[exec] /bin/menv (abi=linux, ed25519=ok) exit=0 (193 bytes)
+[boot-time] phase userland-demos: 228.364 ms (at 479 ms)
+[idt] BREAKPOINT @ 0x71c70939
+[euro] breakpoint exception handled: true
+[g1] 5 scheduler task stacks on guarded stacks (pool: 6 total)
+[fpu] context-switch FPU save: XSAVE (x87+SSE+AVX/YMM) (AVX ON)
+[euro] bg-musl (pid 100) -> task 1, own address space PML4 0x132000, arena 0x200000
+[    0.00 INF] [init] service ticker started (pid 100, start #1)
+[    0.00 INF] [init] EuroInit active — 1 service(s) under supervision
+[boot-time] phase sched-init: 15.749 ms (at 495 ms)
+[acpi] MADT: 4 CPU core(s) (LAPIC @ 0xfee00000, IO-APIC @ 0xfec00000 gsi-base 0)
+[acpi]   core: APIC-id 0 (on)
+[acpi]   core: APIC-id 1 (on)
+[acpi]   core: APIC-id 2 (on)
+[acpi]   core: APIC-id 3 (on)
+[iommu] no ACPI DMAR — NO hardware IOMMU. Device DMA is UNRESTRICTED: a malicious/buggy NVMe/USB/NIC can DMA over any physical memory, bypassing capabilities. (GitHub #11)
+[iommu] policy=Warn — continuing WITHOUT DMA isolation. Set policy=Required on high-assurance deployments to fail-closed instead.
+[ecam] PCIe config via ECAM @ 0xe0000000 (buses 0..=255, MCFG, port-verified) ✓
+[pci] 6 devices found:
+[pci]   00:00.0  8086:29c0  Bridge  (Intel Q35 host bridge)
+[pci]   00:01.0  1234:1111  Display (GPU)  (QEMU VGA)
+[pci]   00:02.0  1b36:000d  Serial Bus (USB)
+[pci]   00:1f.0  8086:2918  Bridge  (Intel ICH9 LPC)
+[pci]   00:1f.2  8086:2922  Mass Storage (SATA/AHCI)  (Intel ICH9 AHCI)
+[pci]   00:1f.3  8086:2930  SMBus
+[r] EuroDevice: 6 devices in the device tree, 3 bound via 7 registered drivers
+[i3-aml] DSDT interpreted: 8676 bytes → 39 AML objects. \_S5=Some([0, 0, 0, 0]), known methods present: ["_STA", "_S5_"]
+[acpi-pwr] no ACPI battery / AC adapter / lid in this firmware (expected on a desktop or VM)
+[i3-s5] ACPI shutdown ready: PM1a_CNT port 0x604, S5 value 0x2000, SLP_TYP-from-AML=true → `poweroff` performs a clean soft-off ✓ (end-to-end proven via scripts/shutdown-test.py: QEMU guest-shutdown)
+[boot-time] phase acpi-pci-tpm: 60.602 ms (at 556 ms)
+[apic] Local APIC #0 on — timer 100 Hz (calibrated: 625842 ticks/period against PIT)
+[lk] EuroLock hooks installed: IRQSAVE for Irq-mode locks, per-context order tracking (520 contexts), 20 lock classes
+[g1] 7 AP stack(s) on guarded stacks (pool: 13 guarded stacks total, unit=16 KiB + guard)
+[smp] core APIC-id 1 online
+[smp] core APIC-id 2 online
+[smp] core APIC-id 3 online
+[smp] 3/3 AP core(s) online (BSP = APIC-id 0, 4 cores total)
+[smp] parallel sum 0..2000000 over 4 core(s) = 1999999000000 (expected 1999999000000) -> OK
+[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+[acpi] power button armed → SCI GSI9 vec 0x49 (press = clean S5)
+[ioapic] @ 0xfec00000: kbd IRQ1->GSI1 vec 0x21, mouse IRQ12->GSI12 vec 0x2c -> BSP #0 (8259 masked)
+[euro] PS/2 mouse initialized (IRQ12)
+[boot-time] phase smp-timer: 90.869 ms (at 646 ms)
+[paging] high MMIO 0x380000000000+0x10000 (above the 1 TiB identity map) → window 0xffc0000000
+[xhci] controller @ 0xffc0000000 — 64 slots, 8 ports, ctx=32B, op+0x40 rt+0x1000 db+0x2000
+[xhci] MSI-X on: 16 table entries, interrupter 0 → vector 0x46
+[xhci] slot 1 port 5: USB 2.0 device 0627:0001
+[xhci] slot 1: HID keyboard configured (ep DCI 3, interval 7) → live
+[xhci] slot 2 port 6: USB 2.0 device 0627:0001
+[xhci] slot 2: HID report descriptor parsed — X abs@8 bits, Y @24, 5 button(s), max 32767
+[xhci] slot 2: HID tablet (absolute) configured (ep DCI 3, interval 4) → live
+[xhci] enumeration done — 2 HID device(s) polled live
+[iommu] domain xhci: 1 PCI function(s), 16 DMA page(s) registered
+[euro] xHCI USB initialized — 2 HID device(s) live
+[iommu] domain virtio-input: 0 PCI function(s), 0 DMA page(s) registered
+[hda] no HD-Audio controller found (PCI 04:03)
+[iommu] domain hda: 0 PCI function(s), 0 DMA page(s) registered
+[boot-time] phase devices: 51.001 ms (at 697 ms)
+[udrv] net.driver=user: the e1000 driver runs in ring 3 (e1000d); the in-kernel e1000 stays unbound
+[udrv] no e1000/e1000e (8086:100e / 8086:10d3) present: nothing to drive
+[euro] APIC timer 100 Hz + interrupts ON -> preemptive multitasking (incl. ring 3)
+[boot-time] phase drivers-late: 20.349 ms (at 718 ms)
+[boot-time] phase glibc-suite: 1.570 ms (at 719 ms)
+[rtc] real wall-clock time: 23:14 Sat 14 November
+[boot-time] phase vfs-mounts: 3.197 ms (at 723 ms)
+[l2rec] /bin recursively protected: /bin/doom immutable=true
+[l2] 37 system file(s) marked IMMUTABLE — tamper-proof (changing requires CAP_IMMUTABLE_ADMIN; the boot updater clears the flag legitimately)
+[intg] system integrity at boot: 33/33 files match the signed kernel image ✓
+[p3] append-only audit log: 41 events, persisted=true, append-only-flag=true, tamper-blocked=true, extend-OK=true, lines-on-disk 39→41 → OK (tamper-evident audit trail) ✓
+[x] EuroPol: policy 'firefox', caps 0b11111→0b01111 (CAP_IMMUTABLE_ADMIN revoked, CAP_NET retained), /etc denied=true, violation→P3-audit → OK (policy enforced as capabilities) ✓
+[3d4] EuroPol signed bundles (Ed25519 verify-before-load): valid-bundle-loaded=true, tampered-bundle-REFUSED=true, wrong-signer-REFUSED=true → OK (a policy can only change capabilities if it is signed by the release key) ✓
+[u] EuroVault: 2 secrets, master-from-TPM=false, read-with-cap=true, read-without-cap-denied=true, blob-without-plaintext=true, unseal-OK=true, wrong-key-fails=true → OK (capability-gated, encrypted, tamper-evident) ✓
+[n2] EuroVPN: handshake (4×X25519-DH → HKDF) + ChaCha20-Poly1305 transport, seeds-from-TPM=false, pubkey 7abaecc890b8f7c5…, encrypted=true, peer-decrypts=true, reply-ok=true → OK (forward-secret, mutually-authenticated tunnel) ✓
+[aa] EuroAgent: manifest 'facilitator' v1.0.0 (4 caps), MCP fs_write=allowed/exec=denied(cap), NET denied(policy)/EXEC denied(user-clamp), intent→facilitator, agent loop: 2 tool-calls/1 denied→'Summary saved.', Ed25519 bundle: valid-OK+tampered-rejected=true → OK (kernel trust boundary, capability-isolated, audited, LLM↔MCP loop, signed bundle, registry+anti-hijack) ✓
+[ca] EuroCA: root CA (seed-from-TPM=false), service cert 'vpn.euro-os.eu' issued+verified=true, refused-after-revocation=true, root-fpr d3181d3aae881fb6… → OK (sovereign local certificate authority) ✓
+[o2] EuroAttest: quote over 2 PCRs (AK-seed-from-TPM=false), fresh-quote-accepted=true, replay-rejected=true, modified-state-rejected=true → OK (remote attestation — provable trusted state) ✓
+[v] EuroIDM: token 'anke'(users) issued+verified=true (IDM-seed-from-TPM=false), caps=read+net-no-write=true, escalation(add-group)-denied=true → OK (identity→capabilities, signed tokens, locally sovereign) ✓
+[wasm2] `wasm <file>`: self-contained .wasm (data section) on EuroFS=true, with-cap fd_write+run()=55=true, without-cap host-call-denied=true → OK (real .wasm from disk in the no-JIT sandbox, WASI cap-gated) ✓
+[boot-time] phase subsystems: 93.102 ms (at 816 ms)
+[euroupdate] slot A confirmed GOOD (boot succeeded)
+[3g1] EuroJournal persistence: restored-from-disk=0 entries, wrote-to-disk=true, on-disk-decode-has-boot-line=true, live-ring=2 → OK (structured journal survives reboot on the root FS) ✓
+[boot-time] phase boot-good-scrub: 8.721 ms (at 824 ms)
+[h2] display-server @ /run/eurodisplay.sock: 1 client(s), 1 app window(s) via AF_UNIX → compositor (5 windows total) ✓
+[h5] real Wayland protocol: handshake processed, 108 bytes of events back (registry globals + xdg-configure), 1 window(s)
+[h5] Wayland window (surface 5) → compositor (6 windows total) ✓
+[bb5] EuroSuite renderer: Writer/Calc/Impress rendering tested (demo documents, not on dock) ✓
+[b6] EuroWeb: usable browser (tabs + address bar) ready (open via dock; type a URL) ✓
+[rk] EuroReken REALLY interactive: 12+34*2 = 80 (engine, expected 80, with precedence) ✓
+[set] EuroBeheer: settings panel ready (live EuroGuard/network/system; open via dock) ✓
+[bb6] EuroAgent dispatch panel ready (intent → cap-gated agent loop + live audit; open via dock) ✓
+[bb7] EuroInstall: guided graphical installer ready (plan + live FDE enrol; execution = instexec) ✓
+[ag] EuroApps: EuroFiles (live FS @ /), EuroNotes (euronotes), EuroClock (RTC 23:14) — 3 windows + dock tiles 0/1/2 ✓
+[boot-time] phase desktop-build: 36.948 ms (at 861 ms)
+[lock] unattended boot — no input within grace → auto-login as euro (demo/CI)
+[prefs] session settings applied: /home/euro/.config/euroos/desktop.conf (0 key(s)), clock 24h, wallpaper euro, text scale 100%
+[boot-time] phase lockscreen: 9.361 ms (at 871 ms)
+[euro] EuroDesktop compositor active — 22 windows + mouse
+[    0.31 INF] [sperf] present-blit: full-screen 2024 us vs status-panel rect 77 us (~26x less work per clock tick)
+[3f7-live] permission-portal armed — no request pending at boot; a modal is shown only when an app requests a resource (wired to portal::respond)
+[boot-time] phase first-frame: 127.514 ms (at 998 ms)
+[desktop] interactive loop started — input + shell live
+[keyfocus] first desktop frame: the keyboard goes to Some("Terminal  -  /bin/sh") (want "Terminal  -  /bin/sh") → OK ✓
+[serial] quiet console from here: per-event diagnostic lines go to the kernel log only (dmesg; `chatter on` or serial.chatter=on for all)
+[boot-time] desktop after 998 ms since kernel entry (HPET, release build): firmware-exit=68 cpu-mm=39 storage-rootfs=54 storage-checks=9 identity-config=55 net=24 userland-demos=228 sched-init=15 acpi-pci-tpm=60 smp-timer=90 devices=51 drivers-late=20 glibc-suite=1 vfs-mounts=3 subsystems=93 boot-good-scrub=8 desktop-build=36 lockscreen=9 first-frame=127 (ms per phase)
+[lk] boot-total heap (linked-list allocator): acq=9901 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total sched.SCHED (BSP scheduler): acq=2075 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+[lk] boot-total vfs.mount (per-mount): acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1066us hold-avg=22us
+[lk] boot-total vfs.mount_table: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.BG (background processes): acq=243 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=13us hold-avg=0us
+[lk] boot-total ring3.FILES (syscall file table): acq=170 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total ring3.OPEN_FDS: acq=94 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn_table: acq=12 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total unix.conn (per-connection): acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total unix.listeners: acq=5 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2us hold-avg=0us
+[lk] boot-total class Sched: acq=2075 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+[lk] boot-total class Process: acq=507 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=13us hold-avg=0us
+[lk] boot-total class Fs: acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1066us hold-avg=22us
+[lk] boot-total class FsMountTable: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total class UnixTable: acq=17 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2us hold-avg=0us
+[lk] boot-total class UnixConn: acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total class Net: acq=1 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total heap per-CPU caches: hits=18692 refills=87 flushes=14 parked=70 KiB
+[lk] boot-total order inversions=0 (self-test provoked=0) task-lock-with-IF0=0
+[lk] boot-total longest-held vfs.mount (per-mount): acq=253 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1066us hold-avg=22us
+[lk] boot-total longest-held sched.SCHED (BSP scheduler): acq=2075 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=16us hold-avg=0us
+[lk] boot-total longest-held ring3.BG (background processes): acq=243 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=13us hold-avg=0us
+[lk] boot-total longest-held unix.listeners: acq=5 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=2us hold-avg=0us
+[lk] boot-total longest-held unix.conn (per-connection): acq=11 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=1us hold-avg=0us
+[lk] boot-total longest-held net.CFG: acq=1 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held ring3.FILES (syscall file table): acq=170 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held ring3.OPEN_FDS: acq=94 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held heap (linked-list allocator): acq=9902 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[lk] boot-total longest-held vfs.mount_table: acq=244 contended=0 (0.00%) spins=0 max-wait=0 try-fail=0 hold-max=0us hold-avg=0us
+[bg-enosys] boot total: 0 background-path syscall(s) answered -ENOSYS (first use of each number logged above); background socket calls served 0 (refused for a missing CAP_NET: 0)
+[notify] Welcome to EuroOS: Click here to see notifications
+[scon-ready]
+[tour] first-run tour shown (Esc, Skip, a click outside or typing closes it)
+[intg] system integrity periodic: 33/33 files match the signed kernel image ✓
+[ioapic] keyboard IRQs received via IO-APIC: 1
+[    0.33 INF] [init] service ticker stopped -> restart (1/3)
+[euro] bg-musl (pid 101) -> task 1, own address space PML4 0x132000, arena 0x200000
+[    0.33 INF] [init] service ticker started (pid 101, start #2)
+[desk] #1 the desktop loop was away 169 ms: its pass took 161 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 143, hosted window and console 18), then 8 ms without the CPU (1 other tasks were ready); longest step: repaint: sidebar 60 ms
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=20), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓
+[    2.00 INF] [init] service ticker stopped -> restart (2/3)
+[euro] bg-musl (pid 102) -> task 1, own address space PML4 0x132000, arena 0x200000
+[    2.00 INF] [init] service ticker started (pid 102, start #3)
+[desk] #2 the desktop loop was away 129 ms: its pass took 123 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 123, hosted window and console 0), then 6 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 75 ms
+[desk] #3 the desktop loop was away 109 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[xhci] MSI-X delivery confirmed: 1 interrupt(s) received ✓
+[xhci-rpt] slot 1 kbd: 00 00 29 00 00 00 00 00
+[krep] [00, 00, 29, 00, 00, 00, 00, 00]
+[tour] closed at step 1 of 6: skipped (Esc or Skip)
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[    4.00 INF] [init] service ticker stopped — no restart (ceiling/policy)
+[scon] $ echo gs-alive-1
+[scon] gs-alive-1
+[scon-ready]
+[tick-late] #1 +7 ticks (181 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=7
+[xhci-rpt] slot 2 tablet: 00 cb 7f a3 7f 00 00 00
+[ptr] [00, cb, 7f, a3, 7f, 00, 00, 00]
+[tick-late] #2 +28 ticks (642 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=35
+[desk] #4 the desktop loop was away 301 ms: its pass took 299 ms (network and DevTools 0, devices and windows 299, menus 0, keys and drawing 0, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready)
+[xhci-rpt] slot 2 tablet: 00 d3 33 48 14 00 00 00
+[ptr] [00, d3, 33, 48, 14, 00, 00, 00]
+[xhci-rpt] slot 2 tablet: 01 d3 33 48 14 00 00 00
+[ptr] [01, d3, 33, 48, 14, 00, 00, 00]
+[xhci-rpt] slot 2 tablet: 00 d3 33 48 14 00 00 00
+[ptr] [00, d3, 33, 48, 14, 00, 00, 00]
+[xhci-rpt] slot 2 tablet: 00 cb 7f a3 7f 00 00 00
+[ptr] [00, cb, 7f, a3, 7f, 00, 00, 00]
+[tick-late] #3 +1 ticks (55 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=36
+[xhci-rpt] slot 2 tablet: 00 cb 7f a3 7f 00 00 00
+[ptr] [00, cb, 7f, a3, 7f, 00, 00, 00]
+[tick-late] #4 +1 ticks (54 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=37
+[scon] $ echo gs-alive-2
+[scon] gs-alive-2
+[scon-ready]
+[xhci-rpt] slot 2 tablet: 00 cb 7f a3 7f 00 00 00
+[ptr] [00, cb, 7f, a3, 7f, 00, 00, 00]
+[tick-late] #5 +1 ticks (48 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=38
+[xhci-rpt] slot 2 tablet: 00 00 03 be 0b 00 00 00
+[ptr] [00, 00, 03, be, 0b, 00, 00, 00]
+[xhci-rpt] slot 2 tablet: 01 00 03 be 0b 00 00 00
+[ptr] [01, 00, 03, be, 0b, 00, 00, 00]
+[desk] #5 the desktop loop was away 121 ms: its pass took 111 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 111, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 64 ms
+[xhci-rpt] slot 2 tablet: 00 00 03 be 0b 00 00 00
+[ptr] [00, 00, 03, be, 0b, 00, 00, 00]
+[desk] #6 the desktop loop was away 109 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 59 ms
+[xhci-rpt] slot 2 tablet: 00 cb 7f a3 7f 00 00 00
+[ptr] [00, cb, 7f, a3, 7f, 00, 00, 00]
+[desk] #7 the desktop loop was away 117 ms: its pass took 111 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 111, hosted window and console 0), then 6 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 65 ms
+[tick-late] #6 +1 ticks (47 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=39
+[scon] $ echo gs-alive-3
+[scon] gs-alive-3
+[scon-ready]
+[xhci-rpt] slot 2 tablet: 00 f1 17 a3 1b 00 00 00
+[ptr] [00, f1, 17, a3, 1b, 00, 00, 00]
+[ptr] [01, f1, 17, a3, 1b, 00, 00, 00]
+[desk] #8 the desktop loop was away 116 ms: its pass took 109 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 108, hosted window and console 0), then 7 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[ptr] [00, f1, 17, a3, 1b, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 51 00 00 00 00 00
+[krep] [00, 00, 51, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 51 00 00 00 00 00
+[krep] [00, 00, 51, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 51 00 00 00 00 00
+[krep] [00, 00, 51, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 51 00 00 00 00 00
+[krep] [00, 00, 51, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 00 00 00 00 00 00
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[xhci-rpt] slot 1 kbd: 00 00 52 00 00 00 00 00
+[krep] [00, 00, 52, 00, 00, 00, 00, 00]
+[krep] [00, 00, 52, 00, 00, 00, 00, 00]
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[ptr] [00, f1, 17, 62, 20, 00, 00, 00]
+[ptr] [01, f1, 17, 62, 20, 00, 00, 00]
+[desk] #9 the desktop loop was away 121 ms: its pass took 118 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 117, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 63 ms
+[desk] #10 the desktop loop was away 121 ms: its pass took 114 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 114, hosted window and console 0), then 7 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[desk] #11 the desktop loop was away 110 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 103, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 52 ms
+[desk] #12 the desktop loop was away 122 ms: its pass took 119 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 119, hosted window and console 0), then 2 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[krep] [00, 00, 29, 00, 00, 00, 00, 00]
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[desk] #13 the desktop loop was away 121 ms: its pass took 118 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 117, hosted window and console 1), then 2 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 63 ms
+[desk] #14 the desktop loop was away 122 ms: its pass took 117 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 117, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #15 the desktop loop was away 103 ms: its pass took 98 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 97, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 45 ms
+[scon] $ echo gs-alive-4
+[scon] gs-alive-4
+[scon-ready]
+[xdiag] ev_deq=62 ev_cycle=1 ring c0=1/t34 c1=1 c2=1 usbsts=0x8 iman=0x2 msix=44
+[desk] #16 the desktop loop was away 128 ms: its pass took 119 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 119, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 65 ms
+[desk] #17 the desktop loop was away 116 ms: its pass took 115 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 115, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[tick-late] #7 +1 ticks (49 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=40
+[desk] #18 the desktop loop was away 119 ms: its pass took 114 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 114, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 56 ms
+[scon] $ echo gs-alive-5
+[scon] gs-alive-5
+[scon-ready]
+[tick-late] #8 +1 ticks (57 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=41
+[scon] $ echo gs-alive-6
+[scon] gs-alive-6
+[scon-ready]
+[tick-late] #9 +1 ticks (44 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=42
+[desk] #19 the desktop loop was away 108 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 59 ms
+[desk] #20 the desktop loop was away 109 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 2 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #21 the desktop loop was away 109 ms: its pass took 108 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 108, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 63 ms
+[desk] #22 the desktop loop was away 115 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[tick-late] #10 +1 ticks (50 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=43
+[scon] $ echo gs-alive-7
+[scon] gs-alive-7
+[scon-ready]
+[desk] #23 the desktop loop was away 115 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[krep] [00, 00, 11, 00, 00, 00, 00, 00]
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[krep] [00, 00, 12, 00, 00, 00, 00, 00]
+[desk] #24 the desktop loop was away 121 ms: its pass took 119 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 117, hosted window and console 1), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 65 ms
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[krep] [00, 00, 17, 00, 00, 00, 00, 00]
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[krep] [00, 00, 08, 00, 00, 00, 00, 00]
+[krep] [00, 00, 00, 00, 00, 00, 00, 00]
+[desk] #25 the desktop loop was away 133 ms: its pass took 133 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 133, hosted window and console 0), then 0 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 63 ms
+[desk] #26 the desktop loop was away 149 ms: its pass took 148 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 148, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 78 ms
+[desk] #27 the desktop loop was away 160 ms: its pass took 150 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 149, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 78 ms
+[desk] #28 the desktop loop was away 104 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 0 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 57 ms
+[desk] #29 the desktop loop was away 106 ms: its pass took 98 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 98, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 58 ms
+[scon] $ echo gs-alive-8
+[scon] gs-alive-8
+[scon-ready]
+[tick-late] #11 +1 ticks (63 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=44
+[desk] #30 the desktop loop was away 114 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 59 ms
+[desk] #31 the desktop loop was away 111 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[tick-late] #12 +1 ticks (59 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=45
+[desk] #32 the desktop loop was away 108 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 2 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 56 ms
+[tick-late] #13 +5 ticks (134 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=50
+[tick-late] #14 +17 ticks (399 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=67
+[desk] #33 the desktop loop was away 191 ms: its pass took 190 ms (network and DevTools 0, devices and windows 190, menus 0, keys and drawing 0, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready)
+[scon] $ echo gs-alive-9
+[scon] gs-alive-9
+[scon-ready]
+[tick-late] #15 +1 ticks (55 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=68
+[scon] $ echo gs-alive-10
+[scon] gs-alive-10
+[scon-ready]
+[desk] #34 the desktop loop was away 111 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[desk] #35 the desktop loop was away 110 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[desk] #36 the desktop loop was away 109 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #37 the desktop loop was away 107 ms: its pass took 99 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 99, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 57 ms
+[scon] $ echo gs-alive-11
+[scon] gs-alive-11
+[scon-ready]
+[desk] #38 the desktop loop was away 107 ms: its pass took 102 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 102, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 59 ms
+[desk] #39 the desktop loop was away 101 ms: its pass took 97 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 96, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 52 ms
+[scon] $ echo gs-alive-12
+[scon] gs-alive-12
+[scon-ready]
+[tick-late] #16 +1 ticks (52 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=69
+[desk] #40 the desktop loop was away 115 ms: its pass took 108 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 108, hosted window and console 0), then 7 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[desk] #41 the desktop loop was away 113 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[desk] #42 the desktop loop was away 118 ms: its pass took 114 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 114, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 64 ms
+[scon] $ echo gs-alive-13
+[scon] gs-alive-13
+[scon-ready]
+[tick-late] #17 +1 ticks (51 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=70
+[scon] $ echo gs-alive-14
+[scon] gs-alive-14
+[scon-ready]
+[desk] #43 the desktop loop was away 114 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 6 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[desk] #44 the desktop loop was away 109 ms: its pass took 105 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 105, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[desk] #45 the desktop loop was away 109 ms: its pass took 105 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 105, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[desk] #46 the desktop loop was away 110 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[scon] $ echo gs-alive-15
+[scon] gs-alive-15
+[scon-ready]
+[desk] #47 the desktop loop was away 112 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #48 the desktop loop was away 110 ms: its pass took 105 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 105, hosted window and console 0), then 4 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 60 ms
+[desk] #49 the desktop loop was away 118 ms: its pass took 115 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 115, hosted window and console 0), then 2 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 63 ms
+[desk] #50 the desktop loop was away 121 ms: its pass took 117 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 117, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 64 ms
+[desk] #51 the desktop loop was away 109 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 5 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 48 ms
+[web] GET http://gui-smoke.invalid:80/
+[desk] #52 the desktop loop was away 110 ms: its pass took 108 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 108, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #53 the desktop loop was away 114 ms: its pass took 106 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 7 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[scon] $ echo gs-alive-16
+[scon] gs-alive-16
+[scon-ready]
+[tick-late] #18 +1 ticks (45 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=71
+[desk] #54 the desktop loop was away 110 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 106, hosted window and console 0), then 3 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #55 the desktop loop was away 107 ms: its pass took 107 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 107, hosted window and console 0), then 0 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[tick-late] #19 +1 ticks (44 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=72
+[desk] #56 the desktop loop was away 119 ms: its pass took 109 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 109, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 59 ms
+[scon] $ echo gs-alive-17
+[scon] gs-alive-17
+[scon-ready]
+[tick-late] #20 +1 ticks (55 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=73
+[scon] $ echo gs-alive-18
+[scon] gs-alive-18
+[scon-ready]
+[desk] #57 the desktop loop was away 119 ms: its pass took 110 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 110, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[desk] #58 the desktop loop was away 112 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 7 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[tick-late] #21 +1 ticks (56 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=74
+[scon] $ echo gs-alive-19
+[scon] gs-alive-19
+[scon-ready]
+[desk] #59 the desktop loop was away 115 ms: its pass took 105 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 105, hosted window and console 0), then 9 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[e2e] $ 
+[e2e] $ echo gui-smoke-term
+[e2e] gui-smoke-term
+[scon] $ echo gs-alive-20
+[scon] gs-alive-20
+[scon-ready]
+[e2e] $ ls /
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  .versions
+[e2e]   -rw-r--r--     1753 B  2026-11-14 23:14  Welcome.txt
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  agents
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  bin
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  boot
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  data
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  etc
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  home
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  lib
+[e2e]   drwxrwxrwx        0 B  2026-11-14 23:14  tmp
+[e2e]   drwxr-xr-x        0 B  2026-11-14 23:14  var
+[e2e] $ uname
+[e2e] EuroOS
+[scon] $ echo gs-alive-21
+[scon] gs-alive-21
+[scon-ready]
+[tick-late] #22 +1 ticks (54 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=75
+[desk] #60 the desktop loop was away 113 ms: its pass took 104 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 104, hosted window and console 0), then 8 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[tick-late] #23 +1 ticks (51 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=76
+[tick-late] #24 +1 ticks (45 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=77
+[scon] $ echo gs-alive-22
+[scon] gs-alive-22
+[scon-ready]
+[g5] scrub #1: 86 inodes, 344 data blocks, data verified 85, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 0 ms
+[scon] $ echo gs-alive-23
+[scon] gs-alive-23
+[scon-ready]
+[scon] $ echo gs-alive-24
+[scon] gs-alive-24
+[scon-ready]
+[scon] $ echo gs-alive-25
+[scon] gs-alive-25
+[scon-ready]
+[scon] $ echo gs-alive-26
+[scon] gs-alive-26
+[scon-ready]
+[scon] $ echo gs-alive-27
+[scon] gs-alive-27
+[scon-ready]
+[scon] $ echo gs-alive-28
+[scon] gs-alive-28
+[scon-ready]
+[scon] $ echo gs-alive-29
+[scon] gs-alive-29
+[scon-ready]
+[scon] $ echo gs-alive-30
+[scon] gs-alive-30
+[scon-ready]
+[scon] $ echo gs-alive-31
+[scon] gs-alive-31
+[scon-ready]
+[scon] $ echo gs-alive-32
+[scon] gs-alive-32
+[scon-ready]
+[bb6] EuroAgent dispatch: intent='list files' → agent loop executed (cap-gated, audited)
+[scon] $ echo gs-alive-33
+[scon] gs-alive-33
+[scon-ready]
+[euroupdate] no slot partitions on the boot disk: automatic updates are off (install EuroOS to enable them)
+[scon] $ echo gs-alive-34
+[scon] gs-alive-34
+[scon-ready]
+[scon] $ echo gs-alive-35
+[scon] gs-alive-35
+[scon-ready]
+[desk] #100 the desktop loop was away 109 ms: its pass took 102 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 102, hosted window and console 0), then 6 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 62 ms
+[scon] $ echo gs-alive-36
+[scon] gs-alive-36
+[scon-ready]
+[scon] $ echo gs-alive-37
+[scon] gs-alive-37
+[scon-ready]
+[scon] $ echo gs-alive-38
+[scon] gs-alive-38
+[scon-ready]
+[scon] $ echo gs-alive-39
+[scon] gs-alive-39
+[scon-ready]
+[scon] $ echo gs-alive-40
+[scon] gs-alive-40
+[scon-ready]
+[scon] $ echo gs-alive-41
+[scon] gs-alive-41
+[scon-ready]
+[scon] $ echo gs-alive-42
+[scon] gs-alive-42
+[scon-ready]
+[scon] $ echo gs-alive-43
+[scon] gs-alive-43
+[scon-ready]
+[scon] $ echo gs-alive-44
+[scon] gs-alive-44
+[scon-ready]
+[scon] $ echo gs-alive-45
+[scon] gs-alive-45
+[scon-ready]
+[scon] $ echo gs-alive-46
+[scon] gs-alive-46
+[scon-ready]
+[g5] scrub #2: 87 inodes, 344 data blocks, data verified 86, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 0 ms
+[scon] $ echo gs-alive-47
+[scon] gs-alive-47
+[scon-ready]
+[scon] $ echo gs-alive-48
+[scon] gs-alive-48
+[scon-ready]
+[scon] $ echo gs-alive-49
+[scon] gs-alive-49
+[scon-ready]
+[scon] $ echo gs-alive-50
+[scon] gs-alive-50
+[scon-ready]
+[desk] #150 the desktop loop was away 116 ms: its pass took 115 ms (network and DevTools 0, devices and windows 0, menus 0, keys and drawing 115, hosted window and console 0), then 1 ms without the CPU (0 other tasks were ready); longest step: repaint: sidebar 61 ms
+[notify] Workspace: Switched to desktop 2
+[notify] Workspace: Switched to desktop 1
+[scon] $ echo gs-alive-51
+[scon] gs-alive-51
+[scon-ready]
+[scon] $ echo gs-alive-52
+[scon] gs-alive-52
+[scon-ready]
+[e2e] $ 
+[e2e] $ echo gui-smoke-launcher
+[e2e] gui-smoke-launcher
+[scon] $ echo gs-alive-53
+[scon] gs-alive-53
+[scon-ready]
+[scon] $ echo gs-alive-54
+[scon] gs-alive-54
+[scon-ready]
+[scon] $ echo gs-alive-55
+[scon] gs-alive-55
+[scon-ready]
+[tick-late] #76 +23 ticks (546 Mcycles) rip=0x71c8e873 cs=0x8 task 0 last-syscall=231(a1=0x0) faults-total=0 (0 Mcycles) lost-total=151
+[scon] $ echo gs-alive-56
+[scon] gs-alive-56
+[scon-ready]
+[scon] $ repaints
+[scon] desktop: 343 full repaints, 12965 loop iterations, 16268 timer ticks since start
+[scon-ready]
+[scon] $ repaints
+[scon] desktop: 344 full repaints, 13260 loop iterations, 16572 timer ticks since start
+[scon-ready]
+[scon] $ echo gs-alive-57
+[scon] gs-alive-57
+[scon-ready]
+[scon] $ echo gs-alive-58
+[scon] gs-alive-58
+[scon-ready]
+[scon] $ echo gs-alive-59
+[scon] gs-alive-59
+[scon-ready]
+[scon] $ keymap be-azerty
+[scon] keyboard layout → Belgian AZERTY (be-azerty)
+[scon-ready]
+[e2e] $ 
+[e2e] $ echo @#{}[]~€\|
+[e2e] @#{}[]~€\
+[scon] $ keymap fr-azerty
+[scon] keyboard layout → French AZERTY (fr-azerty)
+[scon-ready]
+[e2e] $ 
+[g5] scrub #3: 87 inodes, 344 data blocks, data verified 86, errors 0, unrecoverable 0, superblock OK, bitmap OK, took 0 ms
+[e2e] $ echo @#{}[]~€\|
+[e2e] @#{}[]~€\
+[scon] $ keymap de-qwertz
+[scon] keyboard layout → German QWERTZ (de-qwertz)
+[scon-ready]
+[e2e] $ 
+[e2e] $ echo @#{}[]~€\|
+[e2e] @#{}[]~€\
+[scon] $ echo gs-alive-60
+[scon] gs-alive-60
+[scon-ready]
+[scon] $ keymap be-azerty
+[scon] keyboard layout → Belgian AZERTY (be-azerty)
+[scon-ready]
+[scon] $ echo gs-alive-61
+[scon] gs-alive-61
+[scon-ready]
+[e2e] $ @
+[e2e] unknown command: @  (type 'help')
+[scon] $ echo gs-alive-62
+[scon] gs-alive-62
+[scon-ready]
+[scon] $ keymap us
+[scon] keyboard layout → US QWERTY (us)
+[scon-ready]
+[scon] $ echo gs-alive-63
+[scon] gs-alive-63
+[scon-ready]
+[e2e] $ 
+[e2e] $ help
+[e2e] EuroShell commands by topic.  help <command> = what it does + an example.
+[e2e] F1 = help window for the active app,  F2 = keyboard shortcuts,  help tour = the tour.
+[e2e] Files     ls cat write mkdir cp mv rm rmdir touch stat find df chmod open
+[e2e]           trash eurosnap versions fsck mount
+[e2e] Text      echo grep head tail wc sort uniq cut tr seq tee sha256sum base64
+[e2e] System    uname hostname date uptime free ps kill dmesg journal lspci lsdev
+[e2e]           lsblk hwprobe services battery keymap locale notify repaints clip
+[e2e]           clear reboot shutdown
+[e2e] Users     whoami id login logout sudo sessions eurousers chown quota
+[e2e] Security  caps apps app guard firewall audit vault europol immutable integrity
+[e2e]           eurohealth portal
+[e2e] Network   net netstat ping nslookup fetch https httpd vpn wifi
+[e2e] Apps      eupkg euroupdate install euroinstall
+[e2e] Programs  calc js chrome doom print scan agent llm wasm help
+[e2e] Pipes and redirection: a | b    cmd > file    cmd >> file
+[scon] $ echo gs-alive-64
+[scon] gs-alive-64
+[scon-ready]
+[e2e] $ 
+[ring3->sys_write] EuroOS userspace program (C, ring 3) — via syscalls:
+[ring3->sys_write]   getpid() = 
+[ring3->sys_write] 1
+[ring3->sys_write] 
+[ring3->sys_write]   uname()  = 
+[ring3->sys_write] EuroKernel 0.1-alpha x86_64
+[ring3->sys_write] 
+[ring3->sys_write]   read(/etc/hostname, 
+[ring3->sys_write] 11
+[ring3->sys_write]  bytes) = 
+[ring3->sys_write] eurokernel
+[cap] syscall 60 DENIED — missing capability
+[ring3->sys_write]   net()    = DENIED by kernel (process lacks CAP_NET)
+[ring3->sys_write]   malloc() = 
+[ring3->sys_write] dynamic memory via sbrk()/malloc()!
+[ring3->sys_write] 
+[e2e] $ hello
+[e2e] EuroOS userspace program (C, ring 3) — via syscalls:
+[e2e]   getpid() = 1
+[e2e]   uname()  = EuroKernel 0.1-alpha x86_64
+[e2e]   read(/etc/hostname, 11 bytes) = eurokernel
+[e2e]   net()    = DENIED by kernel (process lacks CAP_NET)
+[e2e]   malloc() = dynamic memory via sbrk()/malloc()!
+[e2e] [exit 0, abi=native]
+[scon] $ echo gs-alive-65
+[scon] gs-alive-65
+[scon-ready]
+[e2e] $ ps
+[e2e]   PID  TYPE     ADDRESS SPACE  STATUS
+[e2e]     1  shell    shared        active (foreground)
+[e2e]     7  daemon   shared        active (EuroMonitor)
+[scon] $ echo gs-alive-66
+[scon] gs-alive-66
+[scon-ready]
+[ring3->sys_write] EuroOS userspace program (C, ring 3) — via syscalls:
+[ring3->sys_write]   getpid() = 
+[ring3->sys_write] 1
+[ring3->sys_write] 
+[ring3->sys_write]   uname()  = 
+[ring3->sys_write] EuroKernel 0.1-alpha x86_64
+[ring3->sys_write] 
+[ring3->sys_write]   read(/etc/hostname, 
+[ring3->sys_write] 11
+[ring3->sys_write]  bytes) = 
+[ring3->sys_write] eurokernel
+[cap] syscall 60 DENIED — missing capability
+[ring3->sys_write]   net()    = DENIED by kernel (process lacks CAP_NET)
+[ring3->sys_write]   malloc() = 
+[ring3->sys_write] dynamic memory via sbrk()/malloc()!
+[ring3->sys_write] 
+[e2e] $ hello
+[e2e] EuroOS userspace program (C, ring 3) — via syscalls:
+[e2e]   getpid() = 1
+[e2e]   uname()  = EuroKernel 0.1-alpha x86_64
+[e2e]   read(/etc/hostname, 11 bytes) = eurokernel
+[e2e]   net()    = DENIED by kernel (process lacks CAP_NET)
+[e2e]   malloc() = dynamic memory via sbrk()/malloc()!
+[e2e] [exit 0, abi=native]
+[e2e] $ 
+[e2e] $ echo gui-smoke-after-foreground
+[e2e] gui-smoke-after-foreground
+[scon] $ echo gs-alive-67
+[scon] gs-alive-67
+[scon-ready]
+[scon] $ echo gs-alive-68
+[scon] gs-alive-68
+[scon-ready]

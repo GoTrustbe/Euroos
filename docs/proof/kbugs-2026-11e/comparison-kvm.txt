@@ -1,0 +1,41 @@
+# markers-compare.py: validate-2026-11d KVM boots (/srv/euroos/final-runs/kvm) -> this round
+== /srv/euroos/final-runs/kvm/k-1g.log  vs  kvm/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/kvm/k-2g.log  vs  kvm/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/kvm/k-4g.log  vs  kvm/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+== /srv/euroos/final-runs/kvm/k-8g.log  vs  kvm/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 5
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   rename-disk: OKx1
+   reseed: OKx1

@@ -1,0 +1,22 @@
+# markers-compare.py, public image: validate-2026-11d (base/pub-final.markers) -> 48dfd05
+== base/pub-final.markers  vs  /tmp/gs-pub.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   ap-parity: OKx1
+   keyfocus: OKx1
+   root-heap: OKx1
+
+# markers-compare.py, public image: 2026.11.14 download -> 48dfd05 (both booted here, gui-smoke, KVM 4 vCPU 4 GiB)
+== /tmp/gs-rel.markers  vs  /tmp/gs-pub.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   ap-parity: OKx1
+   root-heap: OKx1
+
+# [smp] lines, public image: download vs 48dfd05
+runs/gs-rel/serial.log:[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+runs/gs-pub/serial.log:[smp] 0/3 AP(s) idle in hlt, taking kernel work from per-CPU queues

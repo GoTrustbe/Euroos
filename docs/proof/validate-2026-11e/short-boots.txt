@@ -1,0 +1,26 @@
+# short-boots.sh: boots of the self-test image of 48dfd05 until [rename] rename over (KVM, 2 vCPU, -nic none), lanes of two CPUs
+boots: 108  with a FAILED line: 21  crash lines in any: 0
+seeded: 108  [3d8]/[3d7]/[3d3]/[linux-rand] all OK: 108
+distinct values of each random number kind:
+FAILED lines in the boots:
+short-a/boot-1.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-a/boot-3.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-15.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-16.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-17.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-19.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-20.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-b/boot-23.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-c/boot-1.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-d/boot-1.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-f/boot-12.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-f/boot-5.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-f/boot-6.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-f/boot-8.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-g/boot-8.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-10.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-1.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-2.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-4.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-8.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED
+short-j/boot-9.log: [fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=false (exit 0) → FAILED

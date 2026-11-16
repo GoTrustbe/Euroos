@@ -179,14 +179,23 @@ pub fn start_timer_on_this_cpu(vector: u8) {
     }
 }
 
+/// S6: mask or unmask this core's periodic timer (vector `vector`); the count
+/// keeps running, so unmasking resumes the same period.
+pub fn set_timer_masked(vector: u8, masked: bool) {
+    unsafe { wr(REG_LVT_TIMER, LVT_PERIODIC | vector as u32 | if masked { 1 << 16 } else { 0 }) };
+}
+
 /// Send an ordinary (fixed-delivery) inter-processor interrupt to `apic_id` on
 /// `vector`. For cross-CPU signaling (reschedule, halt, TLB shootdown).
 pub fn send_ipi(apic_id: u8, vector: u8) {
-    unsafe {
+    // S3: interrupts off around the two ICR writes: an interrupt handler between
+    // them that sends its own IPI (a wake from an interrupt, a bounce) would
+    // leave this one with its destination.
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
         wr(REG_ICR_HIGH, (apic_id as u32) << 24);
         wr(REG_ICR_LOW, 0x0000_4000 | vector as u32); // fixed, assert, edge, physical dest
         wait_icr_idle();
-    }
+    })
 }
 
 /// Send an NMI to core `apic_id` (delivery mode 100b; the vector is ignored).

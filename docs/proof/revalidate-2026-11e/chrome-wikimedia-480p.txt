@@ -1,0 +1,7 @@
+# wmvideo.py: Wikimedia Big Buck Bunny 480p VP9 + Opus, 2 x 90 s, --smp 2, 6 GiB
+[chrome-smoke] PASS - 4/4 steps ok, report and screenshots in /dev/shm/rv/wm480b
+[wmvideo] PASS
+-- aborts=0 spawn-refused=0 oom=0 timer-frozen=0 crash/watchdog=0
+round 1: 90 s	picture: 22 of 22 consecutive screendumps differ; sound: 17 of 18 five-second windows
+round 2: 90 s	picture: 22 of 22 consecutive screendumps differ; sound: 17 of 18 five-second windows
+(first attempt with the default 360p URL: the file does not play, 0 of 22 screendumps differ; runs/wm360-failed.out, not counted)

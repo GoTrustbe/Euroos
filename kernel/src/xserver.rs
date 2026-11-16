@@ -544,8 +544,8 @@ pub mod keylat {
     }
     /// How long woken tasks waited for the CPU (all tasks, since boot or "keylat reset").
     pub fn wake_line() -> alloc::string::String {
-        let mut l = alloc::format!("[keylat] woken tasks waited for the CPU (ms; wake hand-off {}):",
-            if crate::sched::WAKE_YIELD.load(Ordering::Relaxed) { "on" } else { "off" });
+        let mut l = alloc::format!("[keylat] woken tasks waited for the CPU (ms; wake preemption, {} reschedule IPIs):",
+            crate::sched::RESCHED_IPIS.load(Ordering::Relaxed));
         for (i, b) in crate::sched::WAKE_HIST.iter().enumerate() {
             l.push_str(&alloc::format!(" {} {}", crate::sched::WAKE_HIST_MS[i], b.load(Ordering::Relaxed)));
         }

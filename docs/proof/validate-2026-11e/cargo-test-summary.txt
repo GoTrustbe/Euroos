@@ -1,0 +1,4 @@
+# cargo test (workspace, wt-val at 48dfd05 = 72976f7 + docs + the app-control auto-sync), host .16
+188 test binaries, 1381 passed, 0 failed, 1 ignored
+FAILED/panicked lines: 0
+rc=0

@@ -398,6 +398,20 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         // EuroFS lives directly on the disk → changes are already persistent.
         "reboot" => crate::power::reboot(),
         "shutdown" | "poweroff" => crate::power::shutdown(),
+        // BUG-089: 32 bytes of the kernel CSPRNG (what getrandom gives a program).
+        "random" => {
+            let mut b = [0u8; 32];
+            if crate::entropy::getrandom(&mut b) {
+                let (n, r, w) = crate::entropy::reseed_stats();
+                let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+                vec![format!(
+                    "random: {hex} · reseeds {n}, after a restore {r}, VM generation ID {}",
+                    if w { "watched" } else { "none" }
+                )]
+            } else {
+                vec![String::from("random: the CSPRNG is not seeded")]
+            }
+        }
         "uptime" => {
             let t = crate::interrupts::ticks();
             let mut out = vec![format!("uptime: {t} timer ticks (~{} s) at 100 Hz APIC timer", t / 100)];
@@ -530,7 +544,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
                 if q { "quiet" } else { "everything" }, muted / 1024),
                 format!(
                 "desktop loop output: {} ({} KiB sent through the queue, {waiting} bytes waiting, queue full {full} times)",
-                if d { "deferred" } else { "direct" }, sent / 1024)]
+                if d { "deferred" } else { "direct" }, sent / 1024),
+                {
+                    let (busy, load_us) = crate::serial::take_tx_stats();
+                    format!("[serial-tx] sender found the transmitter busy {busy} times (slept, did not poll); longest load with interrupts off {load_us} us since the last look")
+                }]
         }
         "ramfiles" => {
             let out = crate::ring3::ram_files_census();
@@ -670,18 +688,53 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             }
             lines
         }
-        // "wakeyield on|off": the wake hand-off of the scheduler (W23).
-        "wakeyield" => {
-            match arg1 {
-                "on" => crate::sched::WAKE_YIELD.store(true, core::sync::atomic::Ordering::Relaxed),
-                "off" => crate::sched::WAKE_YIELD.store(false, core::sync::atomic::Ordering::Relaxed),
-                _ => {}
-            }
-            let l = format!("[wakeyield] wake hand-off {}",
-                if crate::sched::WAKE_YIELD.load(core::sync::atomic::Ordering::Relaxed) { "on" } else { "off" });
+        // Scheduler measurement and tests (docs/design/SMP-SCHEDULER.md, S0).
+        "sched-stat" => crate::schedstat::sched_stat(arg1),
+        "hogtest" => crate::schedstat::hogtest(ctx.mem, line),
+        "hogs" => crate::schedstat::hogs_cmd(ctx.mem, arg1),
+        "renice" => {
+            let t: usize = arg1.trim().parse().unwrap_or(usize::MAX);
+            let l = match (crate::sched::nice_of(t), arg2.trim().parse::<i8>()) {
+                (Some(old), Ok(n)) => {
+                    crate::sched::set_nice(t, n);
+                    alloc::format!("[renice] task {t}: nice {old} -> {}", crate::sched::nice_of(t).unwrap_or(n))
+                }
+                (Some(old), Err(_)) => alloc::format!("[renice] task {t}: nice {old}"),
+                (None, _) => alloc::format!("[renice] no task {t} (renice TASK [NICE])"),
+            };
             crate::serial_println!("{l}");
-            vec![l]
+            alloc::vec![l]
         }
+        "drvbudget" => {
+            if let Ok(p) = arg1.trim().parse::<u64>() {
+                crate::sched::set_driver_budget(p);
+            }
+            let (t, over) = crate::sched::driver_stats();
+            let l = alloc::format!(
+                "[drvbudget] drivers {:?} at nice {} within {} % of every {} ms, nice {} past it; over the budget {} times",
+                t, crate::sched::DRIVER_NICE, crate::sched::driver_budget(), crate::sched::driver_window() * 10, crate::sched::DRIVER_OVER_NICE, over
+            );
+            crate::serial_println!("{l}");
+            alloc::vec![l]
+        }
+        "wakelat" => crate::schedstat::wakelat(ctx.mem, arg1),
+        // S3-S6: ring 3 on the application processors.
+        "smpuser" => crate::schedstat::smpuser_cmd(arg1),
+        "smpstat" => {
+            let v = crate::apuser::stat_lines();
+            for l in v.iter() {
+                crate::serial_println!("{l}");
+            }
+            v
+        }
+        "apuser" => crate::schedstat::apuser_test(ctx.mem, line),
+        "tlbsmp" => crate::schedstat::tlbsmp_test(ctx.mem, arg1),
+        "killsmp" => crate::schedstat::killsmp_test(ctx.mem, arg1),
+        "manysmp" => crate::schedstat::many_smp_test(ctx.mem),
+        "spread" => crate::schedstat::spread_test(ctx.mem, line),
+        "apidle" => crate::schedstat::apidle_test(arg1),
+        "connif0" => crate::schedstat::connif0_test(ctx.mem, arg1),
+        "if0test" => crate::schedstat::if0test(arg1.trim().parse().unwrap_or(10)),
         "dmesg" => {
             // Kernel message buffer (kmsg ring). `dmesg N` shows the last N lines.
             let all = crate::klog::snapshot();

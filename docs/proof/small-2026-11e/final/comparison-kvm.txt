@@ -1,0 +1,41 @@
+# markers-compare.py, KVM self-test boots of the final image (HEAD of feature/small-2026-11e) against validate-2026-11d (/srv/euroos/final-runs/kvm)
+
+== 1 GiB
+== /srv/euroos/final-runs/kvm/k-1g.log  vs  final/kvm/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+
+== 2 GiB
+== /srv/euroos/final-runs/kvm/k-2g.log  vs  final/kvm/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+
+== 4 GiB
+== /srv/euroos/final-runs/kvm/k-4g.log  vs  final/kvm/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+
+== 8 GiB
+== /srv/euroos/final-runs/kvm/k-8g.log  vs  final/kvm/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2

@@ -94,6 +94,15 @@ pub fn free_range(base: u64, frames: usize) {
     }
 }
 
+/// The RAM of the machine in kB (usable at boot): what sysinfo and
+/// /proc/meminfo call the total.
+pub static RAM_TOTAL_KB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Is `addr` a frame of the process pool?
+pub fn owns(addr: u64) -> bool {
+    POOL.lock().as_ref().map(|p| p.owns(addr)).unwrap_or(false)
+}
+
 /// Free frames in the pool (for diagnostics / `dmesg`).
 pub fn free_frames() -> usize {
     POOL.lock().as_ref().map(|p| p.free_frames()).unwrap_or(0)

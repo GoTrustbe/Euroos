@@ -1,0 +1,39 @@
+# [fair] hogtest 5 10 8, KVM 4 vCPU 4 GiB, e1000e restrict; first-round task 0 share of each boot (self-test image of 732e5f5; fair/ = beside the soak, fairq/ = quiet machine if present)
+fair/f1: 1.5 s, task 0 share 46 %
+fair/f10: 1.6 s, task 0 share 44 %
+fair/f2: 1.5 s, task 0 share 45 %
+fair/f3: 1.5 s, task 0 share 45 %
+fair/f4: 1.5 s, task 0 share 45 %
+fair/f5: 1.5 s, task 0 share 45 %
+fair/f6: 1.5 s, task 0 share 45 %
+fair/f7: 1.5 s, task 0 share 45 %
+fair/f8: 1.5 s, task 0 share 45 %
+fair/f9: 1.6 s, task 0 share 43 %
+fairq/q1: 1.7 s, task 0 share 46 %
+fairq/q10: 1.6 s, task 0 share 44 %
+fairq/q2: 1.5 s, task 0 share 46 %
+fairq/q3: 1.5 s, task 0 share 45 %
+fairq/q4: 1.4 s, task 0 share 46 %
+fairq/q5: 1.5 s, task 0 share 45 %
+fairq/q6: 1.5 s, task 0 share 45 %
+fairq/q7: 1.5 s, task 0 share 46 %
+fairq/q8: 1.5 s, task 0 share 45 %
+fairq/q9: 1.5 s, task 0 share 45 %
+
+# PUBLIC image (hogtest through the shell, as fix-d2 final-fair): first-round task 0 share, quiet machine, 5 guests of 4 vCPU on separate cores, siblings idle
+fairp/p1: 0.4 s, task 0 share 49 %  all 10 rounds: 49 51 53 56 59 53 56 54 59 53 49 
+fairp/p10: 0.4 s, task 0 share 50 %  all 10 rounds: 50 52 55 53 55 52 58 54 55 55 50 
+fairp/p2: 0.4 s, task 0 share 52 %  all 10 rounds: 52 53 51 56 54 58 54 54 51 55 51 
+fairp/p3: 0.4 s, task 0 share 48 %  all 10 rounds: 48 52 54 54 56 57 51 55 53 55 48 
+fairp/p4: 0.4 s, task 0 share 50 %  all 10 rounds: 50 54 56 53 55 56 56 54 56 56 50 
+fairp/p5: 0.4 s, task 0 share 52 %  all 10 rounds: 52 51 56 54 55 57 53 56 56 52 51 
+fairp/p6: 0.4 s, task 0 share 51 %  all 10 rounds: 51 56 53 58 53 58 53 56 58 55 51 
+fairp/p7: 0.4 s, task 0 share 50 %  all 10 rounds: 50 52 57 55 53 52 55 55 55 55 50 
+fairp/p8: 0.5 s, task 0 share 47 %  all 10 rounds: 47 55 55 54 55 53 55 56 55 52 47 
+fairp/p9: 0.4 s, task 0 share 50 %  all 10 rounds: 50 53 55 54 54 53 55 55 55 55 50 
+fairp/v1p1: 0.4 s, task 0 share 47 %  all 10 rounds: 47 52 59 53 58 53 55 56 56 54 47 
+fairp/v1p2: 0.5 s, task 0 share 47 %  all 10 rounds: 47 49 51 51 53 53 51 57 53 59 47 
+fairp/v1p3: 0.5 s, task 0 share 46 %  all 10 rounds: 46 55 54 54 58 53 54 56 53 55 46 
+fairp/v1p4: 0.4 s, task 0 share 51 %  all 10 rounds: 51 52 54 57 54 54 54 54 57 55 51 
+fairp/v1p5: 0.5 s, task 0 share 45 %  all 10 rounds: 45 57 52 57 57 53 55 57 54 53 45 
+(p* = 732e5f5 public image, v1p* = 06e913e public image; the self-test image runs ring-3 demo spinners next to it: 45-46 % and 1.5 s per round, not comparable)

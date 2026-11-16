@@ -1,0 +1,2 @@
+/srv/euroos/mem2-runs/runs/p4/serial.log: 130 forks, arena+demand ms median 191.5, mean 202.2, p90 331, max 627; arena KiB copied per fork median 23632.0
+/srv/euroos/final-runs/runs/soak2hb/serial.log: 131 forks, arena+demand ms median 230, mean 236.1, p90 366, max 695; arena KiB copied per fork median 23632

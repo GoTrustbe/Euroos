@@ -1,0 +1,9 @@
+# markers-compare.py, public image: validate-2026-11d (base/pub-final.markers) -> r2 (72976f7)
+== base/pub-final.markers  vs  /srv/euroos/reg-runs/out/final/pub.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   ap-parity: OKx1
+   keyfocus: OKx1
+   root-heap: OKx1

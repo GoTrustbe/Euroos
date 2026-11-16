@@ -32,6 +32,8 @@ pub struct VirtioBlk {
     flush_ok: bool, // VIRTIO_BLK_F_FLUSH negotiated → the FLUSH command is valid
     discard_ok: bool, // VIRTIO_BLK_F_DISCARD negotiated → the DISCARD (TRIM) command is valid
     read_only: bool, // VIRTIO_BLK_F_RO: the device refuses writes, so do we
+    /// Local APIC id the completion MSI-X goes to, 0xFF without one (S8).
+    msix_dest: u8,
 }
 
 /// Up to 4 virtio-blk disks (root + extra mounts). Index 0 = the first/root.
@@ -110,8 +112,12 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
     // J2: MSI-X on the storage controller. ADDITIVE — the used-ring poll remains
     // the completion confirmation; the IRQ proves interrupt-driven completion.
     let msix_n = tp.enable_msix(0, crate::interrupts::VIRTIO_BLK_MSIX_VECTOR, crate::apic::lapic_id() as u8);
+    let mut msix_dest = 0xFFu8;
     if msix_n > 0 {
         let rb = tp.set_queue_vector(0, 0);
+        if rb != eurovirtio::NO_VECTOR {
+            msix_dest = crate::apic::lapic_id() as u8;
+        }
         tp.set_config_vector(eurovirtio::NO_VECTOR);
         crate::serial_println!(
             "[j2-blk] virtio-blk MSI-X on ({} entries) → vector {:#x}, queue_msix_vector readback={:#06x}",
@@ -132,7 +138,7 @@ fn setup_device(dev: &crate::pci::PciDevice, falloc: &mut FrameAllocator) -> Opt
         if flush_ok { "on (real durability)" } else { "n/a" },
         if read_only { " · READ-ONLY" } else { "" }
     );
-    Some(VirtioBlk { tp, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok, discard_ok, read_only })
+    Some(VirtioBlk { tp, vq, capacity_sectors, hdr, data, status: status_buf, flush_ok, discard_ok, read_only, msix_dest })
 }
 
 // Max bytes per request. Was 4096 (one EuroFS block): serving a 495 MB chrome binary
@@ -179,12 +185,30 @@ pub static KICK_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomi
 pub static KICK_CYCLES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
+    let if0 = !x86_64::instructions::interrupts::are_enabled();
     let t0 = core::arch::x86_64::_rdtsc();
     let r = kick_and_wait_inner(blk);
+    let c = core::arch::x86_64::_rdtsc().wrapping_sub(t0);
     KICK_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    KICK_CYCLES.fetch_add(core::arch::x86_64::_rdtsc().wrapping_sub(t0),
-        core::sync::atomic::Ordering::Relaxed);
+    KICK_CYCLES.fetch_add(c, core::sync::atomic::Ordering::Relaxed);
+    WAIT_MAX.fetch_max(c, core::sync::atomic::Ordering::Relaxed);
+    if if0 {
+        WAIT_IF0_MAX.fetch_max(c, core::sync::atomic::Ordering::Relaxed);
+    }
     r
+}
+
+/// Halts in a request wait that waited for the completion interrupt (S8).
+pub static IRQ_WAITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The longest request wait since the last timer tick took them, and the longest
+/// one with interrupts off (cycles): `[if0-window]` names a disk wait as the
+/// cause of a late tick (BUG-182).
+static WAIT_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static WAIT_IF0_MAX: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn take_wait_max() -> (u64, u64) {
+    (WAIT_MAX.swap(0, core::sync::atomic::Ordering::Relaxed), WAIT_IF0_MAX.swap(0, core::sync::atomic::Ordering::Relaxed))
 }
 
 /// How long one request may take before the disk counts as not answering. A
@@ -195,7 +219,8 @@ unsafe fn kick_and_wait(blk: &mut VirtioBlk) -> bool {
 /// device while the next one reused its descriptors and buffers (BUG-191).
 const REQ_TIMEOUT_S: u64 = 60;
 /// Requests slower than this are logged (the first few), with what they were.
-const REQ_SLOW_MS: u64 = 2_000;
+/// 200 ms since S8: a wait that long used to be a window without timer ticks.
+const REQ_SLOW_MS: u64 = 200;
 
 /// Requests that took longer than [`REQ_TIMEOUT_S`] / [`REQ_SLOW_MS`], and requests
 /// the device completed with a status other than OK (`blkstat` style counters).
@@ -265,6 +290,31 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
     let limit = REQ_TIMEOUT_S * cycles_per_s();
     let kind = (blk.hdr as *const u32).read_volatile();
     let sector = ((blk.hdr + 8) as *const u64).read_volatile();
+    // S8 (BUG-182): a system call or demand fault that reads the disk runs with
+    // IF=0 and used to spin here for the whole request: on a slow host disk no
+    // timer tick, no input and no NIC interrupt for hundreds of ms
+    // ([if0-window] cause=blk). When the completion MSI-X comes to this CPU and
+    // the caller holds no tracked lock an interrupt handler could want, wait for
+    // it with interrupts on (`sti; hlt`): ticks keep the clock and poll the
+    // devices meanwhile. The caller keeps the CPU: a tick does not switch tasks
+    // while a caller with IF=0 waits here (sched::NoPreempt), so the call stays
+    // as atomic as before. A caller with IF=1 could be preempted already.
+    let irq_wait = blk.msix_dest != 0xFF
+        && crate::apic::lapic_id() as u8 == blk.msix_dest
+        && crate::klock::held_here() == 0;
+    let was_if = x86_64::instructions::interrupts::are_enabled();
+    let _np = if irq_wait && !was_if { Some(crate::sched::NoPreempt::new()) } else { None };
+    struct IfBack(bool);
+    impl Drop for IfBack {
+        fn drop(&mut self) {
+            if self.0 {
+                x86_64::instructions::interrupts::enable();
+            } else {
+                x86_64::instructions::interrupts::disable();
+            }
+        }
+    }
+    let _ifb = IfBack(was_if);
     loop {
         if blk.vq.used_idx() != blk.vq.last_used {
             blk.vq.last_used = blk.vq.used_idx();
@@ -284,7 +334,14 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
             }
             return false;
         }
-        core::hint::spin_loop();
+        if irq_wait {
+            // `sti; hlt` is atomic: a completion that lands after the check above
+            // is taken by the hlt and wakes it. Interrupts off again for the check.
+            IRQ_WAITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            core::arch::asm!("sti", "hlt", "cli", options(nomem, nostack));
+        } else {
+            core::hint::spin_loop();
+        }
     }
 }
 
@@ -460,6 +517,11 @@ pub fn present() -> bool {
 /// Is disk `dev` present?
 pub fn present_dev(dev: usize) -> bool {
     unsafe { dev < MAX_BLK && (*core::ptr::addr_of!(BLKS))[dev].is_some() }
+}
+
+/// Does disk `dev` refuse writes (VIRTIO_BLK_F_RO)?
+pub fn is_read_only_dev(dev: usize) -> bool {
+    unsafe { dev < MAX_BLK && (*core::ptr::addr_of!(BLKS))[dev].as_ref().map(|b| b.read_only).unwrap_or(false) }
 }
 
 /// Number of initialized virtio-blk disks.

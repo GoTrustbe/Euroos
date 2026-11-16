@@ -1,0 +1,302 @@
+# targeted step tests: sched.py IMAGE (KVM, -nic none), serial console commands; image tags: s0 = ab8e32c, s1 = cdf5aff, s1t = 2ef9d7b (S1 + the new [wakelat]), s2 = 80c0d69, s8 = 8fe1de9; pub = public image, st = self-test image
+
+== s0a: 
+[sched.py] console up after 2 s
+[sched.py] $ sched-stat start: ok 13 ms
+  [sched-stat] window started (sched-stat prints what happened since)
+[sched.py] $ hogtest 5: ok 818 ms
+  [fair] hogtest 5 + churn proc 8: 0.8 s, task 0 share 28 % (desktop task 25 %, its glibc processes 3 %, hogs 62 %, other tasks 10 %) -> FAILED
+[sched.py] $ hogtest nice: ok 3092 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 1658 ms against 1339 ms = 1.24:1 (want 3.06:1 +-15 %) -> FAILED
+[sched.py] $ wakelat: ok 6424 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 400 rounds (exit 77): wake to run p50 1.06 ms p99 1.11 ms max 1.13 ms, round trip p50 1.13 ms p99 1.19 ms; hogs kept 87 % of their throughput -> FAILED
+[sched.py] $ sched-stat: ok 217 ms
+  [sched-stat] 10.4 s: 1039 ticks (4 with the desktop loop idle), desktop loop halted 14 ms, 360 switches/s, 223 syscalls/s
+  [sched-stat]   t1: ran 31.2 % (3232 ms), ticks user 338 kernel 0, 0 syscalls/s, 33 switches/s
+  [sched-stat]   t3: ran 27.9 % (2890 ms), ticks user 304 kernel 0, 0 syscalls/s, 29 switches/s
+  [sched-stat]   t5: ran 14.8 % (1531 ms), ticks user 170 kernel 0, 0 syscalls/s, 16 switches/s
+  [sched-stat]   t4: ran 14.5 % (1504 ms), ticks user 170 kernel 0, 0 syscalls/s, 16 switches/s
+  [sched-stat]   t7 (kernel task): ran 4.5 % (466 ms), ticks user 0 kernel 0, 146 syscalls/s, 78 switches/s
+  [sched-stat]   t0 (kernel task): ran 4.5 % (466 ms), ticks user 0 kernel 36, 0 syscalls/s, 97 switches/s
+  [sched-stat]   t2 (kernel task): ran 1.3 % (140 ms), ticks user 0 kernel 4, 0 syscalls/s, 50 switches/s
+  [sched-stat]   t6: ran 1.2 % (121 ms), ticks user 13 kernel 0, 0 syscalls/s, 1 switches/s
+  [sched-stat]   t8 (kernel task): ran 0.3 % (26 ms), ticks user 0 kernel 0, 77 syscalls/s, 39 switches/s
+  [sched-stat] ring-3 tasks (5 ran): ticks in user mode 995, in the kernel 0: kernel share 0 %
+  [t0-yield] kernel/src/schedstat.rs:369 x520 (50/s)
+  [t0-yield] kernel/src/ring3.rs:10720 x462 (44/s)
+  [t0-yield] kernel/src/main.rs:7528 x1 (0/s)
+
+== s0b: 
+[sched.py] console up after 10 s
+[sched.py] $ if0test 10: ok 2231 ms
+  [if0-window] test: 10 disk reads with IF=0 on virtio disk 0 (10 ok, longest read 240 ms, 2165 ms in all): longest window without a timer tick 240 ms (limit 50 ms) -> FAILED
+
+== s1p4: 
+[sched.py] console up after 2 s
+[sched.py] $ hogtest 5 10: ok 3818 ms
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 49 % (desktop task 44 %, its glibc processes 5 %, hogs 32 %, other tasks 19 %) round 1/10 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 55 % (desktop task 49 %, its glibc processes 6 %, hogs 22 %, other tasks 23 %) round 2/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 47 %, its glibc processes 5 %, hogs 26 %, other tasks 21 %) round 3/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 48 %, its glibc processes 5 %, hogs 27 %, other tasks 19 %) round 4/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 47 %, its glibc processes 5 %, hogs 29 %, other tasks 18 %) round 5/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 28 %, other tasks 18 %) round 6/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 56 % (desktop task 51 %, its glibc processes 5 %, hogs 25 %, other tasks 19 %) round 7/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 5 %, hogs 27 %, other tasks 20 %) round 8/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 6 %, hogs 28 %, other tasks 19 %) round 9/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 55 % (desktop task 50 %, its glibc processes 6 %, hogs 25 %, other tasks 20 %) round 10/10 -> OK ��
+  [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 49 % -> FAILED
+[sched.py] $ hogtest nice: ok 3089 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 2241 ms against 739 ms = 3.03:1 (want 3.06:1 +-15 %) -> OK ���
+[sched.py] $ wakelat: ok 6355 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 400 rounds (exit 77): wake to run p50 1.08 ms p99 1.19 ms max 1.26 ms, round trip p50 1.15 ms p99 1.38 ms; hogs kept 79 % of their throughput -> FAILED
+
+== s1p1: 
+[sched.py] console up after 3 s
+[sched.py] $ hogtest 5 10: ok 4195 ms
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 49 % (desktop task 44 %, its glibc processes 5 %, hogs 31 %, other tasks 21 %) round 1/10 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 47 % (desktop task 42 %, its glibc processes 5 %, hogs 33 %, other tasks 20 %) round 2/10 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 5 %, hogs 22 %, other tasks 24 %) round 3/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 6 %, hogs 26 %, other tasks 20 %) round 4/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 26 %, other tasks 21 %) round 5/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 47 %, its glibc processes 5 %, hogs 24 %, other tasks 23 %) round 6/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 6 %, hogs 24 %, other tasks 21 %) round 7/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 28 %, other tasks 20 %) round 8/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 47 %, its glibc processes 5 %, hogs 27 %, other tasks 20 %) round 9/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 48 %, its glibc processes 6 %, hogs 25 %, other tasks 21 %) round 10/10 -> OK ���
+  [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+[sched.py] $ hogtest nice: ok 3139 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 2237 ms against 740 ms = 3.02:1 (want 3.06:1 +-15 %) -> OK ���
+[sched.py] $ wakelat: ok 6440 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 400 rounds (exit 77): wake to run p50 1.08 ms p99 1.13 ms max 1.52 ms, round trip p50 1.17 ms p99 1.24 ms; hogs kept 111 % of their throughput -> FAILED
+
+== s0st: 
+[sched.py] console up after 282 s
+[sched.py] $ churn proc 8: ok 3862 ms
+[sched.py] $ hogtest 5 3: ok 20070 ms
+  [fair] hogtest 5 + churn proc 8: 6.8 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 1/3 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 6.8 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 2/3 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 6.4 s, task 0 share 10 % (desktop task 10 %, its glibc processes 0 %, hogs 42 %, other tasks 48 %) round 3/3 -> FAILED
+  [fair] 3 rounds of hogtest 5 + churn proc 8: median 6.8 s, worst 6.8 s (limit 12.6 s), lowest task 0 share 10 % -> FAILED
+[sched.py] $ hogtest 6 2: ok 15485 ms
+  [fair] hogtest 6 + churn proc 8: 7.8 s, task 0 share 8 % (desktop task 8 %, its glibc processes 0 %, hogs 48 %, other tasks 43 %) round 1/2 -> FAILED
+  [fair] hogtest 6 + churn proc 8: 7.6 s, task 0 share 9 % (desktop task 8 %, its glibc processes 0 %, hogs 48 %, other tasks 44 %) round 2/2 -> FAILED
+  [fair] 2 rounds of hogtest 6 + churn proc 8: median 7.8 s, worst 7.8 s (limit 12.6 s), lowest task 0 share 8 % -> FAILED
+
+== s0st1: 
+[sched.py] console up after 295 s
+[sched.py] $ churn proc 8: ok 3869 ms
+[sched.py] $ hogtest 5 30: ok 212283 ms
+  [fair] hogtest 5 + churn proc 8: 7.2 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 1/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 2/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 3/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 4/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 5/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 6/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.0 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 7/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.0 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 8/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 6.8 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 9/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.0 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 10/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.0 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 11/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 12/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 13/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 14/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 15/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.0 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 16/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 6.8 s, task 0 share 10 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 17/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 18/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 19/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 20/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 21/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 22/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 23/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 24/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 25/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 26/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 6.9 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 27/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 28/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 47 %) round 29/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 7.1 s, task 0 share 9 % (desktop task 9 %, its glibc processes 0 %, hogs 43 %, other tasks 48 %) round 30/30 -> FAILED
+  [fair] 30 rounds of hogtest 5 + churn proc 8: median 7.1 s, worst 7.2 s (limit 12.6 s), lowest task 0 share 9 % -> FAILED
+
+== s1st1: 
+[sched.py] console up after 296 s
+[sched.py] $ churn proc 8: ok 1095 ms
+[sched.py] $ hogtest 5 30: ok 44563 ms
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 25 %, other tasks 30 %) round 1/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 2/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 3/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 30 %) round 4/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 43 % (desktop task 42 %, its glibc processes 1 %, hogs 25 %, other tasks 32 %) round 5/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 6/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.4 s, task 0 share 47 % (desktop task 46 %, its glibc processes 1 %, hogs 24 %, other tasks 29 %) round 7/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 8/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 9/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 10/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 11/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 12/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 13/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 14/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 15/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 16/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.4 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 30 %) round 17/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 18/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 19/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 20/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 21/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 43 %, its glibc processes 1 %, hogs 26 %, other tasks 30 %) round 22/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.4 s, task 0 share 47 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 23/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 24/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 25/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 26/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 27/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 28/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.4 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 29/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 30/30 -> FAILED
+  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.5 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 43 % -> FAILED
+
+== s1st4: 
+[sched.py] console up after 291 s
+[sched.py] $ churn proc 8: ok 1143 ms
+[sched.py] $ hogtest 5 30: ok 45716 ms
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 24 %, other tasks 32 %) round 1/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 24 %, other tasks 32 %) round 2/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 3/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 4/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 5/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 32 %) round 6/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 7/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 8/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 23 %, other tasks 33 %) round 9/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 10/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 11/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 46 % (desktop task 44 %, its glibc processes 2 %, hogs 23 %, other tasks 32 %) round 12/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 13/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 14/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 15/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 16/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 17/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 2 %, hogs 24 %, other tasks 30 %) round 18/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 19/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 20/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 21/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 23 %, other tasks 33 %) round 22/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 23/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 24/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 25/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 45 %, its glibc processes 1 %, hogs 23 %, other tasks 30 %) round 26/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 24 %, other tasks 32 %) round 27/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 46 % (desktop task 44 %, its glibc processes 2 %, hogs 23 %, other tasks 31 %) round 28/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.6 s, task 0 share 44 % (desktop task 43 %, its glibc processes 1 %, hogs 24 %, other tasks 32 %) round 29/30 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 31 %) round 30/30 -> FAILED
+  [fair] 30 rounds of hogtest 5 + churn proc 8: median 1.5 s, worst 1.6 s (limit 12.6 s), lowest task 0 share 44 % -> FAILED
+
+== s1st-who: 
+[sched.py] console up after 280 s
+[sched.py] $ sched-stat start: ok 15 ms
+  [sched-stat] window started (sched-stat prints what happened since)
+[sched.py] $ hogtest 5 3: ok 4507 ms
+  [fair] hogtest 5 + churn proc 8: 1.4 s, task 0 share 47 % (desktop task 45 %, its glibc processes 1 %, hogs 24 %, other tasks 29 %) round 1/3 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 45 % (desktop task 44 %, its glibc processes 1 %, hogs 23 %, other tasks 31 %) round 2/3 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 1.5 s, task 0 share 46 % (desktop task 44 %, its glibc processes 1 %, hogs 24 %, other tasks 30 %) round 3/3 -> FAILED
+  [fair] 3 rounds of hogtest 5 + churn proc 8: median 1.5 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 45 % -> FAILED
+[sched.py] $ sched-stat: ok 173 ms
+  [sched-stat] 4.5 s: 452 ticks (0 with the desktop loop idle), desktop loop halted 0 ms, 150 switches/s, 179 syscalls/s
+  [sched-stat]   t0 (kernel task): ran 44.3 % (2003 ms, in system calls and faults 0 ms), ticks user 0 kernel 199, 0 syscalls/s, 41 switches/s
+  [sched-stat]   t24 (kernel task): ran 5.7 % (256 ms, in system calls and faults 0 ms), ticks user 0 kernel 6, 0 syscalls/s, 49 switches/s
+  [sched-stat]   t12: ran 4.7 % (214 ms, in system calls and faults 0 ms), ticks user 24 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t6: ran 4.7 % (214 ms, in system calls and faults 0 ms), ticks user 22 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t7: ran 4.7 % (213 ms, in system calls and faults 0 ms), ticks user 23 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t14: ran 4.7 % (212 ms, in system calls and faults 0 ms), ticks user 23 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t13: ran 4.7 % (212 ms, in system calls and faults 0 ms), ticks user 23 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t8: ran 4.7 % (211 ms, in system calls and faults 0 ms), ticks user 23 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t15: ran 4.7 % (210 ms, in system calls and faults 0 ms), ticks user 24 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t11: ran 4.6 % (208 ms, in system calls and faults 0 ms), ticks user 23 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t9: ran 4.6 % (207 ms, in system calls and faults 0 ms), ticks user 22 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat]   t10: ran 4.5 % (204 ms, in system calls and faults 0 ms), ticks user 22 kernel 0, 0 syscalls/s, 5 switches/s
+  [sched-stat] ring-3 tasks (11 ran): run 2170 ms, of it in system calls and demand faults 30 ms: kernel share 1 % (ticks: user 238, kernel 0; a system call runs with IF=0 and is never sampled)
+  [t0-yield] kernel/src/ring3.rs:10720 x28 (6/s)
+  [t0-yield] kernel/src/main.rs:7528 x2 (0/s)
+
+== w1t: 
+[sched.py] console up after 2 s
+[sched.py] $ wakelat: ok 11410 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 3.07 ms p99 3.12 ms max 3.14 ms, round trip p50 3.14 ms p99 8.06 ms; hogs kept 87 % of their CPU share -> FAILED
+[sched.py] $ wakelat: ok 11372 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 3.07 ms p99 3.13 ms max 3.13 ms, round trip p50 3.14 ms p99 3.33 ms; hogs kept 87 % of their CPU share -> FAILED
+[sched.py] $ hogtest 5 10: ok 4029 ms
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 25 %, other tasks 21 %) round 1/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 27 %, other tasks 21 %) round 2/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 5 %, hogs 26 %, other tasks 20 %) round 3/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 28 %, other tasks 20 %) round 4/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 29 %, other tasks 19 %) round 5/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 57 % (desktop task 51 %, its glibc processes 6 %, hogs 22 %, other tasks 21 %) round 6/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 28 %, other tasks 20 %) round 7/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 55 % (desktop task 49 %, its glibc processes 5 %, hogs 26 %, other tasks 19 %) round 8/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 25 %, other tasks 21 %) round 9/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 25 %, other tasks 20 %) round 10/10 -> OK ���
+  [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 52 % -> OK ���
+[sched.py] $ hogtest nice: ok 3122 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 2241 ms against 741 ms = 3.02:1 (want 3.06:1 +-15 %) -> OK ���
+
+== w2: 
+[sched.py] console up after 2 s
+[sched.py] $ wakelat: ok 11284 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.05 ms p99 0.10 ms max 0.10 ms, round trip p50 3.10 ms p99 3.16 ms; hogs kept 87 % of their CPU share -> OK ���
+[sched.py] $ wakelat: ok 11337 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.06 ms p99 0.09 ms max 0.13 ms, round trip p50 3.11 ms p99 3.18 ms; hogs kept 87 % of their CPU share -> OK ���
+[sched.py] $ hogtest 5 10: ok 3781 ms
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 50 % (desktop task 45 %, its glibc processes 5 %, hogs 27 %, other tasks 22 %) round 1/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 26 %, other tasks 22 %) round 2/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 28 %, other tasks 19 %) round 3/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 59 % (desktop task 53 %, its glibc processes 6 %, hogs 20 %, other tasks 21 %) round 4/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 5 %, hogs 29 %, other tasks 18 %) round 5/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 48 %, its glibc processes 5 %, hogs 26 %, other tasks 21 %) round 6/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 56 % (desktop task 50 %, its glibc processes 6 %, hogs 25 %, other tasks 20 %) round 7/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 27 %, other tasks 19 %) round 8/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 57 % (desktop task 52 %, its glibc processes 6 %, hogs 24 %, other tasks 19 %) round 9/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 30 %, other tasks 18 %) round 10/10 -> OK ��
+  [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 50 % -> OK ���
+[sched.py] $ hogtest nice: ok 3073 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 2241 ms against 738 ms = 3.03:1 (want 3.06:1 +-15 %) -> OK ���
+
+== s2if: 
+[sched.py] console up after 10 s
+[sched.py] $ if0test 10: ok 2227 ms
+  [if0-window] test: 10 disk reads with IF=0 on virtio disk 0 (10 ok, longest read 241 ms, 2158 ms in all): longest window without a timer tick 241 ms (limit 50 ms) -> FAILED
+
+== s8a: 
+[sched.py] console up after 11 s
+[sched.py] $ if0test 10: ok 2231 ms
+  [if0-window] test: 10 disk reads with IF=0 on virtio disk 0 (10 ok, longest read 247 ms, 2152 ms in all): longest window without a timer tick 10 ms (limit 50 ms) -> OK ���
+[sched.py] $ if0test 10: ok 2503 ms
+  [if0-window] test: 10 disk reads with IF=0 on virtio disk 0 (10 ok, longest read 246 ms, 2403 ms in all): longest window without a timer tick 10 ms (limit 50 ms) -> OK ���
+[sched.py] $ wakelat: ok 11291 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 200 rounds (exit 77): wake to run p50 0.05 ms p99 0.10 ms max 0.12 ms, round trip p50 3.10 ms p99 3.20 ms; hogs kept 87 % of their CPU share -> OK ���
+[sched.py] $ hogtest 5 5: ok 2378 ms
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 59 % (desktop task 54 %, its glibc processes 5 %, hogs 25 %, other tasks 16 %) round 1/5 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 56 % (desktop task 51 %, its glibc processes 4 %, hogs 28 %, other tasks 16 %) round 2/5 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 58 % (desktop task 53 %, its glibc processes 5 %, hogs 28 %, other tasks 14 %) round 3/5 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 57 % (desktop task 53 %, its glibc processes 5 %, hogs 28 %, other tasks 15 %) round 4/5 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 57 % (desktop task 52 %, its glibc processes 5 %, hogs 30 %, other tasks 14 %) round 5/5 -> OK ���
+  [fair] 5 rounds of hogtest 5 + churn proc 8: median 0.5 s, worst 0.5 s (limit 12.6 s), lowest task 0 share 56 % -> OK ���
+
+== s2b1: 
+[sched.py] console up after 2 s
+[sched.py] $ wakelat: ok 7274 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 400 rounds (exit 77): wake to run p50 1.06 ms p99 1.10 ms max 1.12 ms, round trip p50 1.12 ms p99 1.17 ms; hogs kept 88 % of their CPU share -> FAILED
+[sched.py] $ hogtest 5 10: ok 3681 ms
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 57 % (desktop task 52 %, its glibc processes 6 %, hogs 23 %, other tasks 20 %) round 1/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 48 % (desktop task 43 %, its glibc processes 5 %, hogs 31 %, other tasks 21 %) round 2/10 -> FAILED
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 55 % (desktop task 49 %, its glibc processes 5 %, hogs 26 %, other tasks 19 %) round 3/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 56 % (desktop task 51 %, its glibc processes 5 %, hogs 23 %, other tasks 21 %) round 4/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 29 %, other tasks 18 %) round 5/10 -> OK ��
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 58 % (desktop task 52 %, its glibc processes 6 %, hogs 24 %, other tasks 18 %) round 6/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 55 % (desktop task 49 %, its glibc processes 5 %, hogs 26 %, other tasks 19 %) round 7/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 54 % (desktop task 48 %, its glibc processes 5 %, hogs 26 %, other tasks 20 %) round 8/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 30 %, other tasks 18 %) round 9/10 -> OK ���
+  [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 57 % (desktop task 52 %, its glibc processes 6 %, hogs 24 %, other tasks 18 %) round 10/10 -> OK ���
+  [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 48 % -> FAILED
+[sched.py] $ hogtest nice: ok 3024 ms
+  [fair-nice] nice 0 against nice 5 for 3 s: run time 2249 ms against 740 ms = 3.04:1 (want 3.06:1 +-15 %) -> OK ���
+[sched.py] $ wakelat: ok 7259 ms
+  [wakelat] two threads pass a futex turn next to 4 hogs, 400 rounds (exit 77): wake to run p50 1.06 ms p99 1.10 ms max 1.12 ms, round trip p50 1.13 ms p99 1.18 ms; hogs kept 88 % of their CPU share -> FAILED

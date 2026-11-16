@@ -1,0 +1,8 @@
+# Chromium fresh starts (chrome-smoke --starts 20, KVM 2 vCPU 6 GiB, tmpfs), browser images with the BUG-182 fix
+st1: [chrome-smoke] starts: 20/20 PASS
+st2: [chrome-smoke] starts: 20/20 PASS
+st3: [chrome-smoke] starts: 20/20 PASS
+st1, st2: f3br (48df3b0); st3: merged f53eec1 (m1br)
+[timer-probe] FROZEN in the 60 boots: 0 (also 0 in every other browser run of this sprint, keylat included)
+longest [if0-window] per run: st1 none >= 50 ms, st2 51 ms cause=kernel, st3 71 ms cause=steal
+TCP connects in st1+st2: 675

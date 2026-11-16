@@ -1,0 +1,40 @@
+# boot-time.py, public images, KVM 2 vCPU 2 GiB, pin 18-19 (siblings idle), alternating v2 (732e5f5), b0 (3ecde9e) and v1 (06e913e); desktop = s from QEMU start to interactive loop started; the soak (CPUs 30-33) and the browser session (CPUs 0-1) ran beside it on other cores
+v2-1: kernel-entry 1.63s desktop 2.42s
+b0-1: kernel-entry 1.73s desktop 2.49s
+v1-1: kernel-entry 1.66s desktop 2.89s
+v2-2: kernel-entry 1.89s desktop 2.67s
+b0-2: kernel-entry 1.53s desktop 2.24s
+v1-2: kernel-entry 1.66s desktop 2.92s
+v2-3: kernel-entry 1.61s desktop 2.39s
+b0-3: kernel-entry 2.07s desktop 2.98s
+v1-3: kernel-entry 1.83s desktop 3.10s
+v2-4: kernel-entry 1.89s desktop 2.68s
+b0-4: kernel-entry 1.89s desktop 2.69s
+v1-4: kernel-entry 1.59s desktop 2.86s
+v2-5: kernel-entry 1.90s desktop 2.72s
+b0-5: kernel-entry 2.11s desktop 2.91s
+v1-5: kernel-entry 1.96s desktop 3.25s
+v2-6: kernel-entry 2.11s desktop 3.02s
+b0-6: kernel-entry 2.12s desktop 2.92s
+v1-6: kernel-entry 1.71s desktop 3.00s
+v2-7: kernel-entry 1.90s desktop 2.71s
+b0-7: kernel-entry 2.10s desktop 3.00s
+v1-7: kernel-entry 1.89s desktop 3.17s
+v2-8: kernel-entry 1.60s desktop 2.37s
+b0-8: kernel-entry 1.83s desktop 2.62s
+v1-8: kernel-entry 1.69s desktop 2.99s
+v2-9: kernel-entry 1.61s desktop 2.40s
+b0-9: kernel-entry 1.91s desktop 2.69s
+v1-9: kernel-entry 2.13s desktop 3.44s
+v2-10: kernel-entry 1.83s desktop 2.61s
+b0-10: kernel-entry 1.69s desktop 2.43s
+v1-10: kernel-entry 1.63s desktop 2.88s
+v2-11: kernel-entry 1.51s desktop 2.25s
+b0-11: kernel-entry 1.69s desktop 2.46s
+v1-11: kernel-entry 1.98s desktop 3.27s
+v2-12: kernel-entry 1.82s desktop 2.61s
+b0-12: kernel-entry 1.85s desktop 2.61s
+v1-12: kernel-entry 1.86s desktop 3.11s
+   v2: n=12 median 2.61 s min 2.25 max 3.02
+   b0: n=12 median 2.66 s min 2.24 max 3.00
+   v1: n=12 median 3.05 s min 2.86 max 3.44

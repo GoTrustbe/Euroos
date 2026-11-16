@@ -1,0 +1,5 @@
+== kb/kb-before.log  vs  kb/kb-after.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

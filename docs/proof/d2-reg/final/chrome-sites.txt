@@ -1,0 +1,20 @@
+# chrome-smoke --only sites --rounds 3 --smp 2, browser image of r2 (72976f7), KVM, R630, tmpfs work directory
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.5 s, load finished 3.5 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 42 ms; fds: 
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 7.2 s later; content 594 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.4 s, load finished 23.4 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.8 s, load finished 12.2 s later; content 286 colours, commonest 88%; desktop loop: slowest console answer 291 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.9 s, load finished 4.2 s later; content 2288 colours, commonest 36%; desktop loop: slowest c
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.8 s, load finished 2
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 3.6 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 83 ms; fds: 
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.6 s, load finished 4.7 s later; content 594 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 20.2 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.6 s, load finished 13.1 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 282 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.9 s, load finished 4.2 s later; content 378 colours, commonest 92%; desktop loop: slowest co
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 3
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 3.5 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 190 ms; fds:
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.7 s, load finished 4.4 s later; content 594 colours, commonest 78%; desktop loop: slowest 
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.1 s, load finished 18.6 s later; content 479 colours, commonest 90%; desktop loop: slowes
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.8 s, load finished 12.2 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 229 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.3 s, load finished 3.6 s later; content 378 colours, commonest 92%; desktop loop: slowest co
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/reg/sites-r2

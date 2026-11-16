@@ -1,0 +1,26 @@
+# BUG-271/272: [smp] and [kwork] lines, self-test images, KVM, R630 (kboot-hda.sh). t0 = 06e913e + the [kwork] test (fe608dd), t1 = + 1830a79, t2 = + 4c8c363 (steal wake)
+== t0-s2
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=0 worker-B=0 (own run queue)
+[smp] J1: demo workers parked on 0/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[boot-time] phase smp-timer: 802.436 ms (at 1579 ms)
+[kwork] 1 AP(s) online but not accepting work (demo workers not parked) -> FAILED
+== t1-s2
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=171 worker-B=193 (own run queue)
+[smp] J1: demo workers parked on 1/1 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[boot-time] phase smp-timer: 305.813 ms (at 1109 ms)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+== t1-4g
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=344 worker-B=352 (own run queue)
+[smp] J1: demo workers parked on 3/3 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[boot-time] phase smp-timer: 352.460 ms (at 1193 ms)
+[kwork] per-CPU work queues: 3 AP(s) online, 4 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (4 ok), work-stealing=NO -> FAILED
+== t2-4g
+[smp] core APIC-id 1 per-CPU scheduler: worker-A=240 worker-B=219 (own run queue)
+[smp] J1: demo workers parked on 3/3 AP(s); idle APs sleep in hlt and take kernel work from per-CPU queues
+[boot-time] phase smp-timer: 353.095 ms (at 1296 ms)
+[kwork] per-CPU work queues: 3 AP(s) online, 4 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (4 ok), work-stealing=yes -> OK ✓
+
+# public images, 4 vCPU: p1 (1830a79)
+    2.146 [smp] 3/3 AP core(s) online (BSP = APIC-id 0, 4 cores total)
+    2.162 [smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+    2.168 [boot-time] phase smp-timer: 87.495 ms (at 533 ms)

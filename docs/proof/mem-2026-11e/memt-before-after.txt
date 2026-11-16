@@ -1,0 +1,130 @@
+# [memt] before/after, KVM 2 vCPU, -nic none (kboot.sh)
+
+## before: c793def (test commit, fork copies), 4 GiB
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 301379 us in the parent, 72336 kB of frames
+[memt]   cowfork: FAIL the fork took 72336 kB of frames for a process of 64 MiB (at most 4096)
+[memt]   cowfork: FAIL after the child read all of it the two hold 72336 kB more than the parent alone (at most 4096)
+[memt]   cowfork: FAIL the child wrote 32752 kB of pages and took 0 kB of frames for it (119)
+[memt]   cowfork: info demand pool 756136 kB free at the start
+[memt] cowfork: GMEM2 cowfork: FAILED 14/17 (exit 1); frames after the run: 410842 free (was 410842), process pool 427008 (was 427008) → FAILED
+[memt] memory self-test, 8 modes → FAILED
+
+## 685af41 (copy-on-write, tests of named files and sysinfo), 4 GiB
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 127053 us in the parent, 340 kB of frames
+[memt]   cowfork: info demand pool 754496 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → OK ✓
+[memt]   ramnamed: FAIL the file holds 0 kB of frames (0 before)
+[memt]   ramnamed: FAIL pread sees a store through the mapping (3f00003)
+[memt]   ramnamed: FAIL the new name has the bytes (3f00003)
+[memt]   ramnamed: FAIL O_TRUNC empties it (8 kB held)
+[memt]   ramnamed: FAIL it gets ENOSPC (errno 1) after 262144 kB; the limit is 377248 kB
+[memt]   ramnamed: FAIL and the kernel heap grew by 262164 kB
+[memt] ramnamed: GMEM2 ramnamed: FAILED 9/15 (exit 1); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → FAILED
+[memt]   sysinfo: info sysinfo: totalram 131072 kB, freeram 0 kB, sharedram 0 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: FAIL totalram is the machine: 131072 kB (pools 754496 kB + 1708032 kB)
+[memt]   sysinfo: FAIL freeram 0 kB is what the pools have free (2454336 kB)
+[memt]   sysinfo: FAIL sharedram 0 kB holds the 8 MiB memory file
+[memt]   sysinfo: info /proc/meminfo: MemTotal 262144, MemFree 512627, MemAvailable 512627, Shmem -1, Cached 0 kB
+[memt]   sysinfo: FAIL /proc/meminfo MemTotal 262144 kB = totalram
+[memt]   sysinfo: FAIL MemFree 512627, MemAvailable 512627, Shmem -1 kB agree with sysinfo
+[memt] sysinfo: GMEM2 sysinfo: FAILED 2/7 (exit 1); frames after the run: 410071 free (was 410071), process pool 427008 (was 427008) → FAILED
+[memt] memory self-test, 10 modes → FAILED
+
+## 685af41, 1 GiB
+[memt] forkfail: GMEMT forkfail: PASS 4/4 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] forkmany: GMEMT forkmany: PASS 3/3 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] forkidle: GMEMT forkidle: PASS 6/6 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] madvise: GMEMT madvise: PASS 6/6 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] memfd: GMEMT memfd: PASS 12/12 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] oom: GMEMT oom: PASS 5/5 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 172780 us in the parent, 352 kB of frames
+[memt]   cowfork: info demand pool 149068 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → OK ✓
+[memt]   ramnamed: FAIL 16 MiB written to /tmp/gmem2-named: the kernel heap grew by 16384 kB
+[memt]   ramnamed: FAIL the file holds 0 kB of frames (0 before)
+[memt]   ramnamed: FAIL pread sees a store through the mapping (3f00003)
+[memt]   ramnamed: FAIL the new name has the bytes (3f00003)
+[memt]   ramnamed: FAIL O_TRUNC empties it (8 kB held)
+[memt]   ramnamed: FAIL it gets ENOSPC (errno 1) after 65536 kB; the limit is 74532 kB
+[memt]   ramnamed: FAIL and the kernel heap grew by 65556 kB
+[memt] ramnamed: GMEM2 ramnamed: FAILED 8/15 (exit 1); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → FAILED
+[memt]   sysinfo: info sysinfo: totalram 131072 kB, freeram 0 kB, sharedram 0 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: FAIL totalram is the machine: 131072 kB (pools 149068 kB + 163840 kB)
+[memt]   sysinfo: FAIL freeram 0 kB is what the pools have free (304716 kB)
+[memt]   sysinfo: FAIL sharedram 0 kB holds the 8 MiB memory file
+[memt]   sysinfo: info /proc/meminfo: MemTotal 262144, MemFree 164678, MemAvailable 164678, Shmem -1, Cached 0 kB
+[memt]   sysinfo: FAIL /proc/meminfo MemTotal 262144 kB = totalram
+[memt]   sysinfo: FAIL MemFree 164678, MemAvailable 164678, Shmem -1 kB agree with sysinfo
+[memt] sysinfo: GMEM2 sysinfo: FAILED 2/7 (exit 1); frames after the run: 107357 free (was 107357), process pool 40960 (was 40960) → FAILED
+[memt] memory self-test, 10 modes → FAILED
+
+## after: 9c30378 (final), 1/2/4/8 GiB with HDA (kboot-hda.sh)
+-- 1 GiB
+[cow] holder counts for 1022 MiB of RAM: 511 KiB
+[ramfiles] end of the run: 4 files with a name back from frames into the kernel heap (4 KiB)
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 170515 us in the parent, 352 kB of frames
+[memt]   cowfork: info demand pool 149300 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 604468 kB, freeram 304948 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 604468, MemFree 304948, MemAvailable 304948, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 107472 free (was 107472), process pool 40960 (was 40960) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+-- 2 GiB
+[cow] holder counts for 2046 MiB of RAM: 1023 KiB
+[ramfiles] end of the run: 4 files with a name back from frames into the kernel heap (4 KiB)
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 129300 us in the parent, 352 kB of frames
+[memt]   cowfork: info demand pool 476980 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 1390900 kB, freeram 763700 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 1390900, MemFree 763700, MemAvailable 763700, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 271312 free (was 271312), process pool 73728 (was 73728) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+-- 4 GiB
+[cow] holder counts for 6144 MiB of RAM: 3072 KiB
+[ramfiles] end of the run: 4 files with a name back from frames into the kernel heap (4 KiB)
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 170927 us in the parent, 356 kB of frames
+[memt]   cowfork: info demand pool 756004 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 3427608 kB, freeram 2455844 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 3427608, MemFree 2455844, MemAvailable 2455844, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 410825 free (was 410825), process pool 427008 (was 427008) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+-- 8 GiB
+[cow] holder counts for 10240 MiB of RAM: 5120 KiB
+[ramfiles] end of the run: 4 files with a name back from frames into the kernel heap (4 KiB)
+[memt] forkkill: killed by the deadline while its fork was held (1 held) (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt]   cowfork: info fork of a 64 MiB process: 124628 us in the parent, 340 kB of frames
+[memt]   cowfork: info demand pool 1703204 kB free at the start
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] ramnamed: GMEM2 ramnamed: PASS 15/15 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt]   sysinfo: info sysinfo: totalram 7621912 kB, freeram 5244196 kB, sharedram 8192 kB, bufferram 0 kB, unit 1
+[memt]   sysinfo: info /proc/meminfo: MemTotal 7621912, MemFree 5244196, MemAvailable 5244196, Shmem 8192, Cached 0 kB
+[memt] sysinfo: GMEM2 sysinfo: PASS 7/7 (exit 0); frames after the run: 884425 free (was 884425), process pool 887296 (was 887296) → OK ✓
+[memt] memory self-test, 10 modes → OK ✓
+
+## the [fork] line of the cowfork fork, before and after (4 GiB)
+[fork] pid 1333 -> child task 6 (own pml4=0x1780000 arena of 96 MiB: 10560 KiB copied, 87744 KiB of zero pages left out; the parent uses 39 MiB of it up to its mmap window top and 448 KiB of brk; arena copy 111 ms, demand pages 124 ms, rest 0 ms)
+[fork] pid 1334 -> child task 12 (own pml4=0x2204000 arena of 96 MiB: 10560 KiB copied, 0 KiB of zero pages left out; the parent uses 39 MiB of it up to its mmap window top and 448 KiB of brk; arena copy 3 ms, demand pages 119 ms, rest 0 ms)
+[fork] pid 1333 -> child task 6 (own pml4=0x1780000 arena of 96 MiB: 10560 KiB shared copy-on-write, 0 KiB copied, 87744 KiB of zero pages left out; the parent uses 38 MiB of it up to its mmap window top and 0 KiB of brk; arena 118 ms, demand pages 0 ms, rest 0 ms)
+[fork] pid 1334 -> child task 12 (own pml4=0x1fbb000 arena of 96 MiB: 10560 KiB shared copy-on-write, 0 KiB copied, 0 KiB of zero pages left out; the parent uses 38 MiB of it up to its mmap window top and 0 KiB of brk; arena 0 ms, demand pages 0 ms, rest 0 ms)

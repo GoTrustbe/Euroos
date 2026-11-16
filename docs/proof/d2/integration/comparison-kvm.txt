@@ -1,0 +1,241 @@
+# markers-compare.py, KVM self-test boots: the proof boots of each team -> integration merge b6eb05d
+
+== validate-2026-11d 1 GiB
+== ../final-runs/kvm/k-1g.log  vs  kvm/m3/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== validate-2026-11d 2 GiB
+== ../final-runs/kvm/k-2g.log  vs  kvm/m3/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== validate-2026-11d 4 GiB
+== ../final-runs/kvm/k-4g.log  vs  kvm/m3/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== validate-2026-11d 8 GiB
+== ../final-runs/kvm/k-8g.log  vs  kvm/m3/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 7
+   aslr: FAILx1
+   entropy-health: OKx1
+   keyfocus: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== sched-d1 1 GiB
+== ../sched-runs/kvm/k-1g.log  vs  kvm/m3/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== sched-d1 2 GiB
+== ../sched-runs/kvm/k-2g.log  vs  kvm/m3/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== sched-d1 4 GiB
+== ../sched-runs/kvm/k-4g.log  vs  kvm/m3/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== sched-d1 8 GiB
+== ../sched-runs/kvm/k-8g.log  vs  kvm/m3/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== kbugs-2026-11e 1 GiB
+== ../kbugs-runs/kvm/k-1g.log  vs  kvm/m3/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   nmi-bound: OKx1
+   randid: OKx2
+
+== kbugs-2026-11e 2 GiB
+== ../kbugs-runs/kvm/k-2g.log  vs  kvm/m3/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   nmi-bound: OKx1
+   randid: OKx2
+
+== kbugs-2026-11e 4 GiB
+== ../kbugs-runs/kvm/k-4g.log  vs  kvm/m3/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   nmi-bound: OKx1
+   randid: OKx2
+
+== kbugs-2026-11e 8 GiB
+== ../kbugs-runs/kvm/k-8g.log  vs  kvm/m3/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   nmi-bound: OKx1
+   randid: OKx2
+
+== small-2026-11e 1 GiB
+== ../small-runs/final/kvm/k-1g.log  vs  kvm/m3/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   aslr: FAILx1
+   entropy-health: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+
+== small-2026-11e 2 GiB
+== ../small-runs/final/kvm/k-2g.log  vs  kvm/m3/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   aslr: FAILx1
+   entropy-health: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+
+== small-2026-11e 4 GiB
+== ../small-runs/final/kvm/k-4g.log  vs  kvm/m3/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   aslr: FAILx1
+   entropy-health: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+
+== small-2026-11e 8 GiB
+== ../small-runs/final/kvm/k-8g.log  vs  kvm/m3/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 4
+   aslr: FAILx1
+   entropy-health: OKx1
+   rename-disk: OKx1
+   reseed: OKx1
+
+== mem-2026-11e 1 GiB
+== ../mem3-runs/kvm/k-1g.log  vs  kvm/m3/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== mem-2026-11e 2 GiB
+== ../mem3-runs/kvm/k-2g.log  vs  kvm/m3/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== mem-2026-11e 4 GiB
+== ../mem3-runs/kvm/k-4g.log  vs  kvm/m3/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+
+== mem-2026-11e 8 GiB
+== ../mem3-runs/kvm/k-8g.log  vs  kvm/m3/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 6
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
