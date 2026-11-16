@@ -9933,9 +9933,10 @@ fn mark_exec_pages(bits: &mut [u64; 8], start: u64, len: u64) {
 /// Apply R_X86_64_RELATIVE relocations: for a PIE (ET_DYN) linked at 0 and
 /// loaded at `base`, `*(base + r_offset) = base + r_addend` holds. This is exactly
 /// what musl's static-PIE self-reloc otherwise does itself — we do it in the kernel.
+/// The image is read and written at `kern_base`; the words carry `virt_base`.
 /// We read all tables from the LOADED memory (base + vaddr): file offset and
 /// vaddr diverge in a PIE, but in the loaded image vaddr is always correct.
-fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
+fn apply_relocations(elf: &[u8], virt_base: u64, kern_base: u64, limit: u64) {
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
     let e_phnum = rd_u16(elf, 56) as usize;
@@ -9955,7 +9956,7 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         return; // no dynamic section (flat/statically-linked ELF)
     }
     // Read the dynamic entries from the loaded memory; collect the RELA table.
-    let rd_loaded = |a: u64| unsafe { ((base + a) as *const u64).read() };
+    let rd_loaded = |a: u64| unsafe { ((kern_base + a) as *const u64).read() };
     let mut rela = 0u64;
     let mut relasz = 0u64;
     let mut relaent = 24u64;
@@ -9983,13 +9984,14 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         let r_info = rd_loaded(e + 8);
         let r_addend = rd_loaded(e + 16);
         if (r_info & 0xffff_ffff) == 8 && r_offset < limit {
-            // R_X86_64_RELATIVE: *(base + r_offset) = base + r_addend
-            unsafe { ((base + r_offset) as *mut u64).write(base.wrapping_add(r_addend)) };
+            // R_X86_64_RELATIVE: *(base + r_offset) = base + r_addend, the
+            // word written where the kernel reaches it (ASLR S3)
+            unsafe { ((kern_base + r_offset) as *mut u64).write(virt_base.wrapping_add(r_addend)) };
             applied += 1;
         }
         off += relaent;
     }
-    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocations applied @ base {base:#x}");
+    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocations applied @ base {virt_base:#x}");
 }
 
 /// Mark pages writable in the W^X bitmap (same mechanism as exec).
@@ -10101,9 +10103,13 @@ fn apply_tls_relocs(base: u64, elf: &[u8], tlsoffset: u64) -> u32 {
     patched
 }
 
-/// Load the PT_LOAD segments of an ELF64 binary at base address `base` (position-
-/// independent; linked at vaddr 0). `pages` = size of the frame window.
-fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
+/// Load the PT_LOAD segments of an ELF64 binary (position-independent; linked at
+/// vaddr 0) for the load bias `virt_base`: the address the process sees, which
+/// relocations, entry and PHDR carry. The bytes are written at `kern_base`, the
+/// address where the kernel reaches the same memory now (ASLR S3; equal to
+/// `virt_base` for every caller until the arena leaves the identity map).
+/// `pages` = size of the frame window.
+fn load_elf64(elf: &[u8], virt_base: u64, kern_base: u64, pages: usize) -> Option<LoadInfo> {
     if elf.len() < 64 || &elf[0..4] != b"\x7fELF" || elf[4] != 2 || elf[5] != 1 {
         return None; // not a 64-bit little-endian ELF
     }
@@ -10162,7 +10168,7 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
         }
         // SAFETY: the segment fits within the assigned frame window (checked).
         unsafe {
-            let dst = (base + p_vaddr) as *mut u8;
+            let dst = (kern_base + p_vaddr) as *mut u8;
             core::ptr::copy_nonoverlapping(elf[p_offset..].as_ptr(), dst, p_filesz);
             if p_memsz > p_filesz {
                 core::ptr::write_bytes(dst.add(p_filesz), 0, p_memsz - p_filesz); // zero .bss
@@ -10170,13 +10176,13 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
         }
     }
     // Apply relocations (no-op for non-PIE/flat-static binaries).
-    apply_relocations(elf, base, limit);
+    apply_relocations(elf, virt_base, kern_base, limit);
     Some(LoadInfo {
-        entry: base + e_entry,
-        phdr: if phdr_vaddr != 0 { base + phdr_vaddr } else { 0 },
+        entry: virt_base + e_entry,
+        phdr: if phdr_vaddr != 0 { virt_base + phdr_vaddr } else { 0 },
         phent: e_phentsize as u64,
         phnum: e_phnum as u64,
-        base,
+        base: virt_base,
         exec_pages,
         writ_pages,
     })
@@ -10185,7 +10191,7 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
 /// Load a program (ELF or flat) at `base` (window of `pages` frames).
 fn load_program(program: &[u8], base: u64, pages: usize) -> LoadInfo {
     if program.len() >= 4 && &program[0..4] == b"\x7fELF" {
-        if let Some(info) = load_elf64(program, base, pages) {
+        if let Some(info) = load_elf64(program, base, base, pages) {
             return info;
         }
     }
@@ -10487,7 +10493,7 @@ pub fn run_dynamic(
     for (i, lib) in libs.iter().enumerate().take(2) {
         let lib_base = arena + 0x40000 + (i as u64) * 0x20000;
         let lib_pages = program_span_pages(lib);
-        if let Some(lib_info) = load_elf64(lib, lib_base, lib_pages) {
+        if let Some(lib_info) = load_elf64(lib, lib_base, lib_base, lib_pages) {
             let lib_poff = ((lib_base - arena) / 4096) as usize;
             merge_shifted(&mut info.exec_pages, &lib_info.exec_pages, lib_poff);
             merge_shifted(&mut info.writ_pages, &lib_info.writ_pages, lib_poff);
@@ -10614,11 +10620,11 @@ pub fn run_interp(
     let libc_base = arena + 0x40000;
     let interp_base = arena + 0x60000;
     let mut interp_entry = 0u64;
-    if let Some(li) = load_elf64(libc, libc_base, program_span_pages(libc)) {
+    if let Some(li) = load_elf64(libc, libc_base, libc_base, program_span_pages(libc)) {
         merge_shifted(&mut info.exec_pages, &li.exec_pages, 0x40000 / 4096);
         merge_shifted(&mut info.writ_pages, &li.writ_pages, 0x40000 / 4096);
     }
-    if let Some(ii) = load_elf64(interp, interp_base, program_span_pages(interp)) {
+    if let Some(ii) = load_elf64(interp, interp_base, interp_base, program_span_pages(interp)) {
         merge_shifted(&mut info.exec_pages, &ii.exec_pages, 0x60000 / 4096);
         merge_shifted(&mut info.writ_pages, &ii.writ_pages, 0x60000 / 4096);
         interp_entry = ii.entry;
@@ -11272,11 +11278,11 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // Load ld.so fresh into the arena and build a fresh SysV stack with the new
     // argv/envp. Both write via arena VAs mapped in the child's Cr3.
     let ldso = ldlinux_bytes();
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, &argv, &envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base) };
 
     crate::serial_println!(
         "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x} (arena wipe {} ms, demand pages dropped {} ms, new image {} ms)",
@@ -12501,8 +12507,8 @@ pub fn spawn_glibc_persistent(
 
     // BUG-053: from here on the arena is held; every refusal gives it back.
     let (Some(exe_info), Some(ld_info)) = (
-        load_elf64(exe, exe_base, program_span_pages(exe)),
-        load_elf64(ldso, ldso_base, program_span_pages(ldso)),
+        load_elf64(exe, exe_base, exe_base, program_span_pages(exe)),
+        load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)),
     ) else {
         glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
         crate::serial_println!("[glibc] persistent app: executable or loader is not a loadable ELF - not started");
@@ -12512,7 +12518,7 @@ pub fn spawn_glibc_persistent(
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
     let vdso_ok = false;
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
@@ -13177,7 +13183,7 @@ fn glibc_disk_launch(
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_disk_launch_abort(falloc, arena, frames, 0, 0, 0, prev_demand, prev_file);
@@ -13188,7 +13194,7 @@ fn glibc_disk_launch(
     if vdso_ok {
         VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
     }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
@@ -14529,14 +14535,14 @@ pub fn run_glibc(
 
     // load_elf64 places PT_LOAD at base+p_vaddr and applies R_X86_64_RELATIVE
     // (idempotent: ld.so also self-relocates).
-    let exe_info = match load_elf64(exe, exe_base, program_span_pages(exe)) {
+    let exe_info = match load_elf64(exe, exe_base, exe_base, program_span_pages(exe)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
             return (String::from("(bad exe ELF)"), u64::MAX);
         }
     };
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
@@ -14548,7 +14554,7 @@ pub fn run_glibc(
     if vdso_ok {
         VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
     }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
@@ -14752,24 +14758,33 @@ pub fn run_glibc(
 /// launch path right after it maps the vDSO into the new address space.
 static VDSO_EHDR_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// The initial stack of a glibc process (argv, envp, auxv) below `stack_top`,
+/// a virtual address of the process; the bytes are written at `stack_kern`, the
+/// address where the kernel reaches that stack top now (ASLR S3; equal for
+/// every caller until the arena leaves the identity map). Returns the
+/// virtual stack pointer.
 unsafe fn setup_user_stack_glibc(
     stack_top: u64,
+    stack_kern: u64,
     argv: &[&[u8]],
     envp: &[&[u8]],
     info: &LoadInfo,
     interp_base: u64,
 ) -> u64 {
+    // ASLR S3: every pointer is a virtual address of the process (from
+    // `stack_top`); every byte is written where the kernel reaches it now.
+    let k = |va: u64| va.wrapping_sub(stack_top).wrapping_add(stack_kern);
     let mut p = stack_top;
     // 16 AT_RANDOM bytes.
     p -= 16;
     let random_ptr = p;
-    write_at_random(random_ptr);
+    write_at_random(k(random_ptr));
     // AT_PLATFORM string.
     let plat = b"x86_64\0";
     p -= plat.len() as u64;
     let plat_ptr = p;
     for (i, b) in plat.iter().enumerate() {
-        (plat_ptr as *mut u8).add(i).write(*b);
+        (k(plat_ptr) as *mut u8).add(i).write(*b);
     }
     // argv strings.
     let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
@@ -14777,9 +14792,9 @@ unsafe fn setup_user_stack_glibc(
         p -= a.len() as u64 + 1;
         let ptr = p;
         for (i, b) in a.iter().enumerate() {
-            (ptr as *mut u8).add(i).write(*b);
+            (k(ptr) as *mut u8).add(i).write(*b);
         }
-        (ptr as *mut u8).add(a.len()).write(0);
+        (k(ptr) as *mut u8).add(a.len()).write(0);
         argptrs.push(ptr);
     }
     // envp strings.
@@ -14788,9 +14803,9 @@ unsafe fn setup_user_stack_glibc(
         p -= e.len() as u64 + 1;
         let ptr = p;
         for (i, b) in e.iter().enumerate() {
-            (ptr as *mut u8).add(i).write(*b);
+            (k(ptr) as *mut u8).add(i).write(*b);
         }
-        (ptr as *mut u8).add(e.len()).write(0);
+        (k(ptr) as *mut u8).add(e.len()).write(0);
         envptrs.push(ptr);
     }
     let execfn = *argptrs.first().unwrap_or(&0);
@@ -14822,7 +14837,7 @@ unsafe fn setup_user_stack_glibc(
     let sp = (p - nslots * 8) & !0xF;
     let mut w = sp;
     let mut put = |val: u64| {
-        (w as *mut u64).write(val);
+        (k(w) as *mut u64).write(val);
         w += 8;
     };
     put(argptrs.len() as u64);
@@ -20018,4 +20033,181 @@ pub fn run_args(
 
     let out = OUTPUT.lock().clone();
     unsafe { (core::ptr::read(core::ptr::addr_of!(EXIT_CODE)), out) }
+}
+
+// -- ASLR S3: the loader with two numbers ([elf-bias]) --------------------------
+
+/// ASLR step S3 ([elf-bias]): a glibc program (`seq`, 10 R_X86_64_RELATIVE
+/// relocations) and ld.so (its own relocations are packed RELR, it applies
+/// them itself) loaded at virtual bases that are not the addresses the
+/// kernel writes at, and their stack built the same way. Case "near": the
+/// virtual addresses are the second half of a scratch buffer, so a loader
+/// that still writes at the virtual address fills that half and the check
+/// sees it; case "high": the virtual addresses lie in the arena zone (8 TiB,
+/// not mapped for the kernel). LoadInfo (entry, PHDR, base), every relocated
+/// word and the stack (argv, envp, auxv AT_PHDR/AT_ENTRY/AT_BASE/AT_RANDOM/
+/// AT_PLATFORM/AT_EXECFN, the stack pointer) must carry virtual addresses,
+/// and only the kernel-side memory may be written.
+pub fn elf_bias_selftest() -> bool {
+    use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+    const STK: u64 = 0x8000;
+    let (exe, ldso) = (REAL_SEQ_ELF, LDLINUX_ELF);
+    let (pe, pl) = (program_span_pages(exe), program_span_pages(ldso));
+    let half = (pe + pl) as u64 * 4096 + STK;
+    let total = 2 * half as usize;
+    let Ok(layout) = Layout::from_size_align(total, 4096) else { return false };
+    // SAFETY: plain heap allocation, identity mapped.
+    let buf = unsafe { alloc_zeroed(layout) } as u64;
+    if buf == 0 {
+        crate::serial_println!("[elf-bias] no heap for the scratch buffer: SKIPPED");
+        return false;
+    }
+    let zone = crate::paging::ARENA_ZONE_BASE;
+    // Kernel side: exe image, ld.so image, stack (top) in the first half.
+    let k = [buf, buf + pe as u64 * 4096, buf + half];
+    let cases = [
+        ("near", [k[0] + half, k[1] + half, k[2] + half], true),
+        ("high", [zone + 0x1234_5000, zone + 0x4000_0000, zone + 0x8000_0000], false),
+    ];
+    let mut why = None;
+    let mut rel = 0;
+    let mut done = 0;
+    for (name, v, near) in cases {
+        // SAFETY: the buffer allocated above.
+        unsafe { core::ptr::write_bytes(buf as *mut u8, 0, total) };
+        match elf_bias_case(exe, ldso, k, v, STK) {
+            Ok(n) => {
+                rel = n;
+                done += 1;
+            }
+            Err(w) => {
+                why = Some((name, w));
+                break;
+            }
+        }
+        // SAFETY: with `near` the virtual ranges are the second half of the buffer.
+        if near && unsafe { (0..half / 8).any(|i| ((buf + half + i * 8) as *const u64).read() != 0) } {
+            why = Some((name, "bytes were written at the virtual addresses"));
+            break;
+        }
+    }
+    // SAFETY: same layout as the allocation.
+    unsafe { dealloc(buf as *mut u8, layout) };
+    match why {
+        None => crate::serial_println!(
+            "[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses ({done} cases: next to each other, and at {zone:#x}+): entry, PHDR, base virtual, {rel} relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓"
+        ),
+        Some((name, w)) => crate::serial_println!("[elf-bias] case {name}: {w} -> FAILED ✗"),
+    }
+    why.is_none()
+}
+
+/// The relocated words of `elf` loaded for virtual base `v` at `k`: each
+/// R_X86_64_RELATIVE target must hold `v + addend`. Returns how many.
+fn elf_bias_relocs(elf: &[u8], k: u64, v: u64, span: u64) -> Result<u32, &'static str> {
+    let Some(rela) = dyn_value(k, elf, 7) else { return Ok(0) };
+    let relasz = dyn_value(k, elf, 8).unwrap_or(0);
+    let mut good = 0u32;
+    let mut off = 0u64;
+    while off + 24 <= relasz {
+        // SAFETY: the RELA table of the image just loaded at k.
+        let (ro, ri, ra) = unsafe {
+            let e = (k + rela + off) as *const u64;
+            (e.read(), e.add(1).read(), e.add(2).read())
+        };
+        if ri & 0xffff_ffff == 8 && ro < span {
+            // SAFETY: r_offset < span: inside the image.
+            if unsafe { ((k + ro) as *const u64).read() } != v.wrapping_add(ra) {
+                return Err("a relocated word does not carry the virtual base");
+            }
+            good += 1;
+        }
+        off += 24;
+    }
+    Ok(good)
+}
+
+/// One case of [`elf_bias_selftest`]: exe, ld.so and stack top at the
+/// kernel-side addresses `k` for the virtual addresses `v`.
+fn elf_bias_case(exe: &[u8], ldso: &[u8], k: [u64; 3], v: [u64; 3], stk: u64) -> Result<u32, &'static str> {
+    let mut good = 0;
+    let mut infos = [None, None];
+    for (i, elf) in [exe, ldso].into_iter().enumerate() {
+        let pages = program_span_pages(elf);
+        let span = pages as u64 * 4096;
+        let info = load_elf64(elf, v[i], k[i], pages).ok_or("load_elf64 refused the program")?;
+        if info.base != v[i] || info.entry != v[i] + rd_u64(elf, 24) {
+            return Err("LoadInfo base or entry is not the virtual address");
+        }
+        if info.phdr < v[i] || info.phdr >= v[i] + span {
+            return Err("LoadInfo phdr is not a virtual address");
+        }
+        let e_phoff = rd_u64(elf, 32) as usize;
+        let n = (info.phnum * info.phent) as usize;
+        let phk = info.phdr - v[i] + k[i];
+        // SAFETY: inside the kernel-side image (phdr < v + span, checked).
+        if (0..n).any(|j| unsafe { ((phk + j as u64) as *const u8).read() } != elf.get(e_phoff + j).copied().unwrap_or(0)) {
+            return Err("the program headers are not at the kernel side of the PHDR address");
+        }
+        good += elf_bias_relocs(elf, k[i], v[i], span)?;
+        infos[i] = Some(info);
+    }
+    if good == 0 {
+        return Err("no R_X86_64_RELATIVE relocation was checked");
+    }
+    let Some(info) = infos[0].take() else { return Err("no exe") };
+    let (sk, sv) = (k[2], v[2]);
+    let argv: [&[u8]; 2] = [b"/bin/seq", b"--elf-bias"];
+    let envp: [&[u8]; 1] = [b"ELF_BIAS=1"];
+    let vdso = VDSO_EHDR_NEXT.swap(0, Ordering::Relaxed);
+    // SAFETY: sk is the top of `stk` bytes of the scratch buffer.
+    let sp = unsafe { setup_user_stack_glibc(sv, sk, &argv, &envp, &info, v[1]) };
+    VDSO_EHDR_NEXT.store(vdso, Ordering::Relaxed);
+    let inv = |a: u64| a >= sv - stk && a < sv;
+    if !inv(sp) || sp & 0xF != 0 {
+        return Err("the stack pointer is not in the virtual stack");
+    }
+    // Reads below are only of addresses inside the virtual stack (inv), at
+    // their kernel-side place.
+    let rk = |a: u64| if inv(a) && a + 8 <= sv {
+        // SAFETY: inside the kernel-side stack.
+        unsafe { ((a - sv + sk) as *const u64).read() }
+    } else {
+        u64::MAX
+    };
+    let cstr_is = |a: u64, want: &[u8]| {
+        inv(a) && a + want.len() as u64 + 1 <= sv
+            // SAFETY: inside the kernel-side stack (checked just before).
+            && (0..=want.len()).all(|i| unsafe { ((a - sv + sk + i as u64) as *const u8).read() } == *want.get(i).unwrap_or(&0))
+    };
+    if rk(sp) != 2 || !cstr_is(rk(sp + 8), argv[0]) || !cstr_is(rk(sp + 16), argv[1]) || rk(sp + 24) != 0 {
+        return Err("argc/argv on the stack are wrong or not virtual");
+    }
+    if !cstr_is(rk(sp + 32), envp[0]) || rk(sp + 40) != 0 {
+        return Err("envp on the stack is wrong or not virtual");
+    }
+    let mut a = sp + 48;
+    let mut seen = 0u32;
+    loop {
+        if a + 16 > sv {
+            return Err("no AT_NULL in the auxv");
+        }
+        let (t, val) = (rk(a), rk(a + 8));
+        a += 16;
+        match t {
+            0 => break,
+            3 if val == info.phdr => seen |= 1,
+            7 if val == v[1] => seen |= 2,
+            9 if val == info.entry => seen |= 4,
+            25 if inv(val) => seen |= 8,
+            15 if inv(val) => seen |= 16,
+            31 if val == rk(sp + 8) => seen |= 32,
+            3 | 7 | 9 | 25 | 15 | 31 => return Err("AT_PHDR/AT_BASE/AT_ENTRY/AT_RANDOM/AT_PLATFORM/AT_EXECFN is not the virtual address"),
+            _ => {}
+        }
+    }
+    if seen != 63 {
+        return Err("an auxv entry is missing");
+    }
+    Ok(good)
 }
