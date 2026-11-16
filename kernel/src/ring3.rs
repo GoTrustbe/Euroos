@@ -16068,9 +16068,11 @@ fn mem_census_once() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
         FORK_IN_FLIGHT.lock().iter().filter(|e| e.3 != 0).map(|e| (e.0, e.3)).collect()
     };
     for (ftask, cpml4) in forking {
-        let Some((file, shared, none, _)) = proc_mem_ranges(fork_child_owner(ftask).unwrap_or(0)) else { continue };
         let mut m = ProcMem { pid: 0, task: ftask, name: String::from("(fork in progress)"), ..Default::default() };
+        // Interrupts off before the first lock: the range lists and
+        // FORK_IN_FLIGHT are taken from system calls with IF=0 too.
         let _g = crate::sched::IfOffGuard::new();
+        let Some((file, shared, none, _)) = proc_mem_ranges(fork_child_owner(ftask).unwrap_or(0)) else { continue };
         let v = FORK_IN_FLIGHT.lock();
         if !v.iter().any(|e| e.0 == ftask && e.3 == cpml4) {
             continue;
