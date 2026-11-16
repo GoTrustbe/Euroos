@@ -86,6 +86,65 @@ pub fn take_tx_stats() -> (u64, u64) {
     (TX_BUSY_SKIPS.load(Ordering::Relaxed), c * 10_000 / per)
 }
 
+/// `serialcost` ([serial-cost], 11f-A): what the console output costs the
+/// BSP, the one CPU every ring-3 thread runs on while `smpuser` is off. Queues
+/// `kb` KiB of lines, lets the queue drain (kicking it like the desktop loop
+/// does), and charges the run time of the desktop loop and of the sender task
+/// in that stretch. Under a hypervisor every transmitter load is an exit to the
+/// host's device model; measured ~40 us a byte on the BSP while a browser
+/// typed (docs/proof/11f-keylat). With application processors taking kernel
+/// work the BSP should pay next to nothing: limit 1 ms per KiB; SKIP without
+/// APs (one CPU: the cost is unavoidable there).
+pub fn cost_test(kb: usize) -> alloc::vec::Vec<alloc::string::String> {
+    let kb = kb.clamp(1, 64);
+    let tx = TX_TASK.load(Ordering::Relaxed);
+    let run = |t: usize| if t == usize::MAX { 0 } else { crate::sched::run_tsc_now(t) };
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    // Let what is queued now go first.
+    for _ in 0..200 {
+        if TX_PENDING.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        kick();
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    let (r0, rt) = (run(0), run(tx));
+    let (ap0, t0) = (AP_SENT.load(Ordering::Relaxed), unsafe { core::arch::x86_64::_rdtsc() });
+    let line = "[serial-cost] filler 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789abcdefghijklmnopqrstuvwxyz";
+    let lines = kb * 1024 / (line.len() + 1);
+    for _ in 0..lines {
+        crate::serial_println!("{line}");
+    }
+    let mut waited = 0;
+    while TX_PENDING.load(Ordering::Relaxed) > 0 && waited < 3000 {
+        kick();
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+        waited += 1;
+    }
+    let wall = (unsafe { core::arch::x86_64::_rdtsc() } - t0) * 10 / per;
+    let bsp = (run(0) - r0 + run(tx) - rt) * 10_000 / per; // us
+    let bytes = (lines * (line.len() + 1)) as u64;
+    let aps = crate::kwork::accepting() && !crate::kwork::online_aps().is_empty();
+    let per_kb = bsp * 1024 / bytes.max(1);
+    let verdict = if !aps {
+        "SKIP (no application processor takes kernel work)"
+    } else if per_kb <= 1000 && TX_PENDING.load(Ordering::Relaxed) == 0 {
+        "OK"
+    } else {
+        "FAILED"
+    };
+    let l = alloc::format!(
+        "[serial-cost] {bytes} B of console lines: drained in {wall} ms, the BSP spent {} ms on them ({per_kb} us a KiB; limit 1000 with APs), sent by APs {} B -> {verdict}",
+        bsp / 1000, AP_SENT.load(Ordering::Relaxed) - ap0);
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
+/// Bytes an application processor sent (see `ap_drain`).
+static AP_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// The longest time (ms) the queue was not empty since the last call.
 pub fn take_queue_delay_ms() -> u64 {
     let c = TX_BUSY_MAX.swap(0, Ordering::Relaxed);
