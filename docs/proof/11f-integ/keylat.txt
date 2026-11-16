@@ -1,0 +1,19 @@
+# keylat (chrome-smoke --only perf), browser images, pairs b = e4b8ba4 / f = 11f-integ started together. Rounds 1-3: smp4 on 0-3/4-7 and smp2 on 8-9/10-11 at once; rounds 1-2 overlapped the tail of the previous round (harness wait matched an early FAIL line). Rounds 4-6: smp2 pairs alone, one round after the other. Siblings 20-31 idle, work dirs on tmpfs.
+kl1-b2 screendump=199 fbread=165 
+kl1-b4 screendump=146 fbread=93 
+kl1-f2 screendump=215 fbread=186 
+kl1-f4 screendump=170 fbread=92 
+kl2-b2 screendump=196 fbread=173 
+kl2-b4 screendump=147 fbread=80 
+kl2-f2 screendump=179 fbread=180 
+kl2-f4 screendump=166 fbread=91 
+kl3-b2 screendump=159 fbread=91 
+kl3-b4 screendump=165 fbread=95 
+kl3-f2 screendump=158 fbread=92 
+kl3-f4 screendump=153 fbread=98 
+kl4-b2 screendump=157 fbread=98 
+kl4-f2 screendump=140 fbread=93 
+kl5-b2 screendump=158 fbread=95 
+kl5-f2 screendump=149 fbread=93 
+kl6-b2 screendump=137 fbread=94 
+kl6-f2 screendump=142 fbread=95 

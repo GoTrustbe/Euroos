@@ -2938,6 +2938,111 @@ fn epoll_fd_writable(fd: u64) -> bool {
 /// ready and a wait was requested, YIELD (bounded) so chrome's worker threads and
 /// timers advance instead of the main thread busy-spinning — then return 0 so the
 /// pump re-checks its timer queue. This keeps a cooperative kernel making progress.
+/// 11f-A: epoll_wait/poll calls that found an fd ready only after they had
+/// slept (their 2-tick re-check), while a key was on its way.
+pub static POLL_LATE: AtomicU64 = AtomicU64::new(0);
+
+// ── Waking epoll_wait/poll waiters when a descriptor becomes ready (11f-A) ──
+//
+// A waiter in epoll_wait or poll slept a tick or two and re-checked its
+// descriptors; nothing woke it earlier. Every message between chrome's
+// threads and processes (mojo over unix sockets, eventfd wakeups, X events)
+// that reached a thread in one of those waits therefore waited up to 20 ms,
+// ~19 times per key ([keylat] late finds), and the BSP idled until the tick
+// in between. A waiter now registers the wake keys of its descriptors
+// (`net::poll_key`); an eventfd write, a unix send or close, and new X
+// events for a client wake it (`poll_wake`). Descriptors without a key keep
+// the re-check, which also stays as the fallback for a wake that came
+// between the readiness check and the sleep (`POLL_HIT`).
+const NPK: usize = 16;
+const NT: usize = crate::sched::MAX_TASKS;
+static PK_N: [core::sync::atomic::AtomicUsize; NT] = [const { core::sync::atomic::AtomicUsize::new(0) }; NT];
+static PK: [[AtomicU64; NPK]; NT] = [const { [const { AtomicU64::new(0) }; NPK] }; NT];
+static PK_HIT: [core::sync::atomic::AtomicBool; NT] = [const { core::sync::atomic::AtomicBool::new(false) }; NT];
+/// The slot's task generation at registration (`sched::SPAWN_GEN`): a thread
+/// killed inside epoll_wait/poll never drops its registration, and the next
+/// task in that slot must not be woken for the dead one's descriptors.
+static PK_GEN: [AtomicU64; NT] = [const { AtomicU64::new(0) }; NT];
+static PK_WAITERS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Waiters a ready descriptor woke before their re-check (`pollwake` counts).
+pub static POLL_WAKES: AtomicU64 = AtomicU64::new(0);
+
+/// Registers the current task's wake keys for the duration of one wait.
+struct PollKeys(usize);
+impl PollKeys {
+    fn new(fds: &[u64]) -> PollKeys {
+        let cur = crate::sched::current();
+        let mut n = 0;
+        if cur < NT {
+            // A registration left by a killed thread in this slot.
+            if PK_N[cur].swap(0, Ordering::AcqRel) > 0 {
+                PK_WAITERS.fetch_sub(1, Ordering::AcqRel);
+            }
+            PK_GEN[cur].store(crate::sched::SPAWN_GEN[cur].load(Ordering::Relaxed), Ordering::Relaxed);
+            for &fd in fds {
+                if let Some(k) = crate::net::poll_key(fd) {
+                    if n < NPK && !(0..n).any(|i| PK[cur][i].load(Ordering::Relaxed) == k) {
+                        PK[cur][n].store(k, Ordering::Relaxed);
+                        n += 1;
+                    }
+                }
+            }
+            PK_HIT[cur].store(false, Ordering::Relaxed);
+            // The previous registration of this task was dropped first: PK_N is 0.
+            if n > 0 {
+                PK_N[cur].store(n, Ordering::Release);
+                PK_WAITERS.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        PollKeys(cur)
+    }
+    /// Sleep up to `ticks` unless a wake key fired since `new`. True: an event woke us.
+    fn sleep(&self, ticks: u64) -> bool {
+        let cur = self.0;
+        crate::sched::sleep_ticks(ticks);
+        // A wake that came before we were Sleeping found us running: undo the sleep.
+        if cur < NT && PK_HIT[cur].load(Ordering::Acquire) {
+            crate::sched::wake_sleeping(cur, |_| true);
+        }
+        if syscall_yield_ok() {
+            yield_reacquire();
+        }
+        cur < NT && PK_HIT[cur].swap(false, Ordering::AcqRel)
+    }
+}
+impl Drop for PollKeys {
+    fn drop(&mut self) {
+        let cur = self.0;
+        if cur < NT && PK_N[cur].swap(0, Ordering::AcqRel) > 0 {
+            PK_WAITERS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// A descriptor with wake key `key` became ready: wake its epoll_wait/poll waiters.
+pub fn poll_wake(key: u64) {
+    poll_wake_where(|k| k == key);
+}
+
+fn poll_wake_where(hit: impl Fn(u64) -> bool) {
+    if PK_WAITERS.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    for t in 0..NT {
+        let n = PK_N[t].load(Ordering::Acquire).min(NPK);
+        if n == 0 {
+            continue;
+        }
+        if (0..n).any(|i| hit(PK[t][i].load(Ordering::Relaxed))) && !PK_HIT[t].swap(true, Ordering::AcqRel) {
+            POLL_WAKES.fetch_add(1, Ordering::Relaxed);
+            crate::sched::wake_sleeping(t, |t| {
+                PK_N[t].load(Ordering::Acquire) > 0
+                    && PK_GEN[t].load(Ordering::Relaxed) == crate::sched::SPAWN_GEN[t].load(Ordering::Relaxed)
+            });
+        }
+    }
+}
+
 fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     EPOLL_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if !is_epoll_fd(epfd) {
@@ -2945,11 +3050,27 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     }
     let idx = (epfd - EPOLL_FD_BASE) as usize;
     let mut tries = 0u32;
+    // This call's own deadline (it was one static shared by every waiter, so a
+    // short wait of one thread cut the long wait of another short).
+    // Taken once: the loop's first pass used to set it, and an event wake that
+    // found nothing ready (which does not count as a try) set it again.
+    let epoll_deadline = if (timeout as i32) > 0 {
+        crate::interrupts::ticks() + ((timeout as i32) as u64).div_ceil(10)
+    } else {
+        0
+    };
+    let mut keys: Option<PollKeys> = None;
     loop {
         let list = match &EPOLLS.lock()[idx] {
             Some(l) => l.clone(),
             None => return (-9i64) as u64,
         };
+        if timeout != 0 {
+            // Register before the readiness check: a wake after the check is not lost.
+            drop(keys.take());
+            let fds: alloc::vec::Vec<u64> = list.iter().map(|e| e.0 as u64).collect();
+            keys = Some(PollKeys::new(&fds));
+        }
         let mut n = 0u64;
         let mut first_fd = 0u64;
         for (fd, evmask, data) in list {
@@ -3012,6 +3133,9 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
             crate::serial_println!("[wait] t{} {:?} epoll_wait timeout={timeout} nothing ready:{desc}",
                 crate::sched::current(), thread_name(crate::sched::current()));
         }
+        if n > 0 && tries > 0 && crate::xserver::keylat::in_flight() {
+            POLL_LATE.fetch_add(1, Ordering::Relaxed);
+        }
         if n > 0 || timeout == 0 {
             // Livelock forensics: run 14's Chrome_IOThread called epoll_wait a
             // MILLION times per stall-snap, always getting 1 "ready" event it
@@ -3038,22 +3162,29 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         // keep the clock moving if it froze (interrupts are off in a syscall), and
         // report 0 only when a FINITE timeout really elapsed.
         let timeout_ms = timeout as i32;
-        if tries == 0 && timeout_ms > 0 {
-            EPOLL_DEADLINE.store(crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10), Ordering::Relaxed);
-        }
-        if timeout_ms > 0 && crate::interrupts::ticks() >= EPOLL_DEADLINE.load(Ordering::Relaxed) {
+        if timeout_ms > 0 && crate::interrupts::ticks() >= epoll_deadline {
             return 0; // the finite timeout really expired
         }
         if tries >= 400 {
             return 0; // backstop: a frozen clock must not hang the machine
         }
-        tries += 1;
         let before = crate::interrupts::ticks();
-        crate::sched::sleep_ticks(2);
-        if syscall_yield_ok() {
-            { yield_reacquire(); } // deschedule so whoever will wake us can run
+        // deschedule so whoever will wake us can run; a ready descriptor with a
+        // wake key ends the sleep early
+        let by_event = match keys.as_ref() {
+            Some(k) => k.sleep(2),
+            None => {
+                crate::sched::sleep_ticks(2);
+                if syscall_yield_ok() {
+                    yield_reacquire();
+                }
+                false
+            }
+        };
+        if !by_event {
+            tries += 1;
         }
-        if crate::interrupts::ticks() == before {
+        if !by_event && crate::interrupts::ticks() == before {
             crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
             // The vDSO page follows EVERY tick advance, forced ones included. Two
             // clocks that drift — deadlines against TICKS, chrome reading the page —
@@ -5496,7 +5627,6 @@ static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 /// Deadline of the epoll wait in progress (single-waiter approximation: each call
 /// rearms it at try 0, and interleaved waiters only shorten each other's waits —
 /// an early 0 is a spurious wakeup, which epoll callers must tolerate anyway).
-static EPOLL_DEADLINE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Enable the periodic thread-state/syscall-rate snapshots (deadlock diagnostics).
 pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Log directory open/getdents results (chrome disk-cache init diagnostics).
@@ -5684,6 +5814,10 @@ fn lost_wake_check(uaddr: u64, woken: i32) {
 const FUTEX_WATCH: u64 = 0x10014d2bb50;
 
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
+    futex_wake_k(uaddr, uaddr, n)
+}
+
+fn futex_wake_k(uaddr: u64, key: u64, n: i32) -> u32 {
     if uaddr == FUTEX_WATCH {
         crate::serial_println!("[fw] @{} t{} WAKE n={n} word={:?}",
             crate::interrupts::ticks(), crate::sched::current(), read_glibc_u32(uaddr));
@@ -5711,7 +5845,7 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
     let mut woken = 0i32;
     let mut i = 0;
     while i < q.len() && woken < n {
-        if q[i].0 == uaddr {
+        if q[i].0 == key {
             let task = q[i].1;
             crate::sched::unblock_any(task); // wake Blocked OR (timed) Sleeping waiters
             q.swap_remove(i);
@@ -5731,7 +5865,29 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// FUTEX_WAIT: if *uaddr == val, block the current task on uaddr and return 0
 /// (the waiter is switched out on the next tick until a wake
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
+/// The FUTEX_QUEUE key of a futex word (BUG-307). A PRIVATE futex (op flag
+/// 128: glibc's process-private mutexes and condition variables) belongs to
+/// one address space; the queue was keyed by the user address alone, and every
+/// chrome process maps its binary at the same address, so a wake for a lock in
+/// one renderer could take the waiter of the same lock in another, and that
+/// renderer's waiter was never woken (renderer main and IO thread Blocked on a
+/// futex whose word was 0, page input and navigation stuck). The address space
+/// (the frame of CR3) goes into the bits above the user half. Shared futexes
+/// (no flag, and the kernel's clear-child-tid wake) keep the bare address.
+fn futex_key(uaddr: u64, private: bool) -> u64 {
+    if !private {
+        return uaddr;
+    }
+    let (frame, _) = x86_64::registers::control::Cr3::read();
+    let tag = (frame.start_address().as_u64() >> 12) & 0x7fff;
+    uaddr | ((tag | 0x8000) << 48)
+}
+
 fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
+    futex_wait_k(uaddr, uaddr, val, deadline)
+}
+
+fn futex_wait_k(uaddr: u64, key: u64, val: u32, deadline: u64) -> u64 {
     FUTEX_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if uaddr == FUTEX_WATCH {
         crate::serial_println!("[fw] @{} t{} WAIT val={val} deadline={deadline} word={:?}",
@@ -5756,8 +5912,8 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if cur_val != val {
         return (-11i64) as u64; // -EAGAIN: the value already changed (drops q)
     }
-    if !q.iter().any(|&(a, t)| a == uaddr && t == cur) {
-        q.push((uaddr, cur));
+    if !q.iter().any(|&(a, t)| a == key && t == cur) {
+        q.push((key, cur));
     }
     if cur < 64 {
         FUTEX_WAIT_ADDR[cur].store(uaddr, Ordering::Relaxed);
@@ -5798,7 +5954,7 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if cur < 64 {
         FUTEX_WAIT_ADDR[cur].store(0, Ordering::Relaxed);
     }
-    if let Some(pos) = q.iter().position(|&(a, t)| a == uaddr && t == cur) {
+    if let Some(pos) = q.iter().position(|&(a, t)| a == key && t == cur) {
         q.swap_remove(pos);
         drop(q);
         if uaddr == FUTEX_WATCH {
@@ -6630,7 +6786,19 @@ fn bg_dispatch(p: &mut BgProc, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
             }
             let bytes = match copy_from_user(a1, len) { Some(v) => v, None => return EFAULT };
             let line = String::from_utf8_lossy(&bytes).into_owned();
-            crate::serial_println!("[euroapp pid {}] {}", p.pid, line.trim_end());
+            // BUG-230: the serial copy is one line of at most 160 printable
+            // characters. The whole line (up to 4 KiB, the fuzzer's are
+            // binary) went to the UART with interrupts off: 80-160 ms
+            // without a tick under KVM. The app's output keeps all of it.
+            const SHOWN: usize = 160;
+            let text = line.trim_end();
+            let shown: String = text.chars().take(SHOWN).map(|c| if c.is_control() { '.' } else { c }).collect();
+            let more = text.chars().count().saturating_sub(SHOWN);
+            if more > 0 {
+                crate::serial_println!("[euroapp pid {}] {shown} ... (+{more} characters)", p.pid);
+            } else {
+                crate::serial_println!("[euroapp pid {}] {shown}", p.pid);
+            }
             if p.output.len() < 512 {
                 p.output.push(line);
             }
@@ -10831,7 +10999,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
         GLIBC_CHILD_EXITS.lock().push((pid, st));
     }
     globals_release_owner(ctask); // never drop state that is loaded
-    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid); mm_changed();
     child_mem_drop(ctask);
     ram_file_sweep_due();
     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
@@ -11182,16 +11350,26 @@ unsafe fn arena_fill(dst: u64, src: Option<u64>, bytes: usize) {
 /// linked yet).
 static FORK_IN_FLIGHT: Mutex<alloc::vec::Vec<(usize, u64, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// BUG-281: bumped whenever a fork starts or ends (registered or undone) and
+/// whenever a fork child leaves the list. A census that saw it change was
+/// taken while the list of processes moved under it and is taken again.
+static MM_GEN: AtomicU64 = AtomicU64::new(0);
+fn mm_changed() {
+    MM_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
 fn fork_in_flight_set(task: usize, arena: u64, frames: usize, pml4: u64) {
     let _g = crate::sched::IfOffGuard::new();
     let mut v = FORK_IN_FLIGHT.lock();
     v.retain(|e| e.0 != task);
     v.push((task, arena, frames, pml4));
+    mm_changed();
 }
 
 fn fork_in_flight_done(task: usize) {
     let _g = crate::sched::IfOffGuard::new();
     FORK_IN_FLIGHT.lock().retain(|e| e.0 != task);
+    mm_changed();
 }
 
 /// `task` has ended for good: give back a fork it was in the middle of.
@@ -11203,6 +11381,7 @@ fn fork_in_flight_reclaim(task: usize) {
         i.map(|i| v.swap_remove(i))
     };
     let Some((_, arena, frames, pml4)) = hit else { return };
+    mm_changed();
     let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
     if pml4 != 0 {
         crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
@@ -11235,6 +11414,10 @@ fn do_glibc_fork() -> u64 {
     let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
     if arena == 0 || span == 0 {
         return (-38i64) as u64; // no glibc process active
+    }
+    let census = FORK_CENSUS_NEXT.load(Ordering::Relaxed) > 0 && FORK_CENSUS_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
+    if census {
+        FORK_CENSUS_BEFORE.store(census_unattributed_kib(), Ordering::Relaxed);
     }
     let nblocks = span >> 21;
     // BUG-156: the child has no arena in one piece any more (128 MiB of the
@@ -11321,6 +11504,10 @@ fn do_glibc_fork() -> u64 {
     // frames via the arena copy).
     // [memt]: the self-test asks for the next forks to be refused here, the
     // place where a fork has taken everything it takes.
+    if census {
+        FORK_CENSUS_DURING.store(census_unattributed_kib(), Ordering::Relaxed);
+        FORK_CENSUS_TAKEN.fetch_add(1, Ordering::Relaxed);
+    }
     let injected = FORK_REFUSE_NEXT.load(Ordering::Relaxed) > 0 && FORK_REFUSE_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
     // [memt] forkkill: the forking thread stops here, as if its copy never
     // ended, until the launcher's deadline kills the run (BUG-180). Bounded,
@@ -13880,6 +14067,23 @@ fn shared_frames_drop_all() {
     *RAMFILE_BUDGET.lock() = euromm::ramfile::Budget::none();
 }
 
+/// BUG-281 ([memt] cowfork): the next fork takes a memory census at its start
+/// and again where it has taken everything (the child's tables, its share of
+/// the pages), before the child is registered. The pool's frames without an
+/// owner in KiB at both moments.
+static FORK_CENSUS_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FORK_CENSUS_TAKEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FORK_CENSUS_BEFORE: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+static FORK_CENSUS_DURING: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+
+/// Frames of the demand pool in use that the census gives no owner, in KiB
+/// (the `unattributed` of the `[memstat] sum` line).
+fn census_unattributed_kib() -> i64 {
+    let (t, procs) = mem_census();
+    let named: usize = t.pcache + t.shm_frames + procs.iter().map(|p| p.anon + p.file_private + p.tables).sum::<usize>();
+    (t.pool_total.saturating_sub(t.pool_free) as i64 - named as i64) * 4
+}
+
 /// Forks to refuse from now on (the [memt] self-test).
 static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Forks that stop where a refused one would be refused, until their run is
@@ -13927,6 +14131,8 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         FORK_PARK_NEXT.store(kill as u32, Ordering::Relaxed);
         FORK_PARKED.store(0, Ordering::Relaxed);
         GLIBC_DEADLINE_TICKS.store(if kill { 3_000 } else { 36_000 }, Ordering::Relaxed);
+        FORK_CENSUS_NEXT.store((mode == "cowfork") as u32, Ordering::Relaxed);
+        FORK_CENSUS_TAKEN.store(0, Ordering::Relaxed);
         // forkkill runs the forks of forkmany; its first one is held.
         let arg: &[u8] = if kill { b"forkmany" } else { mode.as_bytes() };
         // The small arena for every mode: 270 forks copy it 270 times, and on a
@@ -13942,6 +14148,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
         FORK_PARK_NEXT.store(0, Ordering::Relaxed);
         GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
+        FORK_CENSUS_NEXT.store(0, Ordering::Relaxed);
         DEMAND_POOL_CAP_FRAMES.store(0, Ordering::Relaxed);
         GLIBC_ARENA_MIB.store(prev_arena, Ordering::Relaxed);
         if exit == u64::MAX {
@@ -13964,6 +14171,19 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
             (held == 1 && back, alloc::format!("killed by the deadline while its fork was held ({held} held)"))
         } else {
             (exit == 0 && sum.contains("PASS") && back, sum)
+        };
+        // BUG-281: the census in the middle of the fork gives every frame an
+        // owner, as it does before the fork (a 1 MiB margin for what the
+        // fork itself allocates on the way).
+        let ok = if mode == "cowfork" {
+            let (b, d) = (FORK_CENSUS_BEFORE.load(Ordering::Relaxed), FORK_CENSUS_DURING.load(Ordering::Relaxed));
+            let taken = FORK_CENSUS_TAKEN.load(Ordering::Relaxed);
+            let c = taken == 1 && (d - b).abs() <= 1024;
+            crate::serial_println!("[memt] cowfork: census in the middle of the fork: {d} KiB without an owner (at its start {b} KiB, {taken} census taken) → {}",
+                if c { "OK ✓" } else { "FAILED" });
+            ok && c
+        } else {
+            ok
         };
         all &= ok;
         crate::serial_println!("[memt] {mode}: {sum} (exit {}); frames after the run: {free1} free (was {free0}), process pool {pp1} (was {pp0}) → {}",
@@ -14932,6 +15152,11 @@ fn bg_syscall(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     (-38i64) as u64 // the process went away between the gate and here
 }
 
+static BG_SLOW_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The longest call of a background process so far (microseconds) and its number.
+pub static BG_CALL_MAX_US: AtomicU64 = AtomicU64::new(0);
+pub static BG_CALL_MAX_NUM: AtomicU64 = AtomicU64::new(0);
+
 /// Syscall dispatcher (ring 0). Returns the return value in rax.
 #[no_mangle]
 pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
@@ -14957,7 +15182,25 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // A THREAD shares the process of its main task. Descriptors become
     // objects at the gate (fdtab.rs), as on the Linux path below.
     if BG.lock().iter().any(|p| p.task == cur || p.threads.contains(&cur)) {
-        return fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
+        // BUG-230: a call of a background process runs with interrupts off
+        // from start to end; the longest one is kept, and one of 20 ms or
+        // more is named (24 lines at most).
+        let t0 = crate::hpet::ns();
+        let r = fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
+        // The last call of the task, as the Linux path records it.
+        let t = cur.min(LAST_SYS.len() - 1);
+        LAST_SYS[t].0.store(num, Ordering::Relaxed);
+        LAST_SYS[t].1.store(a1, Ordering::Relaxed);
+        LAST_SYS[t].2.store(r, Ordering::Relaxed);
+        let us = crate::hpet::ns().wrapping_sub(t0) / 1000;
+        if us > BG_CALL_MAX_US.load(Ordering::Relaxed) {
+            BG_CALL_MAX_US.store(us, Ordering::Relaxed);
+            BG_CALL_MAX_NUM.store(num, Ordering::Relaxed);
+        }
+        if us >= 20_000 && BG_SLOW_SHOWN.fetch_add(1, Ordering::Relaxed) < 24 {
+            crate::serial_println!("[slowcall] task {cur} call {num:#x}({a1:#x}, {a2:#x}, {a3:#x}, {a4:#x}, {a5:#x}) -> {r:#x}: {} ms with interrupts off", us / 1000);
+        }
+        return r;
     }
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
@@ -15874,7 +16117,73 @@ fn proc_mem_ranges(owner: usize) -> Option<(euromm::FreeRanges, euromm::FreeRang
 /// browser. Each process is walked with interrupts off (ring 3 runs on this
 /// core only, so its tables cannot go away under the walk); between two
 /// processes the timer may run.
+///
+/// BUG-281: a census that met a fork gave 40 to 94 MiB no owner for one
+/// sample: the parent's pages were already shared copy-on-write (each holder
+/// counts its part) while the child was not in the list yet, so the child's
+/// part and its new page tables belonged to nobody. A fork in progress is
+/// now walked as a process of its own, and a census during which a fork
+/// started or ended or a child left is taken again (three more times at most).
 pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
+    let mut tries = 0;
+    loop {
+        let g0 = MM_GEN.load(Ordering::SeqCst);
+        let r = mem_census_once();
+        tries += 1;
+        if MM_GEN.load(Ordering::SeqCst) == g0 || tries == 4 {
+            return r;
+        }
+    }
+}
+
+/// Walk the demand region of address space `pml4` into `m`: its pages by
+/// kind (anonymous, copy-on-write part, private file pages, maps of frames
+/// others own) and its page tables. The caller has interrupts off.
+fn census_walk(m: &mut ProcMem, pml4: u64, file: &euromm::FreeRanges, shared: &euromm::FreeRanges, none: &euromm::FreeRanges) {
+    let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let refs = crate::paging::cow_refs();
+    let mut cow_units = 0usize;
+    m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
+        if pte & 1 == 0 {
+            sw += 1;
+        } else if pte & crate::paging::COW != 0 {
+            // Shared copy-on-write: each holder counts its part, so
+            // the frame is counted once over the processes.
+            cow_units += 65536 / (refs.extra(pte & 0x000F_FFFF_FFFF_F000) as usize + 1);
+        } else if pte & 2 == 0 {
+            mc += 1;
+        } else if shared.contains(va) {
+            ms += 1;
+        } else if file.contains(va) {
+            fpriv += 1;
+        } else {
+            anon += 1;
+            if none.contains(va) {
+                anon_na += 1;
+            }
+            if (va >> 12).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60 == 0 {
+                sampled += 1;
+                let phys = pte & 0x000F_FFFF_FFFF_F000;
+                // SAFETY: a present PTE of the demand slot names an identity-mapped pool frame.
+                let words = unsafe { core::slice::from_raw_parts(phys as *const u64, 512) };
+                if words.iter().all(|&w| w == 0) {
+                    zero += 1;
+                }
+            }
+        }
+    });
+    m.anon = anon + (cow_units + 32768) / 65536;
+    m.anon_noaccess = anon_na;
+    m.sampled = sampled;
+    m.sampled_zero = zero;
+    m.file_private = fpriv;
+    m.maps_cache = mc;
+    m.maps_shared = ms;
+    m.swapped = sw;
+}
+
+fn mem_census_once() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
     let mut procs: alloc::vec::Vec<ProcMem> = alloc::vec::Vec::new();
     let mut ids: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
     {
@@ -15904,47 +16213,28 @@ pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
         let mut m = ProcMem { pid, task, name: thread_name(task), arena, reserved, ..Default::default() };
         m.noaccess = none.ranges().iter()
             .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
-        let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
-            (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
-        let refs = crate::paging::cow_refs();
-        let mut cow_units = 0usize;
-        m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
-            if pte & 1 == 0 {
-                sw += 1;
-            } else if pte & crate::paging::COW != 0 {
-                // Shared copy-on-write: each holder counts its part, so
-                // the frame is counted once over the processes.
-                cow_units += 65536 / (refs.extra(pte & 0x000F_FFFF_FFFF_F000) as usize + 1);
-            } else if pte & 2 == 0 {
-                mc += 1;
-            } else if shared.contains(va) {
-                ms += 1;
-            } else if file.contains(va) {
-                fpriv += 1;
-            } else {
-                anon += 1;
-                if none.contains(va) {
-                    anon_na += 1;
-                }
-                if (va >> 12).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60 == 0 {
-                    sampled += 1;
-                    let phys = pte & 0x000F_FFFF_FFFF_F000;
-                    // SAFETY: a present PTE of the demand slot names an identity-mapped pool frame.
-                    let words = unsafe { core::slice::from_raw_parts(phys as *const u64, 512) };
-                    if words.iter().all(|&w| w == 0) {
-                        zero += 1;
-                    }
-                }
-            }
-        });
-        m.anon = anon + (cow_units + 32768) / 65536;
-        m.anon_noaccess = anon_na;
-        m.sampled = sampled;
-        m.sampled_zero = zero;
-        m.file_private = fpriv;
-        m.maps_cache = mc;
-        m.maps_shared = ms;
-        m.swapped = sw;
+        census_walk(&mut m, pml4, &file, &shared, &none);
+        procs.push(m);
+    }
+    // Forks in progress (pid 0): the child's address space as far as the
+    // fork has built it. FORK_IN_FLIGHT stays locked during the walk: a fork
+    // that is undone or reclaimed takes it before it frees those tables.
+    let forking: alloc::vec::Vec<(usize, u64)> = {
+        let _g = crate::sched::IfOffGuard::new();
+        FORK_IN_FLIGHT.lock().iter().filter(|e| e.3 != 0).map(|e| (e.0, e.3)).collect()
+    };
+    for (ftask, cpml4) in forking {
+        let mut m = ProcMem { pid: 0, task: ftask, name: String::from("(fork in progress)"), ..Default::default() };
+        // Interrupts off before the first lock: the range lists and
+        // FORK_IN_FLIGHT are taken from system calls with IF=0 too.
+        let _g = crate::sched::IfOffGuard::new();
+        let Some((file, shared, none, _)) = proc_mem_ranges(fork_child_owner(ftask).unwrap_or(0)) else { continue };
+        let v = FORK_IN_FLIGHT.lock();
+        if !v.iter().any(|e| e.0 == ftask && e.3 == cpml4) {
+            continue;
+        }
+        census_walk(&mut m, cpml4, &file, &shared, &none);
+        drop(v);
         procs.push(m);
     }
     (mem_totals(), procs)
@@ -16466,7 +16756,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
                     GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
                     globals_release_owner(ctask); // parent state back BEFORE the drop
-                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid); mm_changed();
                     child_mem_drop(ctask);
                     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                     // Its descriptors close; what it was the last holder of goes
@@ -17800,7 +18090,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             };
             let mut tries = 0u32;
             let mut ready;
+            // Wake keys of the set (11f-A), registered before each readiness check.
+            let mut keys: Option<PollKeys> = None;
             loop {
+            if timeout_ms != 0 {
+                drop(keys.take());
+                let fds: alloc::vec::Vec<u64> = (0..nfds)
+                    .filter_map(|i| read_user::<i32>(a1 + (i as u64) * 8).and_then(|v| fdtab::resolve(v as i64 as u64)))
+                    .collect();
+                keys = Some(PollKeys::new(&fds));
+            }
             ready = 0u64;
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
@@ -17865,6 +18164,9 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 crate::serial_println!("[pollset] t{} {:?} n={nfds} to={timeout_ms} ready={ready}:{desc}",
                     crate::sched::current(), thread_name(crate::sched::current()));
             }
+            if ready > 0 && tries > 0 && crate::xserver::keylat::in_flight() {
+                POLL_LATE.fetch_add(1, Ordering::Relaxed);
+            }
             if ready > 0 || timeout_ms == 0 {
                 break ready; // something is ready, or the caller asked not to wait
             }
@@ -17906,50 +18208,32 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 // "X connection to :0 broken" after exactly 64 tries).
                 break (-4i64) as u64;
             }
-            tries += 1;
-            // Sleep the REMAINING time in one go for a finite timeout. A loop of
-            // single-tick sleeps with a yield each time is a lot of scheduler
-            // churn, and next to busy tasks it can leave the sleeper starved (it
-            // hung a boot where self-test spinners were running).
-            // A syscall runs with interrupts off, so a wait loop in here can hold up
-            // the very timer it waits for when no other task is runnable: the clock
-            // freezes and the deadline never arrives (measured: ticks 1951 at try 1
-            // AND at try 40). So bound the wait by ITERATIONS too, and return 0 when
-            // it runs out. A poll that returns early is a spurious wakeup, which every
-            // caller must already handle; a poll that never returns is a hung machine.
             if tries >= 200 {
                 break if deadline.is_none() { (-4i64) as u64 } else { 0 };
             }
             let before = crate::interrupts::ticks();
-            match deadline {
-                Some(d) => {
-                    if d > before {
-                        // Sleep in 1-tick steps, NOT the whole remaining timeout at
-                        // once: a poll(fds, 1300ms) that naps 130 ticks in one go is
-                        // blind to data arriving on tick 1 — chrome's glib pump then
-                        // notices a click only when its full timeout expires, which
-                        // under TCG's ~60x stretch feels like input never landing.
-                        // The loop re-checks readiness after every tick.
+            // Sleep a tick at a time (a long nap is blind to data that arrives
+            // meanwhile); a ready descriptor with a wake key ends it early.
+            let sleep = |keys: &Option<PollKeys>| -> bool {
+                match keys.as_ref() {
+                    Some(k) => k.sleep(1),
+                    None => {
                         crate::sched::sleep_ticks(1);
                         if syscall_yield_ok() {
                             yield_reacquire();
                         }
+                        false
                     }
                 }
-                None => {
-                    crate::sched::sleep_ticks(1);
-                    if syscall_yield_ok() {
-                        yield_reacquire();
-                    }
-                }
+            };
+            let by_event = match deadline {
+                Some(d) => d > before && sleep(&keys),
+                None => sleep(&keys),
+            };
+            if !by_event {
+                tries += 1;
             }
-            // Keep TIME MOVING while we wait. A syscall runs with interrupts off, so
-            // if nothing else is runnable the timer cannot tick and the deadline we
-            // are waiting for would never arrive (measured: the clock sat at 1951
-            // through the whole wait). The launcher loop already fast-forwards an idle
-            // clock; do the same here, one tick at a time, so a wait ends when it
-            // should instead of ending because it gave up.
-            if crate::interrupts::ticks() == before {
+            if !by_event && crate::interrupts::ticks() == before {
                 crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
             // The vDSO page follows EVERY tick advance, forced ones included. Two
             // clocks that drift — deadlines against TICKS, chrome reading the page —
@@ -18894,6 +19178,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list
         202 => {
+            let fpriv = a2 & 128 != 0;
             // futex(uaddr, op, val, ...): real blocking wait + wake, so pthread
             // mutexes/joins work. Low 7 bits select the op (ignore PRIVATE/CLOCK).
             // glibc's pthread_join uses FUTEX_WAIT_BITSET (9) / WAKE_BITSET (10),
@@ -18938,12 +19223,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     } else {
                         0
                     };
-                    let r = futex_wait(a1, a3 as u32, deadline);
+                    let r = futex_wait_k(a1, futex_key(a1, fpriv), a3 as u32, deadline);
                     fop_log(op, a1, r);
                     r
                 }
                 1 | 10 => {
-                    let r = futex_wake(a1, a3 as i32) as u64;
+                    let r = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32) as u64;
                     fop_log(op, a1, r);
                     r
                 }
@@ -18968,8 +19253,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                             }
                         }
                     }
-                    let woken = futex_wake(a1, a3 as i32);
-                    let moved = futex_wake(a4, i32::MAX); // a4 = uaddr2
+                    let woken = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32);
+                    let moved = futex_wake_k(a4, futex_key(a4, fpriv), i32::MAX); // a4 = uaddr2
                     fop_log(op, a1, (woken + moved) as u64);
                     (woken + moved) as u64
                 }
@@ -18990,8 +19275,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         };
                         let _ = write_user(a4, new);
                     }
-                    let woken = futex_wake(a1, a3 as i32);
-                    let woken2 = futex_wake(a4, i32::MAX);
+                    let woken = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32);
+                    let woken2 = futex_wake_k(a4, futex_key(a4, fpriv), i32::MAX);
                     (woken + woken2) as u64
                 }
                 _ => 0,

@@ -568,6 +568,9 @@ pub fn eurofuzz_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileS
     let _ = fs.write_file("/tmp/efuzz.eupkg", EFUZZ_EUPKG);
     let installed = install_file(fs, "/tmp/efuzz.eupkg").iter().any(|l| l.contains("installed"));
     let pid = 320;
+    // BUG-230: every call runs with interrupts off; none may hold the CPU
+    // for 50 ms (no tick, no input meanwhile). Was: log() of 4 KiB, 80-160 ms.
+    crate::ring3::BG_CALL_MAX_US.store(0, core::sync::atomic::Ordering::Relaxed);
     let (ran, reason) = match app_binary(fs, "efuzz") {
         Ok((bytes, _, app)) => {
             let spawned = crate::ring3::spawn_euro_app(falloc, &bytes, pid, &[b"/pkg/bin/efuzz"], 16, app_caps(&app.caps), eurosandbox::Profile::Euro).is_some();
@@ -577,9 +580,13 @@ pub fn eurofuzz_selftest(falloc: &mut euromm::FrameAllocator, fs: &mut dyn FileS
         Err(e) => (false, e),
     };
     crate::euroapi::remove(pid);
-    let ok = installed && ran && reason.contains("exit 171");
+    let max_us = crate::ring3::BG_CALL_MAX_US.load(core::sync::atomic::Ordering::Relaxed);
+    let max_num = crate::ring3::BG_CALL_MAX_NUM.load(core::sync::atomic::Ordering::Relaxed);
+    let quick = max_us < 50_000;
+    let ok = installed && ran && reason.contains("exit 171") && quick;
     crate::serial_println!(
-        "[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed={installed} · ran-to-completion={ran} · exit=\"{reason}\" → {}",
+        "[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed={installed} · ran-to-completion={ran} · exit=\"{reason}\" · longest call {max_num:#x} {} ms with interrupts off (limit 50) → {}",
+        max_us / 1000,
         if ok { "OK (every call answered with a value or an error; no fault, no panic) ✓" } else { "FAILED" }
     );
 }

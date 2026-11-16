@@ -1,0 +1,5 @@
+      1 [inst] OK up=True done=True install 23s :: [q1x3] EuroInstall 
+      6 [inst] OK up=True done=True install 24s :: [q1x3] EuroInstall 
+      1 [inst] OK up=True done=True install 6s :: [q1x3] EuroInstall →
+      1 [inst] OK up=True done=True install 7s :: [q1x3] EuroInstall →
+      1 [inst] OK up=True done=True install 8s :: [q1x3] EuroInstall →

@@ -521,6 +521,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         }
         // `ramfiles`: what the files that live in kernel memory are (W21).
         // `deskstat`: the desktop loop's stopwatch (sched::deskwatch, W22).
+        // `serialcost [KiB]` ([serial-cost], 11f-A): the BSP's cost of console output.
+        "serialcost" => crate::serial::cost_test(arg1.parse().unwrap_or(8)),
         "deskstat" => {
             let (max, over, max_all, over_all) = crate::sched::deskwatch::take();
             let l = format!(

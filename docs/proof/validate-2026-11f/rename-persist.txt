@@ -1,0 +1,117 @@
+[rename-persist] ok   phase 0: the wizard installed the system on a blank disk
+[rename-persist] ok   phase 1: installed system boots from its disk, sign-in
+[rename-persist]      whoami: tester; df: Filesystem   Size(KiB)  Used(KiB)  Avail(KiB)  Mounted on |   EuroFS      3398964       1692    3397272   /
+[rename-persist]      mkdir: directory created: /home/tester/rp
+[rename-persist] ok   phase 1, before: every file of the shell scenario reads back (13 files, 0 deleted or replaced names)
+[rename-persist]      $ write /home/tester/rp/n03.tmp native file 3 version 1  ->  written: /home/tester/rp/n03.tmp (24 bytes)
+[rename-persist]      $ mv /home/tester/rp/n03.tmp /home/tester/rp/n03.txt  ->  /home/tester/rp/n03.tmp -> /home/tester/rp/n03.txt
+[rename-persist]      $ write /home/tester/rp/n03.tmp native file 3 version 2  ->  written: /home/tester/rp/n03.tmp (24 bytes)
+[rename-persist]      $ mv /home/tester/rp/n03.tmp /home/tester/rp/n03.txt  ->  /home/tester/rp/n03.tmp -> /home/tester/rp/n03.txt
+[rename-persist]      $ write /home/tester/rp/n05.new native file 5 version 1  ->  written: /home/tester/rp/n05.new (24 bytes)
+[rename-persist]      $ rm /home/tester/rp/n05.txt  ->  removed: /home/tester/rp/n05.txt
+[rename-persist]      $ mv /home/tester/rp/n05.new /home/tester/rp/n05.txt  ->  /home/tester/rp/n05.new -> /home/tester/rp/n05.txt
+[rename-persist]      $ write /home/tester/rp/n07.new native file 7 version 1  ->  written: /home/tester/rp/n07.new (24 bytes)
+[rename-persist]      $ mv /home/tester/rp/n07.txt /home/tester/rp/n07.bak  ->  /home/tester/rp/n07.txt -> /home/tester/rp/n07.bak
+[rename-persist]      $ mv /home/tester/rp/n07.new /home/tester/rp/n07.txt  ->  /home/tester/rp/n07.new -> /home/tester/rp/n07.txt
+[rename-persist]      $ write /home/tester/rp/n07.new native file 7 version 2  ->  written: /home/tester/rp/n07.new (24 bytes)
+[rename-persist]      $ rm /home/tester/rp/n07.bak  ->  removed: /home/tester/rp/n07.bak
+[rename-persist]      $ mv /home/tester/rp/n07.txt /home/tester/rp/n07.bak  ->  /home/tester/rp/n07.txt -> /home/tester/rp/n07.bak
+[rename-persist]      $ mv /home/tester/rp/n07.new /home/tester/rp/n07.txt  ->  /home/tester/rp/n07.new -> /home/tester/rp/n07.txt
+[rename-persist]      $ write /home/tester/rp/n07.new native file 7 version 3  ->  written: /home/tester/rp/n07.new (24 bytes)
+[rename-persist]      $ rm /home/tester/rp/n07.bak  ->  removed: /home/tester/rp/n07.bak
+[rename-persist]      $ mv /home/tester/rp/n07.txt /home/tester/rp/n07.bak  ->  /home/tester/rp/n07.txt -> /home/tester/rp/n07.bak
+[rename-persist]      $ mv /home/tester/rp/n07.new /home/tester/rp/n07.txt  ->  /home/tester/rp/n07.new -> /home/tester/rp/n07.txt
+[rename-persist]      $ rm /home/tester/rp/n09.txt  ->  removed: /home/tester/rp/n09.txt
+[rename-persist] ok   phase 1: mv over an existing file, rm + mv, save with a backup, rm: no command refused
+[rename-persist] ok   phase 1, after: every file of the shell scenario reads back (13 files, 4 deleted or replaced names)
+[rename-persist]      mkdir: directory created: /home/tester/rl
+[rename-persist]      terminal: $ renprobe save /home/tester/rl 1
+[rename-persist]      terminal: renprobe: save a.txt, b.txt and c.txt created ok
+[rename-persist]      terminal: renprobe: check a.txt holds the version ok
+[rename-persist]      terminal: renprobe: check b.txt holds the version ok
+[rename-persist]      terminal: renprobe: check c.txt holds the version ok
+[rename-persist]      terminal: renprobe: check no temporary file left ok
+[rename-persist]      terminal: renprobe: PASS
+[rename-persist]      terminal: [fs] /home/tester/rl/a.txt (21 B) -> EuroFS synced
+[rename-persist]      terminal: [fs] /home/tester/rl/b.txt (21 B) -> EuroFS synced
+[rename-persist]      terminal: [fs] /home/tester/rl/c.txt (21 B) -> EuroFS synced
+[rename-persist]      terminal: [exit 0, abi=linux]
+[rename-persist] ok   phase 1: `renprobe save /home/tester/rl 1` in the Terminal (creates three documents)
+[rename-persist]      terminal: $ renprobe save /home/tester/rl 2
+[rename-persist]      terminal: renprobe: save a.txt replaced by a rename over it ok
+[rename-persist]      terminal: renprobe: save b.txt replaced by unlink and rename ok
+[rename-persist]      terminal: renprobe: save c.txt removed ok
+[rename-persist]      terminal: renprobe: check a.txt holds the version ok
+[rename-persist]      terminal: renprobe: check b.txt holds the version ok
+[rename-persist]      terminal: renprobe: check c.txt is gone ok
+[rename-persist]      terminal: renprobe: check no temporary file left ok
+[rename-persist]      terminal: renprobe: PASS
+[rename-persist]      terminal: [fs] /home/tester/rl/c.txt -> removed from EuroFS
+[rename-persist]      terminal: [fs] /home/tester/rl/a.txt (21 B) -> EuroFS synced
+[rename-persist]      terminal: [fs] /home/tester/rl/b.txt (21 B) -> EuroFS synced
+[rename-persist]      terminal: [exit 0, abi=linux]
+[rename-persist] ok   phase 1: `renprobe save /home/tester/rl 2` in the Terminal (rename over a.txt, unlink + rename of b.txt, unlink of c.txt)
+[rename-persist]      terminal: $ renprobe check /home/tester/rl 2
+[rename-persist]      terminal: renprobe: check a.txt holds the version ok
+[rename-persist]      terminal: renprobe: check b.txt holds the version ok
+[rename-persist]      terminal: renprobe: check c.txt is gone ok
+[rename-persist]      terminal: renprobe: check no temporary file left ok
+[rename-persist]      terminal: renprobe: PASS
+[rename-persist]      terminal: [exit 0, abi=linux]
+[rename-persist] ok   phase 1: `renprobe check` in the Terminal: the documents hold version 2
+[rename-persist]      shell view of /home/tester/rl: a.txt='document a version 2' b.txt='document b version 2' c.txt='cat: /home/tester/rl/c.txt: NotFound'; ls: ['-rw-r--r--       21 B  2026-11-16 19:58  a.txt', '-rw-r--r--       21 B  2026-11-16 19:58  b.txt']
+[rename-persist] ok   phase 1: the file system (shell `cat`, `ls`) has the same: a.txt and b.txt version 2, no c.txt, no temporary file
+[rename-persist]      terminal: renprobe: D a write through a held descriptor lands in its own file ok
+[rename-persist]      terminal: renprobe: PASS
+[rename-persist]      terminal: [exit 0, abi=linux]
+[rename-persist] ok   phase 1: the whole `renprobe` scenario in the Terminal (held descriptors, mappings) — 39 checks ok, 0 failed
+[rename-persist]      scrub: EuroFSck — integrity check (scrub):
+[rename-persist]      scrub: superblock           : OK
+[rename-persist]      scrub: inodes checked       : 95
+[rename-persist]      scrub: data checksums (XXH3): 95 verified
+[rename-persist]      scrub: data blocks (ref)    : 333
+[rename-persist]      scrub: free-space bitmap    : consistent
+[rename-persist]      scrub: errors               : 0
+[rename-persist]      scrub: => filesystem HEALTHY ✓
+[rename-persist] ok   phase 1: scrub is clean
+[rename-persist] ok   phase 1: no fault line on the serial log
+[rename-persist] ok   phase 1: `reboot` leaves the guest (QEMU -no-reboot exits)
+[rename-persist] ok   phase 2: second boot, sign-in
+[rename-persist] ok   phase 2, after the restart: every file of the shell scenario reads back (13 files, 4 deleted or replaced names)
+[rename-persist]      terminal: $ renprobe check /home/tester/rl 2
+[rename-persist]      terminal: renprobe: check a.txt holds the version ok
+[rename-persist]      terminal: renprobe: check b.txt holds the version ok
+[rename-persist]      terminal: renprobe: check c.txt is gone ok
+[rename-persist]      terminal: renprobe: check no temporary file left ok
+[rename-persist]      terminal: renprobe: PASS
+[rename-persist]      terminal: [exit 0, abi=linux]
+[rename-persist] ok   phase 2, after the restart: `renprobe check` in the Terminal: the documents hold version 2
+[rename-persist]      shell view of /home/tester/rl: a.txt='document a version 2' b.txt='document b version 2' c.txt='cat: /home/tester/rl/c.txt: NotFound'; ls: ['-rw-r--r--       21 B  2026-11-16 19:58  a.txt', '-rw-r--r--       21 B  2026-11-16 19:58  b.txt']
+[rename-persist] ok   phase 2, after the restart: the file system (shell `cat`, `ls`) has the same: a.txt and b.txt version 2, no c.txt, no temporary file
+[rename-persist]      scrub: EuroFSck — integrity check (scrub):
+[rename-persist]      scrub: superblock           : OK
+[rename-persist]      scrub: inodes checked       : 95
+[rename-persist]      scrub: data checksums (XXH3): 95 verified
+[rename-persist]      scrub: data blocks (ref)    : 333
+[rename-persist]      scrub: free-space bitmap    : consistent
+[rename-persist]      scrub: errors               : 0
+[rename-persist]      scrub: => filesystem HEALTHY ✓
+[rename-persist] ok   phase 2: scrub is clean
+[rename-persist] ok   phase 2: no fault line on the serial log
+[rename-persist]      $ mv p.tmp p.txt -> /home/tester/rp/p.tmp -> /home/tester/rp/p.txt
+[rename-persist]      cat p.txt before the power cut: power version 1
+[rename-persist]      power cut: QEMU killed 5 s after the mv
+[rename-persist] ok   phase 3: boot after the power cut, sign-in
+[rename-persist] ok   phase 3: the file moved over before the power cut holds the old or the new text — 'power version 1'
+[rename-persist] ok   phase 3: every file of the shell scenario reads back (12 files, 4 deleted or replaced names)
+[rename-persist]      scrub: EuroFSck — integrity check (scrub):
+[rename-persist]      scrub: superblock           : OK
+[rename-persist]      scrub: inodes checked       : 95
+[rename-persist]      scrub: data checksums (XXH3): 95 verified
+[rename-persist]      scrub: data blocks (ref)    : 333
+[rename-persist]      scrub: free-space bitmap    : consistent
+[rename-persist]      scrub: errors               : 0
+[rename-persist]      scrub: => filesystem HEALTHY ✓
+[rename-persist] ok   phase 3: scrub is clean
+[rename-persist] ok   phase 3: no fault line on the serial log
+[rename-persist] 24/24 checks ok

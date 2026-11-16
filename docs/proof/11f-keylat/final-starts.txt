@@ -1,0 +1,17 @@
+# chrome-smoke --starts 20 --smp 2: final 544d5a2 (f3) and, beside it at the same time, e4b8ba4 (b0); before that 049ed8f (f)
+== f3-starts20
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0
+== b0-starts20
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0
+== starts20
+[chrome-smoke] start 3/20: FAIL (2 step(s))
+[chrome-smoke] starts: 19/20 PASS
+timer-probe FROZEN: 0
+== 049ed8f start 3: the failure that led to BUG-307
+[gui-smoke] FAIL page input right after start: typed text arrives: field A = None
+[gui-smoke] FAIL omnibox right after start: Ctrl+L, URL, Enter: the tab never showed euro-os.eu with a title of its own: [('file:///tmp/input-test.html', 'input-test ready')] after 99.0 s, 19 colours
+[threads]   t63 cr3=0x4c5f000 "CrRendererMain": Blocked(0x0) last=186(a1=0x10c006d3b40)->0x3f
+[threads]   t85 cr3=0x4c5f000 "Chrome_ChildIOTh": Blocked(0x0) last=228(a1=0x1)->0x0
+[futex]   t63 "CrRendererMain": 0x49ae6450 for 12686 ticks | word=Some(0)

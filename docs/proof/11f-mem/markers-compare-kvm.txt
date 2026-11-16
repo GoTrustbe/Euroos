@@ -1,0 +1,21 @@
+# markers-compare.py compare, KVM self-test boots: e4b8ba4 (base) -> 1a6edd9 (f2, final image)
+== kvm/base-1G.log  vs  kvm/f2-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/base-2G.log  vs  kvm/f2-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/base-4G.log  vs  kvm/f2-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/base-8G.log  vs  kvm/f2-8G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

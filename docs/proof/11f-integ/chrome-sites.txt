@@ -1,0 +1,29 @@
+# chrome-smoke --only sites --smp 2, browser image of 7253cb1
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 4.1 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 166 ms; fds: 7 processes, 368 descriptors, 331 objects, 212/4096 file objects; kernel stopwatch: longest gap bet
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.8 s, load finished 9.2 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 157 ms; fds: 10 processes, 477 descriptors, 423 objects, 259/4096 file objects; RAM f
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.4 s, load finished 20.4 s later; content 477 colours, commonest 90%; desktop loop: slowest console answer 257 ms; fds: 11 processes, 542 descriptors, 474 objects, 290/4096 file objects; RAM
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.6 s, load finished 14.2 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 359 ms; fds: 13 processes, 693 descriptors, 600 objects, 374/4096 file objects; RAM files: 109 files, 1 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.0 s, load finished 3.6 s later; content 2286 colours, commonest 36%; desktop loop: slowest console answer 221 ms; fds: 11 processes, 621 descriptors, 537 objects, 338/4096 file objects; RAM fi
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.6 s, load finished 3.3 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 153 ms; fds: 14
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 5.8 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 297 ms; fds: 12 processes, 689 descriptors, 590 objects, 374/4096 file objects; RAM files: 109 files, 1 MiB of b
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.4 s, load finished 3.6 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 217 ms; fds: 12 processes, 686 descriptors, 590 objects, 372/4096 file objects; RAM f
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.0 s, load finished 20.8 s later; content 477 colours, commonest 90%; desktop loop: slowest console answer 236 ms; fds: 12 processes, 692 descriptors, 593 objects, 375/4096 file objects; RAM
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.4 s, load finished 14.1 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 432 ms; fds: 13 processes, 753 descriptors, 644 objects, 408/4096 file objects; RAM files: 109 files, 1 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.8 s, load finished 3.6 s later; content 378 colours, commonest 92%; desktop loop: slowest console answer 191 ms; fds: 12 processes, 679 descriptors, 580 objects, 372/4096 file objects; RAM fil
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.7 s, load finished 2.8 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 116 ms; fds: 15
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 5.5 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 203 ms; fds: 12 processes, 681 descriptors, 585 objects, 370/4096 file objects; RAM files: 109 files, 1 MiB of b
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.8 s, load finished 2.7 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 398 ms; fds: 13 processes, 700 descriptors, 604 objects, 377/4096 file objects; RAM f
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 3.0 s, load finished 17.2 s later; content 477 colours, commonest 90%; desktop loop: slowest console answer 449 ms; fds: 13 processes, 706 descriptors, 607 objects, 381/4096 file objects; RAM
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 3.5 s, load finished 11.0 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 336 ms; fds: 14 processes, 766 descriptors, 657 objects, 414/4096 file objects; RAM files: 109 files, 1 
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 3.2 s, load finished 3.8 s later; content 378 colours, commonest 92%; desktop loop: slowest console answer 216 ms; fds: 12 processes, 679 descriptors, 580 objects, 372/4096 file objects; RAM fil
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2.5 s later; content 140 colours, commonest 58%; desktop loop: slowest console answer 116 ms; fds: 15
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/11fi/sites-f
+# desktop loop while the browser ran (slowest console answer per step, ms): max 449 median 12
+site github-r3 449
+site youtube-r2 432
+site wikipedia-r3 398
+site youtube-r1 359
+site youtube-r3 336
+site euro-os-r2 297
+site github-r1 257
+site github-r2 236

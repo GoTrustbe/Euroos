@@ -1,0 +1,24 @@
+# BUG-281 test ([memt] cowfork census in the middle of the fork)
+## tA (test commit 1913094), KVM 4 GiB
+[memt] cowfork: census in the middle of the fork: 30852 KiB without an owner (at its start 0 KiB, 1 census taken) → FAILED
+[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410693 free (was 410693), process pool 427008 (was 427008) → FAILED
+## tB (fix 5861686), KVM 4 GiB and 16 GiB
+/srv/euroos/11fb-runs/tst/tB-4g.log:[memt] cowfork: census in the middle of the fork: 0 KiB without an owner (at its start 0 KiB, 1 census taken) → OK ✓
+/srv/euroos/11fb-runs/tst/tB-4g.log:[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 410691 free (was 410691), process pool 427008 (was 427008) → OK ✓
+/srv/euroos/11fb-runs/tst/tB-16g.log:[memt] cowfork: census in the middle of the fork: 0 KiB without an owner (at its start 0 KiB, 1 census taken) → OK ✓
+/srv/euroos/11fb-runs/tst/tB-16g.log:[memt] cowfork: GMEM2 cowfork: PASS 17/17 (exit 0); frames after the run: 2981392 free (was 2981392), process pool 887296 (was 887296) → OK ✓
+
+# Before: the [memstat] samples of earlier 2 h sessions with more than 8 MiB without an owner
+/srv/euroos/mem3-runs/out/soak2h-curve.csv: 324 samples, |unowned| > 8 MiB in 1: [(112.0, 76)]; all others between -3 and 1 MiB
+/srv/euroos/final-runs/out/soak2h-curve.csv: 324 samples, |unowned| > 8 MiB in 2: [(66.0, 94), (117.0, 57)]; all others between -2 and 1 MiB
+
+# The 76 MiB sample of mem3-runs/runs/soak2h/serial.log (tick 675001): a fork ran during the census
+119428:[memstat] pid=1 task=1 name="chrome" anon=77 (zero~0 no-access=0) file-private=0 tables=8 maps: pagecache=156 shm=21 swapped=0 | arena=128 | addresses: reserved=78 GiB, no-access=0 GiB
+119896:[memstat] pid=1 task=1 name="chrome" anon=77 (zero~0 no-access=0) file-private=0 tables=8 maps: pagecache=156 shm=20 swapped=0 | arena=128 | addresses: reserved=78 GiB, no-access=0 GiB
+119907:[memstat] sum tick=672006 processes=11 anon=264 (zero~6 no-access=0) file-private=149 tables=17 pagecache=247 shm=57 free=556 pool=1293 unattributed=0 KiB
+120311:[memstat] pid=1 task=1 name="chrome" anon=77 (zero~0 no-access=0) file-private=0 tables=8 maps: pagecache=156 shm=20 swapped=0 | arena=128 | addresses: reserved=78 GiB, no-access=0 GiB
+120322:[memstat] sum tick=674523 processes=11 anon=266 (zero~6 no-access=0) file-private=149 tables=17 pagecache=247 shm=57 free=554 pool=1293 unattributed=0 KiB
+120443:[memstat] pid=1 task=1 name="chrome" anon=41 (zero~0 no-access=0) file-private=0 tables=8 maps: pagecache=156 shm=36 swapped=0 | arena=128 | addresses: reserved=78 GiB, no-access=0 GiB
+120455:[memstat] sum tick=675001 processes=11 anon=230 (zero~6 no-access=0) file-private=149 tables=17 pagecache=247 shm=67 free=503 pool=1293 unattributed=78612 KiB
+120955:[memstat] pid=1 task=1 name="chrome" anon=79 (zero~1 no-access=0) file-private=0 tables=8 maps: pagecache=156 shm=21 swapped=0 | arena=128 | addresses: reserved=79 GiB, no-access=0 GiB
+120966:[memstat] sum tick=678004 processes=11 anon=254 (zero~7 no-access=0) file-private=149 tables=17 pagecache=247 shm=65 free=558 pool=1293 unattributed=0 KiB

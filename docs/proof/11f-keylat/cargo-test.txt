@@ -1,0 +1,3 @@
+# cargo test (default members, as gate.sh) on 544d5a2, .16, CARGO_BUILD_JOBS=6
+188 binaries, 1381 passed, 0 failed, 1 ignored
+0

@@ -3379,7 +3379,42 @@ pub fn unix_accept(path: &str) -> Option<UnixEndpoint> {
 }
 /// Write bytes from an endpoint.
 pub fn unix_send(ep: UnixEndpoint, data: &[u8]) -> Result<usize, UnixError> {
-    UNIX_SWITCH.send(ep, data)
+    let r = UNIX_SWITCH.send(ep, data);
+    if r.is_ok() {
+        // 11f-A: a thread of the peer that waits in epoll_wait/poll reads it now.
+        let (conn, side) = ep.peer_key();
+        crate::ring3::poll_wake(poll_key_unix(conn, side));
+    }
+    r
+}
+
+// Keys of the descriptors an epoll_wait/poll waiter is woken for (11f-A,
+// `ring3::poll_wake`): an eventfd by its slot, a unix stream by its
+// (connection, side), an X connection by its fd. Other kinds have no key and
+// keep the waiter's re-check every tick or two.
+pub const PK_EVFD: u64 = 1 << 60;
+pub const PK_UNIX: u64 = 2 << 60;
+pub const PK_X: u64 = 3 << 60;
+fn poll_key_unix(conn: u32, side: u8) -> u64 {
+    PK_UNIX | ((conn as u64) << 1) | side as u64
+}
+/// The wake key of a (resolved) descriptor, if it has one.
+pub fn poll_key(fd: u64) -> Option<u64> {
+    if is_eventfd(fd) {
+        return Some(PK_EVFD | (fd - EVENTFD_BASE));
+    }
+    if is_unix_fd(fd) {
+        let t = UNIX_FDS.lock();
+        return match t.get((fd - UNIX_FD_BASE) as usize).and_then(|s| s.as_ref()) {
+            Some(UnixSock::Stream(e)) => {
+                let (conn, side) = e.key();
+                Some(poll_key_unix(conn, side))
+            }
+            Some(UnixSock::X(x)) => Some(PK_X | *x),
+            _ => None,
+        };
+    }
+    None
 }
 /// Read up to `max` bytes for an endpoint (non-blocking).
 pub fn unix_recv(ep: UnixEndpoint, max: usize) -> Result<alloc::vec::Vec<u8>, UnixError> {
@@ -3401,7 +3436,10 @@ pub fn unix_fd_at_eof(fd: u64) -> bool {
 }
 /// Close an endpoint.
 pub fn unix_close(ep: UnixEndpoint) {
-    UNIX_SWITCH.close(ep)
+    UNIX_SWITCH.close(ep);
+    // The peer now reads end-of-stream.
+    let (conn, side) = ep.peer_key();
+    crate::ring3::poll_wake(poll_key_unix(conn, side));
 }
 
 // ── AF_UNIX socket fds for glibc/musl programs ───────────────────────────────
@@ -3472,14 +3510,20 @@ pub fn eventfd_write(fd: u64, add: u64) -> bool {
         return false;
     }
     let slot = (fd - EVENTFD_BASE) as usize;
-    let mut t = EVENTFDS.lock();
-    match t[slot].as_mut() {
-        Some(c) => {
-            *c = c.saturating_add(add);
-            true
+    let ok = {
+        let mut t = EVENTFDS.lock();
+        match t[slot].as_mut() {
+            Some(c) => {
+                *c = c.saturating_add(add);
+                true
+            }
+            None => false,
         }
-        None => false,
+    };
+    if ok {
+        crate::ring3::poll_wake(PK_EVFD | slot as u64);
     }
+    ok
 }
 pub fn eventfd_close(fd: u64) {
     if !is_eventfd(fd) {

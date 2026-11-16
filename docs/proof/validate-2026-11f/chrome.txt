@@ -1,0 +1,57 @@
+# starts20-m
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-10
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-11
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-12
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-13
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-14
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-15
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-16
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-17
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-18
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-19
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /dev/shm/v11f/starts20-m/start-20
+[chrome-smoke] starts: 20/20 PASS
+# sites3
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.7 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 209 ms; fds: 12 processes, 686 descriptors, 5
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.1 s, load finished 18.9 s later; content 477 colours, commonest 90%; desktop loop: slowest console answer 419 ms; fds: 13 processes, 715 descriptors,
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.6 s, load finished 12.5 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 865 ms; fds: 14 processes, 777 descriptors, 665 objects, 419/409
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.7 s, load finished 3.9 s later; content 2444 colours, commonest 36%; desktop loop: slowest console answer 448 ms; fds: 13 processes, 710 descriptors, 60
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2.8 s later; content 140 colours, commonest 58%; desktop loop
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.9 s, load finished 2.3 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 353 ms; fds: 12 processes, 689 descriptors, 590 objects, 375/4096 file o
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.2 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 212 ms; fds: 12 processes, 685 descriptors, 5
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.2 s, load finished 21.1 s later; content 477 colours, commonest 90%; desktop loop: slowest console answer 681 ms; fds: 12 processes, 690 descriptors,
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.4 s, load finished 11.4 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 297 ms; fds: 13 processes, 752 descriptors, 643 objects, 408/409
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.8 s, load finished 4.2 s later; content 378 colours, commonest 92%; desktop loop: slowest console answer 171 ms; fds: 12 processes, 686 descriptors, 584
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2.5 s later; content 140 colours, commonest 58%; desktop loop
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/v11f/sites3
+# interact
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/v11f/interact
+# localvideo
+[gui-smoke] ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.96 -> 61.46 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.46, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the page loads from the host and the browser knows the codec: http://10.0.2.2:18781/vp9v.html; state {'st': 'paused', 't': 0.01, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 2.98 -> 60.98 s in 60.7 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 60.98, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[chrome-smoke] FAIL (5 step(s)) - 16/21 steps ok, report and screenshots in /dev/shm/v11f/localvideo
+# wm480
+[gui-smoke] ok   site video-play: round 1: 90 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm
+[gui-smoke] ok   site video-play: round 2: 90 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm
+[chrome-smoke] PASS - 4/4 steps ok, report and screenshots in /dev/shm/v11f/wm480
+[wmvideo] PASS
+# sites-smp
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 2.8 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 391 ms; fds: 13 processes, 714 descriptors, 6
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.9 s, load finished 17.8 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 483 ms; fds: 12 processes, 689 descriptors,
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.6 s, load finished 11.1 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 340 ms; fds: 13 processes, 751 descriptors, 642 objects, 406/409
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.7 s, load finished 3.9 s later; content 2285 colours, commonest 36%; desktop loop: slowest console answer 278 ms; fds: 12 processes, 685 descriptors, 58
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 2.2 s, load finished 2.8 s later; content 140 colours, commonest 58%; desktop loop
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 2.6 s, load finished 3.2 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 258 ms; fds: 12 processes, 687 descriptors, 588 objects, 372/4096 file o
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.5 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 233 ms; fds: 12 processes, 683 descriptors, 5
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.3 s, load finished 17.8 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 439 ms; fds: 12 processes, 688 descriptors,
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 1.4 s, load finished 10.3 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 207 ms; fds: 13 processes, 750 descriptors, 641 objects, 406/409
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.8 s, load finished 3.4 s later; content 2285 colours, commonest 36%; desktop loop: slowest console answer 241 ms; fds: 12 processes, 684 descriptors, 58
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.7 s, load finished 2.5 s later; content 140 colours, commonest 58%; desktop loop
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/v11f/sites-smp

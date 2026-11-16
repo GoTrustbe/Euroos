@@ -1,0 +1,22 @@
+user-smp1-iommu done 19:28:43 after 205s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 19:28:48 after 210s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 19:32:08 after 205s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 19:32:13 after 205s desktop=1 wd=0 nmi=0
+kernel-smp1 done 19:35:39 after 211s desktop=1 wd=0 nmi=0
+kernel-smp4 done 19:35:49 after 216s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 19:41:50 after 371s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 19:42:25 after 396s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 19:48:21 after 391s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 19:49:31 after 426s desktop=1 wd=0 nmi=0
+matrix m done 19:49:31
+user-smp4-iommu: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+user-smp4-noiommu: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+kernel-smp4: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+storage-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=0
+combined-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=0
+user-smp1-iommu: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+user-smp1-noiommu: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+kernel-smp1: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=3
+storage-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=0
+combined-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 frozen=0 fault=0 churn/fuzz-FAILED=0
+2026.11.16-code 512M comparison: user-smp1-iommu churn FAILED 3, user-smp4-iommu 3

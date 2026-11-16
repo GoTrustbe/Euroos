@@ -1,0 +1,50 @@
+# KVM self-test boots, 2 vCPU, -nic none, intel-hda + hda-duplex (kboot-hda.sh), CPUs 4-11; e4b8ba4 (b0) and the final 544d5a2 (f3); also 049ed8f (f)
+b0-1g end=marker after 200s failed-lines=3 crash-lines=0
+b0-2g end=marker after 205s failed-lines=1 crash-lines=0
+b0-4g end=marker after 220s failed-lines=1 crash-lines=0
+b0-8g end=marker after 220s failed-lines=1 crash-lines=0
+f3-1G end=marker after 184s failed-lines=3 crash-lines=0
+f3-2G end=marker after 198s failed-lines=1 crash-lines=0
+f3-4G end=marker after 202s failed-lines=1 crash-lines=0
+f3-8G end=marker after 202s failed-lines=1 crash-lines=0
+f-1G end=marker after 190s failed-lines=3 crash-lines=0
+f-2G end=marker after 199s failed-lines=1 crash-lines=0
+f-4G end=marker after 209s failed-lines=1 crash-lines=0
+f-8G end=marker after 215s failed-lines=1 crash-lines=0
+== 1g: e4b8ba4 -> 544d5a2
+== /dev/shm/11fa/kvm/b0-1g.log  vs  /dev/shm/11fa/kvm/f3-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+-- FAILED lines (f3):
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+[aslr] 64 starts of a glibc PIE: varying bits mmap 17 (4 KiB 17, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives
+== 2g: e4b8ba4 -> 544d5a2
+== /dev/shm/11fa/kvm/b0-2g.log  vs  /dev/shm/11fa/kvm/f3-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+-- FAILED lines (f3):
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives m
+== 4g: e4b8ba4 -> 544d5a2
+== /dev/shm/11fa/kvm/b0-4g.log  vs  /dev/shm/11fa/kvm/f3-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+-- FAILED lines (f3):
+[aslr] 64 starts of a glibc PIE: varying bits mmap 10 (4 KiB 10, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives
+== 8g: e4b8ba4 -> 544d5a2
+== /dev/shm/11fa/kvm/b0-8g.log  vs  /dev/shm/11fa/kvm/f3-8G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+-- FAILED lines (f3):
+[aslr] 64 starts of a glibc PIE: varying bits mmap 11 (4 KiB 11, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20; Linux x86-64 gives
+== [kwork] [fuzz] (f3, 4 GiB)
+[kwork] per-CPU work queues: 1 AP(s) online, 2 worker(s) ran alloc+format+SSE jobs with a correct per-CPU id (2 ok), work-stealing=n/a (one AP) -> OK ✓
+[fuzz] Linux-ABI syscall fuzzer: 20000 random syscalls/args fired, kernel-survived=true (exit 171) → OK (no panic, no ring-0 fault, every answer an errno or a result) ✓

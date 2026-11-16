@@ -1,0 +1,38 @@
+# m8a-4 (all fixes, smp 4): the fbread keys with smpuser off, then again with smpuser on (S5, --perf-smpuser-ab); sched-stat over each set of 30 keys and smpstat after the smpuser-on set
+[chrome-smoke]   keys, fbread: median 94 ms, poll median 3.1 ms, bracket median 3.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 97 ms, poll median 3.0 ms, bracket median 3.0 ms, over 30 keys
+[chrome-smoke]   keys, fbread with smpuser on: median 97 ms over 30 keys (off: 94 ms)
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 10.7 s: 1074 ticks (718 with the desktop loop idle), desktop loop halted 5939 ms, 3687 switches/s, 4732 syscalls/s
+[sched-stat]   t69: ran 19.6 % (940 ms, in system calls and faults 58 ms), ticks user 124 kernel 0, 1262 syscalls/s, 99 switches/s
+[sched-stat]   t1: ran 15.6 % (747 ms, in system calls and faults 126 ms), ticks user 28 kernel 0, 674 syscalls/s, 129 switches/s
+[sched-stat]   t87: ran 15.4 % (738 ms, in system calls and faults 72 ms), ticks user 72 kernel 0, 1094 syscalls/s, 110 switches/s
+[sched-stat]   t32: ran 10.4 % (500 ms, in system calls and faults 161 ms), ticks user 2 kernel 0, 460 syscalls/s, 100 switches/s
+[sched-stat]   t15: ran 9.4 % (453 ms, in system calls and faults 232 ms), ticks user 52 kernel 0, 303 syscalls/s, 117 switches/s
+[sched-stat]   t0 (kernel task): ran 7.9 % (380 ms, in system calls and faults 0 ms), ticks user 0 kernel 12, 0 syscalls/s, 158 switches/s
+[sched-stat]   t141: ran 5.0 % (238 ms, in system calls and faults 14 ms), ticks user 27 kernel 0, 454 syscalls/s, 9 switches/s
+[sched-stat]   t84: ran 2.4 % (116 ms, in system calls and faults 24 ms), ticks user 21 kernel 0, 161 syscalls/s, 71 switches/s
+[sched-stat]   t76: ran 0.9 % (42 ms, in system calls and faults 4 ms), ticks user 7 kernel 0, 54 syscalls/s, 13 switches/s
+[sched-stat]   t5: ran 0.7 % (35 ms, in system calls and faults 34 ms), ticks user 0 kernel 0, 2 syscalls/s, 100 switches/s
+[sched-stat]   t25: ran 0.6 % (27 ms, in system calls and faults 1 ms), ticks user 0 kernel 0, 8 syscalls/s, 6 switches/s
+[sched-stat]   t39: ran 0.5 % (26 ms, in system calls and faults 26 ms), ticks user 0 kernel 0, 1 syscalls/s, 50 switches/s
+[sched-stat] ring-3 tasks (103 ran): run 4410 ms, of it in system calls and demand faults 1140 ms: kernel share 25 % (ticks: user 344, kernel 0; a system call runs with IF=0 and is never sampled)
+[sched-stat] window started (sched-stat prints what happened since)
+[sched-stat] 10.8 s: 1079 ticks (712 with the desktop loop idle), desktop loop halted 5790 ms, 3920 switches/s, 4474 syscalls/s
+[sched-stat]   t69: ran 18.2 % (920 ms, in system calls and faults 57 ms), ticks user 340 kernel 0, 1227 syscalls/s, 130 switches/s
+[sched-stat]   t1: ran 15.2 % (769 ms, in system calls and faults 121 ms), ticks user 167 kernel 0, 681 syscalls/s, 151 switches/s
+[sched-stat]   t87: ran 14.2 % (718 ms, in system calls and faults 71 ms), ticks user 177 kernel 0, 1066 syscalls/s, 133 switches/s
+[sched-stat]   t32: ran 9.7 % (491 ms, in system calls and faults 161 ms), ticks user 73 kernel 0, 437 syscalls/s, 117 switches/s
+[sched-stat]   t15: ran 9.3 % (470 ms, in system calls and faults 231 ms), ticks user 143 kernel 0, 313 syscalls/s, 137 switches/s
+[sched-stat]   t0 (kernel task): ran 8.3 % (422 ms, in system calls and faults 0 ms), ticks user 0 kernel 21, 0 syscalls/s, 192 switches/s
+[sched-stat]   t152: ran 7.1 % (360 ms, in system calls and faults 241 ms), ticks user 55 kernel 7, 171 syscalls/s, 7 switches/s
+[sched-stat]   t84: ran 2.1 % (104 ms, in system calls and faults 22 ms), ticks user 40 kernel 0, 150 syscalls/s, 76 switches/s
+[sched-stat]   t39: ran 1.1 % (58 ms, in system calls and faults 31 ms), ticks user 7 kernel 0, 45 syscalls/s, 52 switches/s
+[sched-stat]   t5: ran 0.8 % (38 ms, in system calls and faults 36 ms), ticks user 16 kernel 0, 2 syscalls/s, 101 switches/s
+[sched-stat]   t25: ran 0.6 % (31 ms, in system calls and faults 2 ms), ticks user 17 kernel 0, 8 syscalls/s, 8 switches/s
+[sched-stat]   t30: ran 0.5 % (27 ms, in system calls and faults 23 ms), ticks user 2 kernel 3, 5 syscalls/s, 2 switches/s
+[sched-stat] ring-3 tasks (107 ran): run 4635 ms, of it in system calls and demand faults 1406 ms: kernel share 30 % (ticks: user 1245, kernel 10; a system call runs with IF=0 and is never sampled)
+[smpstat] smpuser=on offloads 1809 sent home 1809, shootdowns 8 (8 IPIs, 0 late), tasks brought home 0, stays 1804
+[smpstat] cpu1: switch-ins 954 (stolen 61, from polling 49, tickless halts 864) user 42 ms, bounces syscall 921 fault 32 other 0, evictions 0, ticks user 538 idle 49, queued 0, running idle
+[smpstat] cpu2: switch-ins 829 (stolen 45, from polling 31, tickless halts 787) user 29 ms, bounces syscall 820 fault 9 other 0, evictions 0, ticks user 477 idle 49, queued 0, running idle
+[smpstat] cpu3: switch-ins 27 (stolen 6, from polling 0, tickless halts 2163) user 0 ms, bounces syscall 27 fault 0 other 0, evictions 0, ticks user 20 idle 4080, queued 0, running idle

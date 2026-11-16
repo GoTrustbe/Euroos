@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Metal M2-3: install EuroOS to an NVMe disk, then boot standalone FROM it.
 
-Phase A: boot the release image (UEFI from eurokernel.img) with a blank 512 MiB
+Phase A: boot the release image (UEFI from eurokernel.img) with a blank 1 GiB
          NVMe disk attached. The kernel detects blank NVMe + install media and
          installs a bootable, provisioned EuroOS onto it. Assert the install
          marker + that the live root became the NVMe EuroFS.
@@ -22,7 +22,13 @@ IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
 OVMF = "/usr/share/ovmf/OVMF.fd"
 WORK = tempfile.mkdtemp(prefix="ek-nvmeroot-")
 NVME = os.path.join(WORK, "nvmeroot.img")
-BOOT_DEADLINE = 480
+BOOT_DEADLINE = int(os.environ.get("EK_BOOT_DEADLINE", "480"))  # TCG on a busy host is slower
+# The self-test image carries its own install media (kernel x2, loader, signatures: 131 MiB
+# in 2026-11); the installer keeps it in the kernel heap, so a 512 MiB guest has 59 MiB of heap
+# free and the media is skipped ("installer unavailable"). The install also wants a target of
+# more than 512 MiB ("need 513 MiB"). Both were fixed numbers here before (BUG-282).
+GUEST_RAM = os.environ.get("EK_GUEST_RAM", "1024M")
+TARGET_SIZE = os.environ.get("EK_TARGET_SIZE", "1G")
 
 
 def serial(log):
@@ -61,13 +67,13 @@ def run(args, log, want, deadline=BOOT_DEADLINE):
 def main():
     nvme_dev = ["-drive", f"format=raw,file={NVME},if=none,id=nv0",
                 "-device", "nvme,drive=nv0,serial=euronvmeroot"]
-    common = ["qemu-system-x86_64", "-machine", "q35", "-m", "512M",
+    common = ["qemu-system-x86_64", "-machine", "q35", "-m", GUEST_RAM,
               "-cpu", "qemu64,+smep,+smap", "-bios", OVMF,
               "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0",
               "-display", "none", "-no-reboot"]
 
-    # A blank 512 MiB NVMe disk (>= the 128 MiB install minimum).
-    subprocess.run(["truncate", "-s", "512M", NVME], check=True)
+    # A blank 1 GiB NVMe disk (larger than the install minimum).
+    subprocess.run(["truncate", "-s", TARGET_SIZE, NVME], check=True)
 
     # ── Phase A: install to NVMe ──
     logA = os.path.join(WORK, "install.log")

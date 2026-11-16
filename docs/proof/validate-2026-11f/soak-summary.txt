@@ -1,0 +1,18 @@
+m: 10836 commands over 125.0 min = 5201 per hour; by status {'ok': 10836}
+   churn proc    n=1388  median     1361 ms  mean     1352 ms  p10      798  p90     1831  max     3479
+   spawn worker  n=1041  median      481 ms  mean      469 ms  p10      375  p90      537  max      667
+   churn fs      n= 347  median     9108 ms  mean     9198 ms  p10     8288  p90    10275  max    11294
+   churn net     n= 347  median      138 ms  mean      168 ms  p10      109  p90      183  max     2116
+   sha256sum     n=1041  median      451 ms  mean      451 ms  p10      382  p90      511  max     1453
+   fetch         n=1041  median      262 ms  mean      268 ms  p10      103  p90      442  max      601
+  KERNEL PANIC: 0
+  GENERAL PROTECTION: 0
+  [idt] PAGE FAULT: 0
+  DOUBLE FAULT: 0
+  NMI PROBE: 0
+  WATCHDOG TRIPPED: 0
+  timer-probe] FROZEN: 0
+  LOCK ORDER INVERSION: 0
+  [oom]: 3
+  [spawn-refused]: 3
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 716755, "err": 0, "p50_ms": 6.0, "p99_ms": 435.5, "max_ms": 6844.4, "busy_windows": 347, "busy_s": 3192, "busy": {"ok": 322789, "err": 0, "p50_ms": 6.2, "p99_ms": 426.2, "max_ms": 2452.2}, "idle": {"ok": 393966, "err": 0, "p50_ms": 5.9, "p99_ms": 444.4, "max_ms": 6844.4}}

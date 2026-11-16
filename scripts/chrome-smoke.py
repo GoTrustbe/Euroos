@@ -578,6 +578,32 @@ class Chrome(gs.Guest):
         print("[chrome-smoke]   omnibox selection NOT seen", flush=True)
         return False
 
+    def focus_omnibox(self, attempts=3):
+        """Put the focus in the omnibox with its URL selected, and see it happen. Ctrl+L first
+        (as a person would), up to `attempts` times: the browser hands the key to the page first and
+        focuses the omnibox when the renderer answers "not handled", which under load can take
+        longer than one look. When that never shows, one click on the omnibox, which focuses and
+        selects it without asking the renderer (a person would do that too). Always judged by the
+        selection on the screen, never by the key having been sent. Returns whether it was seen;
+        when it was not, the screendump is kept (omnibox-not-selected-N.png) for the analysis."""
+        for _ in range(attempts):
+            self.key("ctrl", "l")
+            if self.omnibox_selected(None):
+                return True
+            self.nap(1.0)                   # the browser is busy: ask again
+        self.key("esc")                     # leave whatever the page or the popup did with the keys
+        self.nap(0.3)
+        self.click(*self.cx(OMNIBOX_X, TOOLBAR_Y))
+        if self.omnibox_selected(None, timeout=4):
+            print("[chrome-smoke]   omnibox focused by a click after Ctrl+L did not show it", flush=True)
+            return True
+        self.omnibox_misses = getattr(self, "omnibox_misses", 0) + 1
+        try:
+            self.shot(save_as=f"omnibox-not-selected-{self.omnibox_misses}")
+        except Exception:
+            pass
+        return False
+
     @staticmethod
     def url_is(u, host):
         """Does the tab's URL belong to `host`? By its host name, not by 'the text occurs somewhere'
@@ -595,13 +621,8 @@ class Chrome(gs.Guest):
         before = self.tabs() or []
         old_titles = {t for _, t in before}
         same = any(self.url_is(u, host) and (contains is None or contains in u) for u, _ in before)          # going to the page we are on
-        for attempt in range(3):
-            self.key("ctrl", "l")
-            if self.omnibox_selected(None):
-                break
-            self.nap(1.0)                   # the browser is busy: ask again
-        else:
-            self.record_note = f"the omnibox never showed its selection after Ctrl+L ({host})"
+        if not self.focus_omnibox():
+            self.record_note = f"the omnibox never showed its selection after Ctrl+L or a click ({host})"
         self.type(url)
         self.nap(0.2)
         t0 = time.time()
@@ -836,7 +857,9 @@ class Chrome(gs.Guest):
         for i in range(n_load):
             self.navigate("file:///tmp/input-test.html", "input-test")
             self.settle(10, quiet=0.8)
-            self.key("ctrl", "l"); self.nap(0.3)
+            if not self.focus_omnibox():
+                self.step("perf: the omnibox takes the focus (Ctrl+L)", False, f"load {i + 1}: the omnibox never showed its selection")
+                break
             self.type("https://euro-os.eu/en/"); self.nap(0.3)
             region = self.content()
             before = self.digest(self.shot(), region)
@@ -864,6 +887,8 @@ class Chrome(gs.Guest):
                 time.sleep(0.1)
             loads.append((first if first is not None else 40.0, final))
             print(f"[chrome-smoke]   load {i + 1}: first change {loads[-1][0]:.2f} s, final picture {final:.2f} s", flush=True)
+        if not loads:
+            return loads, []                # the omnibox never took the focus: the step above says so
         firsts = sorted(l[0] for l in loads); finals = sorted(l[1] for l in loads)
         med_final = statistics.median(finals)
         self.step("perf: reference site loads in under 3 s (Enter to the final picture)", med_final < 3.0,
@@ -875,34 +900,141 @@ class Chrome(gs.Guest):
         fx, fy = self.page(24, 85)
         region = (fx, fy, fx + 580, fy + 40)
         k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
-        lat, dump_ms = [], []
-        self.nap(1.2)                      # past the caret's first blink
-        for i in range(n_keys):
-            before = self.digest(self.shot(), region)
-            t0 = time.time()
-            self._send([k("x", True)])
-            dt = None
-            while time.time() - t0 < 2.0:
-                ts = time.time()
-                s = self.shot()
-                dump_ms.append((time.time() - ts) * 1000)
-                if self.digest(s, region) != before:
-                    dt = (time.time() - t0) * 1000
-                    break
-            self._send([k("x", False)])
-            if dt is not None:
-                lat.append(dt)
-            time.sleep(0.25)
-        typed = self.field("A") or ""
+        # Key to screen, two methods (11f-A). Each is 30 keys, with the kernel's
+        # own `[keylat]` ledger reset before and printed after.
+        #  - "screendump" (the method since W23): QMP screendump of the whole
+        #    screen in a loop until the field's pixels change. A screendump holds
+        #    QEMU's big lock for its whole copy of the screen (~15 ms); every
+        #    guest exit that needs that lock (the UART, the xHCI registers the
+        #    desktop loop polls, the HPET) waits for it, so the guest runs slower
+        #    while it is measured. Reported with its capture time and bracket.
+        #  - "fbread": QMP pmemsave of only the field's rows of the guest
+        #    framebuffer (the GOP framebuffer, address and stride from the boot
+        #    log), ~0.3 MB instead of a 6 MB screen: the lock is held for a
+        #    fraction of a millisecond. The step's verdict uses this method.
+        #  The field is emptied between the two: once the x's fill it, the text
+        #  scrolls by one identical glyph and a key no longer changes its pixels
+        #  (only the caret's next blink does, ~500 ms later).
+        res, typed_first = {}, 0
+        for method in ("screendump", "fbread"):
+            if res:
+                typed_first = len(self.field("A") or "")
+                self.key("ctrl", "a")
+                self.key("backspace")
+                self.nap(0.6)
+            res[method] = self._keys(n_keys, region, method)
+        # --perf-smpuser-ab: the fbread keys once more with `smpuser on` (ring-3
+        # threads may run on the APs, S5), then back off. Reported, not judged:
+        # the evidence for or against moving more of chrome's work off the BSP.
+        if getattr(self.a, "perf_smpuser_ab", False):
+            self.key("ctrl", "a")
+            self.key("backspace")
+            self.nap(0.6)
+            self.serial.send_line("smpuser on")
+            self.nap(1.0)
+            on = self._keys(n_keys, region, "fbread")
+            self.serial.send_line("smpstat")
+            self.nap(0.5)
+            self.serial.send_line("smpuser off")
+            self.nap(1.0)
+            if on[0]:
+                print(f"[chrome-smoke]   keys, fbread with smpuser on: median {statistics.median(on[0]):.0f} ms over {len(on[0])} keys "
+                      f"(off: {statistics.median(res['fbread'][0]) if res['fbread'][0] else 0:.0f} ms)", flush=True)
+            res["fbread-smpuser-on"] = on
+        lat = res["fbread"][0] or res["screendump"][0]
+        dump_ms = res["fbread"][1] or res["screendump"][1]
+        old = res["screendump"][0]
+        self.key_methods = {m: [round(x) for x in sorted(r[0])] for m, r in res.items()}
+        n_keys *= 2
+        typed = "x" * typed_first + (self.field("A") or "")
         if lat:
             lat.sort()
             med, p90 = statistics.median(lat), lat[int(len(lat) * 0.9) - 1]
+            oldm = f"; screendump method (until 11e): median {statistics.median(old):.0f} ms" if old else ""
             self.step("perf: key to screen under 100 ms", med < 100 and len(typed) == n_keys,
                       f"median {med:.0f} ms, p90 {p90:.0f} ms, max {lat[-1]:.0f} ms over {len(lat)} keys ({len(typed)} characters arrived); "
-                      f"one screendump takes {statistics.median(dump_ms):.0f} ms, which is in every number")
+                      f"one poll takes {statistics.median(dump_ms):.1f} ms, which is in every number{oldm}")
         else:
             self.step("perf: key to screen under 100 ms", False, "no key changed the field within 2 s")
         return loads, lat
+
+    def _fb_geometry(self):
+        """(base, stride in pixels) of the guest's GOP framebuffer, from the boot log."""
+        log = self.serial.since(0)
+        m = re.search(r"\[euro\] framebuffer @ (0x[0-9a-f]+)", log)
+        g = re.search(r"\[euro\] GOP (\d+)x(\d+) stride=(\d+) (\w+)", log)
+        if not m or not g or g.group(4) not in ("Bgr", "Rgb"):
+            return None
+        return int(m.group(1), 16), int(g.group(3))
+
+    def fb_digest(self, region):
+        """Digest of a screen region read straight from the guest framebuffer
+        (QMP pmemsave of the region's rows; 4 bytes a pixel)."""
+        base, stride = self.fb_geo
+        x0, y0, x1, y1 = region
+        f = os.path.join(self.wd, "fb.bin")
+        r = self.qmp.cmd("pmemsave", val=base + y0 * stride * 4, size=(y1 - y0) * stride * 4, filename=f)
+        self.last_dump_ret = time.time()
+        if "error" in r:
+            raise gs.Fatal(f"pmemsave: {r['error']}")
+        raw = open(f, "rb").read()
+        h = hashlib.sha1()
+        for y in range(y1 - y0):
+            h.update(raw[(y * stride + x0) * 4:(y * stride + x1) * 4])
+        return h.digest()
+
+    def _keys(self, n_keys, region, method):
+        """n_keys presses of "x" into the focused field, each timed until the
+        field's pixels change; returns (latencies ms, ms per poll)."""
+        k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+        if method == "fbread":
+            self.fb_geo = self._fb_geometry()
+            if self.fb_geo is None:
+                print("[chrome-smoke]   keys, fbread: no framebuffer address in the boot log; skipped", flush=True)
+                return [], []
+            look = lambda: self.fb_digest(region)
+        else:
+            look = lambda: self.digest(self.shot(), region)
+        lat, dump_ms, cap, brk = [], [], [], []
+        self.nap(1.2)                      # past the caret's first blink
+        self.serial.send_line("keylat reset")
+        self.nap(0.3)
+        self.serial.send_line("sched-stat start")
+        self.nap(0.3)
+        for i in range(n_keys):
+            before = look()
+            t0 = time.time()
+            self._send([k("x", True)])
+            t_sent = time.time()
+            dt, prev_ret, n = None, t_sent, 0
+            while time.time() - t0 < 2.0:
+                ts = time.time()
+                d = look()
+                tr = getattr(self, "last_dump_ret", None) or time.time()
+                dump_ms.append((time.time() - ts) * 1000)
+                n += 1
+                if d != before:
+                    dt = (time.time() - t0) * 1000
+                    cap.append((tr - t0) * 1000)
+                    brk.append((tr - prev_ret) * 1000)
+                    break
+                prev_ret = tr
+            self._send([k("x", False)])
+            if dt is not None:
+                lat.append(dt)
+                print(f"[chrome-smoke]   {method} key {i + 1}: {dt:.0f} ms (poll returned {cap[-1]:.0f} ms, bracket {brk[-1]:.1f} ms), "
+                      f"QMP send {(t_sent - t0) * 1000:.1f} ms, {n} polls", flush=True)
+            time.sleep(0.25)
+        self.serial.send_line("sched-stat")
+        self.nap(0.5)
+        pos = self.serial.mark()
+        self.serial.send_line("keylat")
+        self.serial.wait_for("[keylat-cpu] delivery to screen", 10 * self.slow, pos)
+        self.nap(0.5)
+        if lat:
+            print(f"[chrome-smoke]   keys, {method}: median {statistics.median(lat):.0f} ms, poll median {statistics.median(dump_ms):.1f} ms, "
+                  f"bracket median {statistics.median(brk):.1f} ms, over {len(lat)} keys", flush=True)
+        return lat, dump_ms
 
     def red_extent(self, s, rect):
         """Longest run of YouTube-red pixels in one row of `rect` (the player's progress bar:
@@ -1400,7 +1532,8 @@ def make_args(a, workdir):
     return types.SimpleNamespace(image=a.image, workdir=workdir, kvm=a.kvm, cpu_opts="", smp=a.smp, mem=a.mem, pin=a.pin,
                                  input=a.input, net="none", layout="auto", extra=extra,
                                  boot_timeout=300 if a.kvm else 1500, alive_timeout=40 if a.kvm else 240,
-                                 slow=1.0 if a.kvm else 3.0, soak=0, seed=0, skip_smoke=True, keep_image=False)
+                                 slow=1.0 if a.kvm else 3.0, soak=0, seed=0, skip_smoke=True, keep_image=False,
+                                 perf_smpuser_ab=getattr(a, "perf_smpuser_ab", False))
 
 
 def one_boot(a, workdir, body):
@@ -1468,6 +1601,7 @@ def main():
     ap.add_argument("--nic", default="virtio-net-pci", help="virtio-net-pci or e1000e (the userspace driver e1000d)")
     ap.add_argument("--extra", default="")
     ap.add_argument("--only", default="", help="comma list of: sites, interact, youtube, perf (default: sites, interact, perf)")
+    ap.add_argument("--perf-smpuser-ab", action="store_true", help="perf: type the fbread keys once more with smpuser on (S5), reported only")
     ap.add_argument("--sites", default="", help="comma list of site names (default: all of the matrix)")
     ap.add_argument("--rounds", type=int, default=1, help="repeat the site matrix this many times in one browser session")
     ap.add_argument("--soak-hours", type=float, default=0.0, help="repeat sites + interaction in one session for this long")
@@ -1572,6 +1706,7 @@ def main():
             loads, lat = g.perf()
             extra["perf_loads_s"] = loads
             extra["perf_key_ms"] = [round(x) for x in lat]
+            extra["perf_key_ms_by_method"] = getattr(g, "key_methods", {})
         extra["consent_clicks"] = g.consent_log
         extra["memory_end"] = g.memory()
 

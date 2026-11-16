@@ -1,0 +1,5 @@
+# BUG-331, [xlock], KVM self-test boot 2 vCPU 2 GiB
+## before (eb239c5, test only)
+[xlock] pump_mouse, window_at and forget_clients, run with interrupts on: X locks taken with interrupts enabled = 1 (want 0) -> FAILED
+## after (7253cb1)
+[xlock] pump_mouse, window_at and forget_clients, run with interrupts on: X locks taken with interrupts enabled = 0 (want 0) -> OK (a preemption cannot catch task 0 holding them) ✓

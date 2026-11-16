@@ -105,8 +105,14 @@ pub fn fork_thread_churn(alloc: &mut FrameAllocator) {
     crate::ring3::reap_dead(alloc);
     let (t0, k0, p0, d0) = (crate::sched::task_count(), crate::ring3::thread_kstacks_used(),
         crate::procpool::free_frames(), crate::procpool::demand_free_frames());
+    // BUG-275: 41 forks of 7 tasks each take about the whole 120 s default budget of a
+    // program under TCG on a host core that is shared with other guests: in 4 of 96 boots
+    // the program was killed at fork 37 to 40 of 41, still making progress ("no result
+    // line"). A hang still ends in 6 minutes; a healthy run on KVM needs seconds.
+    let prev_deadline = crate::ring3::GLIBC_DEADLINE_TICKS.swap(36_000, core::sync::atomic::Ordering::Relaxed);
     let (out, exit) = crate::ring3::run_glibc(alloc, crate::ring3::gslots_bytes(), crate::ring3::ldlinux_bytes(),
         &[b"/bin/gslots"], &[b"PATH=/bin"], caps);
+    crate::ring3::GLIBC_DEADLINE_TICKS.store(prev_deadline, core::sync::atomic::Ordering::Relaxed);
     crate::ring3::reap_dead(alloc);
     let (t1, k1, p1, d1) = (crate::sched::task_count(), crate::ring3::thread_kstacks_used(),
         crate::procpool::free_frames(), crate::procpool::demand_free_frames());

@@ -929,10 +929,14 @@ fn main() -> Status {
                 }
                 procpool::install_regions(&regions);
                 // Copy-on-write fork: one holder count per frame of RAM, in
-                // the kernel heap. Not from the frame allocator: 128 frames
-                // taken there at 1 GiB moved every later allocation (the
-                // arenas of the boot self-tests) and /bin/msock stopped
-                // answering in [bgnet-cap] (BUG-243).
+                // the kernel heap (2 bytes a frame: 4 MiB at 8 GiB). BUG-243:
+                // in frames of their own they moved the boot layout and
+                // /bin/msock did not run in [bgnet-cap]; the cause was the
+                // scheduler of that time (a new task started at the vruntime
+                // of the desktop task, far ahead of five busy self-test
+                // tasks, and was not picked within the 30 s), not this
+                // memory. Frames would do as well since S1; the heap keeps
+                // the boot layout the releases were measured with.
                 {
                     let entries = allocator.total_frames();
                     match alloc::alloc::Layout::from_size_align(entries * 2, 4096) {
@@ -1201,6 +1205,9 @@ fn main() -> Status {
     }
 
     boottime::phase("storage-rootfs");
+    if SELFTEST {
+        watchdog::io_progress_selftest(); // BUG-280
+    }
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
@@ -2534,6 +2541,7 @@ fn main() -> Status {
         // APs (per-CPU queues + work stealing).
         klock::selftest();
         kwork::selftest();
+        xserver::xlock_selftest(); // BUG-320 (needs interrupts on)
     }
     // `lockbench` image: run the multi-core lock benchmark and power off.
     #[cfg(feature = "lockbench")]
@@ -7317,7 +7325,9 @@ fn main() -> Status {
             // its window body from the retained X buffer + blit only that rect.
             let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
             if gtk_vis { xrepaints += 1; }
+            let comp_t0 = xserver::keylat::tsc();
             if gtk_vis {
+                let _ = xserver::take_damage(); // the status tick composites all of it
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
             // Native app window (Euro API surface): repaint on a new frame; the
@@ -7341,6 +7351,7 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+                xserver::keylat::composite_from(comp_t0);
                 xserver::keylat::painted();
             }
             if euro_vis {
@@ -7357,15 +7368,23 @@ fn main() -> Status {
             // to move: 1742 ms key to screen, median of 27 keys (chrome-smoke
             // --only perf). Only the body's rectangle and the cursor are blitted.
             xrepaints += 1;
+            let comp_t0 = xserver::keylat::tsc();
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
-            compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            // 11f-A: only the rows the client's requests changed (a key
+            // changes one line of the page), else the whole body.
+            let band = xserver::take_damage()
+                .and_then(|(y0, y1)| compositor::draw_xclient_rows(&fb, &windows[gtk_idx], y0, y1));
+            if band.is_none() {
+                compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
-            let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+            let (gx, gy, gw, gh) = band.unwrap_or_else(|| compositor::window_body_rect(&windows[gtk_idx]));
             fb.present_rect(gx, gy, gw, gh);
+            xserver::keylat::composite_from(comp_t0);
             xserver::keylat::painted();
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -7636,6 +7655,15 @@ fn main() -> Status {
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         serial::kick();
         sched::desktop_hosts_client(xserver::front_window_size().is_some());
+        xserver::keylat::flush();
+        // 11f-A: input this pass queued for X clients wakes their epoll/poll waits.
+        {
+            let mut q = [0u64; 16];
+            let n = xserver::queued_fds(&mut q);
+            for &fd in &q[..n] {
+                ring3::poll_wake(net::PK_X | fd);
+            }
+        }
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();

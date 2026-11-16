@@ -24,7 +24,9 @@ keep_kernel_map() {
   fi
 }
 # EuroUpdate compares this against the signed channel manifest (YYYYMMDD).
-export EUROOS_BUILD_VERSION="${EUROOS_BUILD_VERSION:-$(date -u +%Y%m%d)}"
+# With SOURCE_DATE_EPOCH in the environment (a reproducible build) the version is the date of
+# that moment, not of today: the kernel binary then does not depend on the day it is built.
+export EUROOS_BUILD_VERSION="${EUROOS_BUILD_VERSION:-$(date -u ${SOURCE_DATE_EPOCH:+-d "@$SOURCE_DATE_EPOCH"} +%Y%m%d)}"
 echo "==> EUROOS_BUILD_VERSION=$EUROOS_BUILD_VERSION"
 EFI="target/x86_64-unknown-uefi/${PROFILE}/eurokernel.efi"
 IMG="eurokernel.img"
@@ -99,22 +101,42 @@ open(sys.argv[3], "wb").write(sk.sign(open(sys.argv[2], "rb").read()))
 ' "$KEY" "$EFI" "$SIG"
 
 echo "==> building FAT32 image ($IMG) via mtools (no root needed)"
-dd if=/dev/zero of="$IMG" bs=1M count=256 status=none
-mkfs.fat -F 32 -n EUROKERNEL "$IMG" >/dev/null
-mmd -i "$IMG" ::/EFI ::/EFI/BOOT
+# Reproducible image: building the same commit twice gives the same bytes. The kernel,
+# loader and signatures already were; what differed was FAT metadata: the volume id
+# (mkfs.fat takes the clock), the label entry's time stamp and the creation/modification
+# times mtools writes for each directory and file. All of these now come from one fixed
+# time: SOURCE_DATE_EPOCH if set, else the commit time of HEAD (else 1980-01-01).
+# A FAT time stamp cannot be older than 1980-01-01.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH="$(git log -1 --format=%ct 2>/dev/null || true)"
+fi
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-315532800}"
+[ "$SOURCE_DATE_EPOCH" -ge 315532800 ] || SOURCE_DATE_EPOCH=315532800
+export SOURCE_DATE_EPOCH
+# The ESP is laid out in a staging tree first: mcopy -m takes each file's and directory's
+# modification time from the source, and the tree is the one place those are set.
+ESP="$STAGE/esp"
+mkdir -p "$ESP/EFI/BOOT"
 # G4 TWO-STAGE: BOOTX64.EFI = loader; the kernel sits as slot image A and B.
-mcopy -i "$IMG" "$LOADER" ::/EFI/BOOT/BOOTX64.EFI
-mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-A.efi
-mcopy -i "$IMG" "$EFI" ::/EFI/BOOT/eurokernel-B.efi
-mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-A.efi.sig
-mcopy -i "$IMG" "$SIG" ::/EFI/BOOT/eurokernel-B.efi.sig
+cp "$LOADER" "$ESP/EFI/BOOT/BOOTX64.EFI"
+cp "$EFI" "$ESP/EFI/BOOT/eurokernel-A.efi"
+cp "$EFI" "$ESP/EFI/BOOT/eurokernel-B.efi"
+cp "$SIG" "$ESP/EFI/BOOT/eurokernel-A.efi.sig"
+cp "$SIG" "$ESP/EFI/BOOT/eurokernel-B.efi.sig"
 # Boot options (kernel/src/bootopt.rs), e.g. EUROOS_BOOTOPTS="net.driver=user"
 # (several separated by ';'). Without it the ESP holds no option file: defaults.
 if [ -n "${EUROOS_BOOTOPTS:-}" ]; then
-  printf '%s\n' "$EUROOS_BOOTOPTS" | tr ';' '\n' > "$STAGE/euroos-boot.conf"
-  mcopy -i "$IMG" "$STAGE/euroos-boot.conf" ::/EFI/BOOT/euroos-boot.conf
+  printf '%s
+' "$EUROOS_BOOTOPTS" | tr ';' '
+' > "$ESP/EFI/BOOT/euroos-boot.conf"
   echo "==> boot options on the ESP: $EUROOS_BOOTOPTS"
 fi
+find "$ESP" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+dd if=/dev/zero of="$IMG" bs=1M count=256 status=none
+# Volume id fixed (the first four bytes of the label, as hex); mkfs.fat 4.2 takes its
+# label-entry time from SOURCE_DATE_EPOCH.
+mkfs.fat -F 32 -n EUROKERNEL -i 45524f4b "$IMG" >/dev/null
+mcopy -i "$IMG" -s -m "$ESP/EFI" ::/
 echo "==> done: $IMG (two-stage: loader → eurokernel-A/B.efi)"
 echo "    Test:        ./scripts/run-qemu.sh"
 echo "    Screenshot:  python3 scripts/screenshot.py $IMG boot.png"

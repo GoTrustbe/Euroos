@@ -2497,8 +2497,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 
 - **Copy-on-write (`feature/mem-2026-11e`):** fork shares the arena and demand pages copy-on-write (`dc0b337`, `d29ff3d`; test `c793def`): `[memt] cowfork`, a 64 MiB process, 72 336 kB of frames per fork before, 340 kB after. `design/MEMORY-RECLAIM.md` section 8.
 
-### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ NOT REPRODUCED (the probe that hung is fixed)
-- **Status:**   NOT REPRODUCED in 20 sessions of the s4 kind on `28d5d33` (`proof/chrome-mem2/s4-repeats.txt`: 0 hangs) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
+### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ✅ CLOSED: cannot reproduce (11f-mem)
+- **Status:**   CLOSED, cannot reproduce (11f-mem; 0 hangs in 20 + 2 sessions since the probe fix) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
 - **Actual:**   run s4 of `proof/chrome-mem/` (4 GiB, site matrix, after the fourth site): "the desktop loop did not
   answer the serial console within 40 s". NMI probe: `sched::schedule_core+0x27c`, IF=0, CR2 0x11c030d9000.
 - **Read again (`proof/chrome-mem2/`):** the serial log of s4 shows a guest that RUNS up to the probe: the console answers
@@ -2526,6 +2526,11 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   used up its 24 lines), so nothing names what held the timer. `f08c678`: the FROZEN line is followed by the whole
   in-service register, the TSC since the last timer tick and the lost-tick total, and a late tick of 200 ms or more
   is always logged (first 64). Not reproduced here; open on their branch.
+- **11f-mem (bounded, about one hour of machine time):** two s4 sessions (4 GiB, 2 vCPU, site matrix without video,
+  2 rounds of 15 min, `chrome-mem-soak.py --mem 4096M --no-video --hours 0.25`) on the browser image of this branch:
+  0 hangs, 0 NMI probes, 0 "did not answer"; 1 step failed (openstreetmap "still changing", as in earlier rounds).
+  Next to them, without a hang either: 40 Chromium starts, 2 x 3 site rounds, two 1 h sessions at 8 GiB. Both candidate causes are fixed (the allocating probe, `f2baa29`
+  and `28d5d33`; the doubly handed out task slot, `3990f17`), and the scheduler it was found in is gone (S1).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
@@ -2657,13 +2662,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      a disk root that can be neither mounted nor formatted falls back to a RAM root: serial line `[euro] the install on disk 0 failed ... booting a RAM root`, the registered boot disk is the RAM one, and the desktop queues the notice "Disk not usable". `ro-install-test.py MODE=ro0`: before `KERNEL PANIC ... EuroFS format: IoError` (no desktop), after 5/5 and the desktop. Not changed: a root that does not mount is still formatted.
 - **Proof:**    `proof/small-2026-11e/bug220/`
 
-### BUG-230 — a system call `madvise` (28) runs 80-130 ms with IF=0 at boot of the self-test image ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (no tick, no input for that long; the same class as BUG-182)
+### BUG-230 — a system call `madvise` (28) runs 80-130 ms with IF=0 at boot of the self-test image ✅ FIXED (`7c8fc5c`, 11f-mem)
+- **Status:**   FIXED (`7c8fc5c`; test `1913094`, feature/11f-mem) · **Severity:** LOW (no tick, no input for that long; the same class as BUG-182)
 - **Actual:**   `[if0-window] 113 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms ...) task 30`, eleven windows of
   81-131 ms in one boot of the self-test image (16 GiB, KVM), all ending in user mode after `madvise`; three more of
   110-218 ms with task 0 in kernel code (`cause=kernel`). Seen with the `[if0-window]` lines of sched-d1 (`proof/sched-d1/if0-window.txt`).
 - **Next:**     which advice and range (likely MADV_DONTNEED over a large range, cleared with IF=0); clear in chunks with a
   tick allowed in between, or out of the system call.
+- **Cause:**    (11f-mem, `proof/11f-mem/bug230.txt`) not madvise. Task 30 is the `[eurofuzz]` app (efuzz, Euro API); its
+  `log()` call (0x6107) with 4 KiB of binary data wrote the whole line to the UART inside the call, with interrupts off:
+  `[slowcall] task 30 call 0x6107(..., 0x1000, ...)` 79-163 ms, eleven times per boot. The `[if0-window]` line said
+  "syscall 28" because the background path never wrote LAST_SYS: the 28 was a stale madvise of an earlier owner of slot 30.
+- **Fix:**      the serial copy of a Euro log line is at most 160 printable characters plus "(+N characters)"; the app's
+  output keeps the whole line. The background path records its last call in LAST_SYS like the Linux path.
+- **Test:**     `[eurofuzz]` fails when one call of a background process holds the CPU 50 ms or more (`[slowcall]` names
+  any of 20 ms or more). KVM 4 GiB: longest call 0x6107 112 ms FAILED (`1913094`) -> 6 ms OK; final image 7-10 ms at
+  1/2/4/8 GiB. 16 GiB 4 vCPU: [if0-window] lines with this cause 11 (81-148 ms) -> 0.
+- **Left:**     the other windows of 50-75 ms (read/write/rt_sigprocmask of boot programs) and ~250 ms `cause=kernel`
+  of task 0 were there before and are not this bug: BUG-310.
 
 ### BUG-231 — the inbound HTTP hammer of the soak is 11 times slower after S1/S2 (p50 5.4 -> 60.9 ms) ✅ FIXED (D2 step B)
 - **Status:**   FIXED · **Severity:** MEDIUM (0 errors, but half the requests in the same 2 h)
@@ -2760,14 +2776,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   desktop task is charged at nice 0 (`48df3b0`); without an X client nothing changes. Merged `f53eec1` against `3ecde9e`, quiet, paired:
   smp 4 200-236 against 284-326 ms, smp 2 214-274 against 304-347 ms. `proof/fix-d2/keylat-*.txt`, `final-keylat.txt`.
 
-### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once
-- **Status:**   OPEN (intermittent) · **Severity:** LOW
+### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once ✅ FIXED (the test's time budget)
+- **Status:**   FIXED (`kernel/src/churn.rs`) · **Severity:** LOW
 - **Actual:**   TCG matrix of `48dfd05`, `combined-smp1-iommu-1g`: `[churn-forkthreads] ... (no result line) (exit 0)` FAILED (validate-2026-11d: 40 of 40 rounds PASS).
-  The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. Not reproduced, so no cause.
-- **Proof:**    `proof/validate-2026-11e/tcg-summary.txt`, `comparison-tcg.txt`.
-- **Rerun (fix-d2):** the same configuration 20 times at once on the merged self-test image of feature/fix-d2 (`f53eec1`):
-  `[churn-forkthreads]` OK 20/20, desktop 20/20, 0 watchdog, 0 NMI; markers-compare against the validation rerun `rr3` 0 worse in all 20.
-  Not reproduced; not investigated further. `proof/fix-d2/bug275-tcg20.txt`.
+  The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. fix-d2: 20 of 20 PASS (not reproduced).
+- **Reproduced (11f-C):** 100 boots of that configuration, 4 at once on 2 physical cores of the R630 (the cores were also used by KVM runs during part of it): 97 reached the desktop, in those `[churn-forkthreads]` PASS 93, **no result line 4**. `proof/11f-small/bug275-tcg100.txt`, logs of the four: `bug275-no-result-line-4-logs.tar.gz`.
+- **Cause:**    the time budget, not the kernel. `run_glibc` kills a program after `GLIBC_DEADLINE_TICKS` (12 000 ticks = 120 s of the guest clock, which runs in real time). `gslots` does 41 forks of 7 tasks each; a passing boot shows 41 `[fork] pid` lines, the four failing ones were killed at fork 37, 39, 40 and 38, every one of them still progressing normally (fork, 6 thread creations, exit, `wait4`; no stall in the syscall dump): `[glibc] TIMEOUT waiting ...` then `timed-out program killed`, so the program printed no `GSLOTS:` line and the exit code is the default 0. Three of the four were on host CPU 18 and one on its SMT sibling 38, the pair that also ran my KVM runs; the pair 19/39 had none. Same mechanism as BUG-273 (a program on a shared host core running into its deadline).
+- **Fix:**      `fork_thread_churn` runs the program with a 36 000-tick (6 minute) budget and puts the old value back (as `llm.rs` does). The check itself is unchanged (exit 88, task table, kernel stacks, process pool and demand pool back to the start); a real hang still ends it after 6 minutes. KVM: the test takes seconds.
+- **After:**    40 boots of the same configuration on the fixed image, with two extra busy loops on the loaded core pair: 40 of 40 desktop, `[churn-forkthreads]` PASS 40/40, 0 watchdog. `proof/11f-small/bug275-tcgfix40.txt`.
+
+### BUG-320 — TCG, 1 GiB combined, smp 1: the boot wedges in the SDL self-test, the X client spins on `XCONNS` with interrupts off while the desktop task was preempted holding it ✅ FIXED
+- **Status:**   FIXED (`xserver::pump_mouse`, `window_at`; test `[xlock]`) · **Severity:** MEDIUM (a whole boot stops; seen 3 times in 100 boots of one TCG configuration, never on KVM)
+- **Found:**    2026-11-16 · the 100-boot run of BUG-275: 3 boots (`c38-4`, `c38-5`, `c18-7`) showed no desktop within 900 s silent; the harness NMI probe (`[nmi]`) was identical in all three.
+- **Actual:**   serial log stops right after `[linux-abi] GSDL: window created`. NMI: CPU 0 at the same instruction in all three, `epoll_fd_ready+0x1d4` (a `lock cmpxchg` / `pause` spin loop on the byte at `xserver::XCONNS`), `CS=0x8`, `RFLAGS` with IF=0, current task = the SDL test process in `poll()` (last syscall 7). Task 0 (the desktop loop) is `Ready`, with IF=1, resuming at `xserver::pump_mouse+0x4d` (once) and `+0x5d` (twice): inside the scan of `XCONNS`.
+- **Cause:**    `pump_mouse` took `XCONNS` (a plain `spin::Mutex`) with interrupts ON, in task 0. A timer tick that preempts task 0 inside that scan leaves it holding the lock; the X client's `poll()` path (`unix_fd_readable` -> `xserver::readable`) takes the same lock with IF=0 and spins; one CPU, no tick can preempt the spinner, so the holder never runs again. The same rule is written next to `pump_keyboard` and `deliver_focus` (BUG-007 class: "a preemption holding this lock would deadlock"); `pump_mouse` was missed. `window_at` (the `PRESENTED` lock, also taken by the client path) had the same shape.
+- **Test first:** boot marker `[xlock]` (self-test builds, after interrupts are on): runs `pump_mouse` and `window_at` once and counts the times they held an X server lock with interrupts enabled. Before: `= 2 (want 0) -> FAILED`; after: `= 0 -> OK`. `proof/11f-small/bug320-xlock.txt`.
+- **Fix:**      both take their lock inside `without_interrupts`.
+- **After:**    40 boots of the same configuration with the fix: 40 of 40 reached the desktop (first run: 97 of 100). KVM markers-compare against `e4b8ba4`: 0 worse. `proof/11f-small/bug275-tcgfix40.txt`, `bug320-nmisym.txt` (symbolised probe of `c38-4`), `bug320-tcg-wedge-c38-4.log.gz`.
+- **Not done:** the other users of `XCONNS` in task 0 were not audited one by one (the three wedges all ended in `pump_mouse`; the callers inside `without_interrupts` were left as they are).
 
 ### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ✅ FIXED
 - **Status:**   FIXED (`c70dddf`; test `8a6f333`) · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
@@ -2839,8 +2865,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      a named file written during a demand-paged run is made of frames (BUG-154 for files with a name): one memory
   for read, write and every mapping. 15/15 at 1, 2, 4, 8 GiB.
 
-### BUG-243 — /bin/msock as a background process does not run at all when its arena lies at 0xc200000 (TCG, 1 GiB) ⬜ OPEN (worked around)
-- **Status:**   OPEN, cause not found · **Severity:** LOW (seen in one self-test; the arena placement that shows it is gone)
+### BUG-243 — /bin/msock as a background process does not run at all when its arena lies at 0xc200000 (TCG, 1 GiB) ✅ CLOSED (cause found: the scheduler before S1; no memory bug)
+- **Status:**   CLOSED, cause found (11f-mem, `proof/11f-mem/bug243.txt`) · **Severity:** LOW (gone since S1, `cdf5aff`)
 - **Actual:**   with `dc0b337` the copy-on-write holder counts (128 frames at 1 GiB) were taken from the frame allocator early in
   the boot. Every later allocation moved: the bg-musl arenas of the network self-tests landed at 0xc200000 instead of
   0x200000 (PML4 0x206000 instead of 0x186000). There, `/bin/msock` (`[bgnet-cap]`, no CAP_NET) was spawned and printed
@@ -2850,6 +2876,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Workaround:** the holder counts live in the kernel heap (`9c30378`); the layout is as before and `[bgnet-cap]` passes.
 - **Next:**     place a bg-musl arena at 0xc200000 on purpose (TCG, 1 GiB, storage config) and find where msock stands
   (NMI probe or the syscall ring of task 22).
+- **Reproduced:** the holder counts back in frames (the `dc0b337` placement) on `3f6bdb3` (mem-2026-11e tip): TCG 1 GiB
+  storage and combined, `[bgnet-cap]` FAILED 2 of 2, msock at arena 0xc200000, task 22, PML4 0x206000 as reported.
+- **Cause:**    msock was never scheduled. At the end of the 30 s: state Ready, 0 system calls, 0 page faults, resume
+  frame still at its entry (rip 0xc201261, IF=1); its code pages equal a fresh load of the binary (only the relocated
+  data words differ). Its vruntime was 112-345 ticks (x 1344, the step of nice 0) ahead of the five busy self-test
+  tasks t7-t11: the scheduler of that time charged a step per tick, gave every new task the vruntime of the task that
+  started it (`spawn_user`: `max(current, min_vr)`), and the desktop task that runs the boot self-tests takes every
+  other tick, so its vruntime runs about five times faster than the pack. The spinners did not catch up within 30 s.
+  The placement of the counts only changed the timing (how far task 0 was ahead when msock started).
+- **Not a memory bug:** no stray write, no frame with two owners, no double free (code intact, no fault, the frames of
+  the arena belonged to msock alone).
+- **Since S1:** the same frames placement passes: `b6eb05d` (first merge of mem with S1) 2 of 2 and `e4b8ba4` 2 of 2,
+  msock again at 0xc200000 with PML4 0x206000. S1 charges TSC time with weights and the desktop task runs at nice -10.
+  The rule "a new task starts at the vruntime of its parent" is still in `spawn_user` (as in Linux CFS); with the
+  desktop at nice -10 it no longer puts a child far ahead. No change to the scheduler here (team A).
+- **Workaround:** kept (comment corrected in `949be13`). The counts cost 2 bytes per frame of kernel heap (4 MiB at
+  8 GiB); moving them back would change the boot layout of every image right before the release for no gain. Above
+  ~64 GiB of RAM frames would be the better place (32 MiB of heap).
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->
 
@@ -2872,20 +2916,125 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     find the self-test that creates `\x01` and `\x04`; let `vfs_open_create` refuse a name that does not start
   with `/` (ENOENT); clear the dirty list at the end of the boot self-tests.
 
-### BUG-280 — a stalled virtual disk (host write load) stops the main loop long enough to trip the deadman: `[3g2-wire] WATCHDOG TRIPPED`, one `churn fs` of 36 s ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (only seen when the host disk of the guest is busy with other guests; not seen on a quiet host in 2 x 2 h)
+### BUG-280 — a stalled virtual disk (host write load) stops the main loop long enough to trip the deadman: `[3g2-wire] WATCHDOG TRIPPED`, one `churn fs` of 36 s ✅ FIXED (watchdog side; not reproduced end to end)
+- **Status:**   FIXED (`5184f4b` test, `e7cd1e8` fix) · **Severity:** LOW (only seen when the host disk of the guest is busy with other guests; not seen on a quiet host in 2 x 2 h)
 - **Found:**    2026-11-15 · re-validation of `732e5f5`, `proof/revalidate-2026-11e/`: the first 2 h soak ran beside installs, a TCG matrix and the q35 legs, which write the same host disk.
 - **Actual:**   at t = 1 240 s of the soak: `[blk] slow flush at sector 0: 202/263/208/233/354 ms`, `[blk] slow write ... 366 ms`, then `[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb)`, and that `churn fs 1` took 36.4 s (limit 12). Everything else of that run was normal (5 148 commands an hour, 0 errors). The repeat on a host without that disk load: 0 watchdog, churn fs worst 10.96 s.
-- **Cause:**    not investigated: the main loop waits synchronously on a virtio-blk flush/write; a host stall of a few hundred ms per request, repeated, adds up to the deadman limit.
-- **Next:**     reproduce with `ionice`/`blkio` throttling of the soak disk; let the deadman pet from the flush wait, or make the write-back asynchronous.
+- **Cause:**    the watchdog treated "the desktop loop has not been back at the top of its loop for 15 s" as a hang. `churn fs 1` is a shell command run by the loop itself: 3 rounds of 120 files with write, rename, read and remove, each a synchronous virtio-blk request. On a starved host disk every request took 200-400 ms (`[blk] slow ...`), so the command took 36 s, the loop never got back to `watchdog::pet()`, and the tick checker tripped at 15 s. Every one of those requests completed (the 60 s request timeout never fired): the loop was waiting on a slow disk, not hung. On a quiet host the same command takes up to 11 s, which is why the margin is thin.
+- **Fix:**      `virtio_blk::kick_and_wait_inner` calls `watchdog::io_progress()` when a request completes; it pets when the running task is the one that armed the watchdog (the desktop loop). A request that never completes still leaves the loop without a pet (60 s request limit against the 15 s deadman: the trip comes as before), and block traffic of other tasks counts for nothing. Only virtio-blk (the case seen); NVMe and AHCI roots are not changed.
+- **Test:**     boot marker `[wd-io]` (self-test builds): four block reads by the task that pets must give four pets. Before: `pets gained 0 (want 4) -> FAILED`; after: `gained 4 -> OK`. KVM, markers-compare against `e4b8ba4`: 0 worse. `proof/11f-small/bug280-watchdog-io.txt`.
+- **Not done:** the slow host disk itself was not reproduced (no throttled-disk run of `churn fs`); the cause above is from the log lines of the original run and the code. If the trip comes back without `[blk] slow` lines before it, it is something else.
+- **Next:**     NVMe/AHCI roots have the same wait loops; add `io_progress()` there if a slow disk of those kinds trips the deadman.
 
-### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (0.6 % of the pool an hour, limit of the verdict 5 %; no kill, no refused fork, demand pool free 2 469 MiB after 11 rounds)
+### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ✅ FIXED (accounting gap, `5861686`, `1a6edd9`, 11f-mem)
+- **Status:**   FIXED (`5861686`, `1a6edd9`; test `1913094`, feature/11f-mem) · **Severity:** LOW (no leak: one census sample at a time)
 - **Found:**    2026-11-16 · `proof/revalidate-2026-11e/chrome-soak2h*.txt`: two sessions of `732e5f5` (9 rounds with the H.264 clip, 11 rounds VP9 only): slope +16.6 and +20.3 MiB/h; heap flat (+0.8 MiB/h); "NOT flat" is returned because 40 MiB (1.2 % of the pool) have no owner at the worst moment (limit 1 %). Validation 2026-11e: +13.3 MiB/h, "flat". One live-site step (OpenStreetMap, "content still changing") failed in 178/179 of the second session.
 - **Next:**     run the same session on `3ecde9e` (not measured) to see whether the slope is new; look at the 40 MiB without an owner (`mem-curve.py` columns `procs`, `shm`).
+- **Cause:**    (11f-mem, `proof/11f-mem/bug281.txt`) an accounting gap, not a leak. The frames without an owner are one
+  sample each (2 h sessions: 76 MiB once in 324 samples, 94 and 57 MiB twice in 324; all other samples -3..+1 MiB), each
+  at a census that met a fork of the browser: the parent's pages were already shared copy-on-write (each holder counts
+  its part: chrome anon 77 -> 41 MiB in that sample) while the child was not in the list yet, so the child's part and
+  its new tables had no owner. The next sample was 0 again. The slope itself (+16-20 MiB/h, 0.6 % of the pool an hour)
+  is under the 5 % limit of the verdict; a run of `3ecde9e` was not needed.
+- **Fix:**      the census walks a fork in progress as a process of its own (pid 0, "(fork in progress)", FORK_IN_FLIGHT
+  held so an undo cannot free its tables under the walk), and is taken again (up to 3 times) when a fork started or
+  ended or a child left during it (MM_GEN). `1a6edd9`: interrupts off before the range lists of that fork are read.
+- **Test:**     `[memt] cowfork` takes a census in the middle of its first fork: 30 852 KiB without an owner FAILED
+  (`1913094`) -> 0 KiB OK (KVM 1/2/4/8/16 GiB).
+- **Session:**  1 h at 8 GiB with the local VP9+Opus clip, final image (`proof/11f-mem/chrome-soak1h.txt`): 6 rounds,
+  99/99 steps, verdict **flat**, in use +10.5 MiB/h, 3 MiB without an owner at the worst, 0 kills.
 
-### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
+### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ✅ FIXED (harness)
+- **Status:**   FIXED (the harness, not the kernel) · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
 - **Found:**    2026-11-16 · `run-metal-matrix.py` default leg list on `732e5f5`; `nvmeroot` repeated on `3ecde9e`: FAIL the same way.
 - **Actual:**   the live system reaches the desktop loop but the install-to-NVMe/AHCI marker never appears; the serial tail shows `[init] service ticker` restarts (3 starts, then "no restart (ceiling/policy)") and desktop passes of 1.1-1.2 s.
-- **Next:**     find out whether the leg is out of date (wizard now needed) or the install really does not start; remove the legs from the default list or fix them.
+- **Cause:**    the two harness scripts (`test-nvme-root.py`, `test-ahci-root.py`) were written when the install media was small. Two fixed numbers no longer fit the self-test image: (1) `-m 512M`: the kernel keeps its install media (loader, kernel A and B, signatures: 131 MiB) in its heap, 59 MiB were free, so `[inst] install media (131 MiB) does not fit the heap ... installer unavailable` and the blank disk is left alone ("NVMe disk is not EuroFS and not blank, booting a RAM root"); (2) a 512 MiB target: with enough RAM the install refuses with `[q1x3] target NVMe disk too small (512 MiB, need 513 MiB)`. The kernel does what it says; the live system reaches the desktop, so only the install marker was missing.
+- **Fix:**      both scripts now use a 1 GiB guest and a 1 GiB target (`EK_GUEST_RAM`, `EK_TARGET_SIZE` to change them). Nothing weakened: the same markers (install, root on the installed disk, standalone boot from it, boot medium untouched) are asked for.
+- **Proof:**    `proof/11f-small/bug282-q35-root-legs.txt`: nvmeroot and ahciroot PASS (phase A and phase B) on the self-test image of `e4b8ba4`.
+- **Note:**     a public image (release profile) has no self-test auto-install; the wizard installs there (`wizard-install-test.py`). The two legs need the self-test image.
+
+### BUG-300 — the keylat harness slowed the guest it measured: screendump polling holds QEMU's big lock ✅ FIXED
+- **Status:**   FIXED (`2924d28`, harness) · **Severity:** MEDIUM (every keylat number since W23 was 60-150 ms too high)
+- **Found:**    2026-11-16 · sprint 11f-A, `proof/11f-keylat/`.
+- **Actual:**   the perf step polled QMP `screendump` (whole 1920x1080 screen, ~18-27 ms each) until the field changed. QEMU holds its big lock for the copy; every guest exit that needs it (xHCI registers the desktop loop polls, the UART) waited for it. Same boot, same keys: screendump method 251-288 ms, framebuffer read 141-156 ms (e4b8ba4); desktop loop on the CPU 1.4-3.0 ms a pass against 0.26-0.86 ms.
+- **Fix:**      `fbread`: QMP `pmemsave` of only the field rows of the GOP framebuffer (address and stride from the boot log), ~3 ms a poll; the step's verdict uses it, the screendump method is still printed.
+
+### BUG-301 — console output cost the BSP ~31 us a byte ✅ FIXED
+- **Status:**   FIXED (`89d4cba` test, `a344592`, `e33ac3f`) · **Severity:** MEDIUM
+- **Actual:**   `[serial-cost]` 8 KiB: 249-254 ms of BSP (smp 2 and 4). With `smpuser` off the BSP is also every chrome thread's CPU; the sender task ran 20-115 ms in a key's window.
+- **Fix:**      the queue is drained by a kwork job on the last online AP; the BSP sender only without APs or as a fallback. `[serial-cost]` 5 ms, OK.
+
+### BUG-302 — every frame of the hosted X window was composited whole, per pixel ✅ FIXED
+- **Status:**   FIXED (`5303e44` test, `379fd72`) · **Severity:** MEDIUM
+- **Actual:**   5-10 ms of BSP per paint for an 800x600 body (`put_pixel` with five atomic clip loads per pixel), two paints a key; a paint preempted by chrome came 100-200 ms after its frame.
+- **Fix:**      damage rows from PutImage/CopyArea, composite and present only those rows, row copies (`put_row`). `[keylat] composite` 464-561 us, OK.
+
+### BUG-303 — epoll_wait and poll re-checked every tick or two; nothing woke them ✅ FIXED (eventfd, unix stream, X)
+- **Status:**   FIXED for eventfd, unix stream sockets and X connections (`90f7ee6`/`049ed8f` test, `763a9bc`, `eee05a6`) · **Severity:** HIGH for interactive latency
+- **Actual:**   while a key was on its way every idle halt of the BSP was ended by the tick (39-52 ms a key) and the sleepers the tick woke were epoll (5363-8498) and poll (906-1475) waiters.
+- **Fix:**      waiters register wake keys of their descriptors; eventfd writes, unix sends/closes and X events queued by the desktop loop wake them (`sched::wake_sleeping`, only the waiter's own timed sleep). Tick-ended idle 0-0.4 ms a key.
+- **Left:**     pipes and inet sockets have no key and keep the re-check (12-17 late finds a key, not on the key path).
+
+### BUG-304 — epoll_wait's deadline was one static for all waiters ✅ FIXED
+- **Status:**   FIXED (`763a9bc`, `eee05a6`) · **Severity:** LOW
+- **Actual:**   `EPOLL_DEADLINE` was shared: a short wait of one thread cut another thread's long wait short (spurious timeouts, extra syscall churn). Per call now, taken once before the loop.
+
+### BUG-305 — chrome-smoke perf: a full field stops changing its pixels ✅ FIXED
+- **Status:**   FIXED (`841ab78`, harness) · **Severity:** LOW
+- **Actual:**   after ~50 x's the field scrolls by one identical glyph; a key then changed nothing until the caret blinked (~650 ms, every other key). The field is emptied between the two methods.
+
+### BUG-306 — chrome-smoke perf "reference site loads in under 3 s" fails on e4b8ba4 and on 11f-A ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (not a regression: the same step fails on `e4b8ba4`)
+- **Found:**    2026-11-16 · sprint 11f-A keylat pairs: final picture median 3.7-4.6 s on `e4b8ba4`, 4.0-4.6 s on the final branch (first change 0.2-0.3 s), loads of https://euro-os.eu/en/ over the user-mode network of the R630.
+- **Next:**     not investigated (outside the key path): see whether the late picture is the network (SLIRP) or the page's own late content.
+
+### BUG-307 — FUTEX_QUEUE keyed by the user address only: a wake in one chrome process took a waiter in another ✅ FIXED
+- **Status:**   FIXED (`544d5a2`) · **Severity:** HIGH (a renderer hangs for good: page input and navigation stop)
+- **Found:**    2026-11-16 · sprint 11f-A, after the faster epoll/poll wakeups (`763a9bc`): chrome-smoke start 3/20 (`049ed8f`), interaction 5/18 (`eee05a6`), 2 of 3 smp 4 perf runs (first form of `763a9bc`).
+- **Actual:**   renderer main thread Blocked on a futex in the chrome image whose word was already 0 (`[futex] t63 "CrRendererMain": 0x49ae6450 for 12686 ticks | word=Some(0)`), its IO thread Blocked too; the browser UI still worked. Every chrome process maps the binary at the same address, and `futex_wake` matched waiters by address alone.
+- **Fix:**      private futex operations (flag 128) key the queue by address plus the caller's address space (CR3 frame above the user half); shared futexes and clear-child-tid keep the bare address. No isolated marker: shown by the chrome-smoke runs before and after (`proof/11f-keylat/`).
+
+### BUG-310 — boot of the self-test image: [if0-window] of 50-75 ms in read/write/rt_sigprocmask, ~250 ms `cause=kernel` of task 0 ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (boot self-tests only; the same class as BUG-182 and BUG-230)
+- **Found:**    2026-11-16 · 11f-mem, `proof/11f-mem/bug230.txt`: what is left in a 16 GiB 4 vCPU boot once BUG-230 is fixed:
+  windows of 51-76 ms with `cause=syscall 0/1/14` (boot programs, tasks 6-17) and 108-251 ms `cause=kernel` of task 0.
+  All were there on `e4b8ba4` too; the background path now names its calls, so the numbers are right.
+- **Next:**     `[slowcall]` names the background ones; the same timing on the Linux path (rt_sigprocmask 54-56 ms is
+  suspicious for a call that does no I/O), and what task 0 does with interrupts off for 250 ms after exit_group.
+
+### BUG-330 — panic/shutdown flush while an AP sends the console: up to one 16-byte load can come out of order ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (found by reading the merged code, not reproduced; nothing is lost)
+- **Found:**    2026-11-16 · 11f-integ, review of 11f-A's serial TX on an AP (`a344592`, `e33ac3f`) against the emergency path (BUG-270).
+- **Actual:**   `serial::emergency()` sets EMERGENCY (from then on `ap_drain_submit` refuses) and empties the whole queue under the
+  UART lock with `finish_queue(true)`. An `ap_drain` job that already took a load (<= 16 bytes) from the queue writes it to
+  the port outside the UART lock while holding only `TX_PORT`; `finish_queue` does not look at `TX_PORT`, so that load can
+  land after (or between) bytes of the emergency flush. Shutdown and panic still flush everything (q35 `power` leg PASS,
+  0 lines missing in markers-compare at 1/2/4/8 GiB).
+- **Next:**     let `emergency()` wait a bounded moment for `TX_PORT` before `finish_queue`; test: a self-test that holds `TX_PORT`
+  with a taken load and calls the flush.
+
+### BUG-331 — `forget_clients` held XCONNS and the selection tables with interrupts on (the BUG-320 class) ✅ FIXED
+- **Status:**   FIXED (`eb239c5` test, `7253cb1` fix, feature/11f-integ) · **Severity:** MEDIUM (a wedge of the same kind as BUG-320)
+- **Found:**    2026-11-16 · 11f-integ, review of the X server lock users in task 0 that 11f-small (BUG-320) did not cover.
+- **Actual:**   the desktop loop calls `forget_clients` when a hosted app starts (`main.rs`: GTK demo, browser, x11 apps); it took
+  `lock_home()` (XCONNS), PRESENTED, SELECTIONS, SEL_OWNERS, XFIXES_SELECT, READER_CONNS and RETAINED_WINDOW with interrupts on.
+  A client of the previous app still on its way out (`close`, `read` through the syscall path, IF=0) spins on the same lock
+  for good when task 0 is preempted holding it. The other task-0 users were checked: `pump_keyboard`, `deliver_*`,
+  `queued_fds`, `keymap_changed`, `hosted_resize`, `with_front_window`, `front_window_size` already hold them with IF=0,
+  `dump_input_state` runs under `IfOffGuard` (`cdiag`).
+- **Fix:**      the body of `forget_clients` runs in `without_interrupts`.
+- **Test:**     `[xlock]` also runs `forget_clients` (only when no connection is open) and counts X locks taken with IF on:
+  `= 1 (want 0) -> FAILED` (`eb239c5`, KVM 2 GiB) -> `= 0 -> OK` (`7253cb1`, KVM 1/2/4/8 GiB).
+
+
+### BUG-340 — gui-smoke `--input virtio`: the notification-list Esc/click steps failed once (BUG-057) ⬜ OPEN
+- **Status:**   OPEN, intermittent (validate-2026-11f) · **Severity:** LOW
+- **Found:**    2026-11-16 · validation of `00a6459`: `gui-smoke --input virtio` public image 65/67 (`notification list: Esc closes it` and `a click beside it closes it`, BUG-057);
+  repeat on the same image 67/67 and on the 2026.11.16 image 67/67. Not reproduced since; the default (USB) input run was 67/67.
+- **Next:**     repeat `--input virtio` 10 times on both images to see whether it is a rate or a one-off; keep the serial log of a failing run.
+
+### BUG-341 — Chromium session: the OpenStreetMap step often ends "content still changing" ⬜ OPEN
+- **Status:**   OPEN (validate-2026-11f) · **Severity:** LOW (harness / live site)
+- **Found:**    2026-11-16 · 2 h session at 8 GiB: 4 of 11 rounds fail only this step (`content 273 colours, commonest 85%, still changing`); 0 of 3 rounds in the sites run. No kernel line near it,
+  nothing else fails. 11e saw it once in 11 rounds.
+- **Next:**     decide whether the settle criterion should ignore the map tile animation, or treat it as a live-site step.

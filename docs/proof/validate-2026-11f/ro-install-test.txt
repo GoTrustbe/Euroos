@@ -1,0 +1,27 @@
+== MODE=plain
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-pc'=true user='anke'=true euroid-store=
+[ro-install] PASS: install reported
+[ro-install] PASS: install on the writable disk 0 verified OK
+[ro-install]   [wizard-targets] virtio disk 1 (2048 MiB) is read-only: selectable=false → OK (not offered) ✓
+[ro-install] PASS: wizard does not offer the read-only disk 1
+[ro-install]   [randid] dhcp xid: 16 draws, all different, none of the old constants ✓
+[ro-install] PASS: marker [randid] dhcp xid
+[ro-install]   [randid] smb client challenge: 16 draws, all different, no RTC/EURO pattern ✓
+[ro-install] PASS: marker [randid] smb client challenge
+[ro-install]   [nmi-bound] probe scan end: near top 0x8000019000 (top 0x8000019000), unknown stack near page end 0x70001000, far from top 0x70000900 → OK (scan stays inside the stack) ✓
+[ro-install] PASS: marker [nmi-bound]
+== MODE=inject
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-pc'=false user='anke'=false euroid-st
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: creating the EuroFS root failed: Corruption
+[ro-install] PASS: install reported
+[ro-install] PASS: nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false
+[ro-install] PASS: install verdict FAILED
+== MODE=ro0
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount hostname='euro-pc'=false user='anke'=false euroid-st
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: the disk refused 51508 write(s) of the boot files (first at sector 0)
+[ro-install] PASS: install reported
+[ro-install] PASS: no kernel panic
+[ro-install]   [euro] the install on disk 0 failed or the disk root cannot be formatted (IoError): booting a RAM root, nothing is saved on the disk
+[ro-install] PASS: serial line: falls back to the RAM root
+[ro-install] PASS: boot reaches the desktop
+[ro-install] PASS: on-screen message queued ([notify] ... RAM root)

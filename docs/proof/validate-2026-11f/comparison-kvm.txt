@@ -1,0 +1,35 @@
+== 2026.11.16-code(b0) -> merge 1 GiB
+== /dev/shm/v11f/kvm/b0/k-1g.log  vs  /dev/shm/v11f/kvm/m/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+== 2026.11.16-code(b0) -> merge 2 GiB
+== /dev/shm/v11f/kvm/b0/k-2g.log  vs  /dev/shm/v11f/kvm/m/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+== 2026.11.16-code(b0) -> merge 4 GiB
+== /dev/shm/v11f/kvm/b0/k-4g.log  vs  /dev/shm/v11f/kvm/m/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+== 2026.11.16-code(b0) -> merge 8 GiB
+== /dev/shm/v11f/kvm/b0/k-8g.log  vs  /dev/shm/v11f/kvm/m/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+== 4 vCPU
+== /dev/shm/v11f/kvm/s4/b0-4g.log  vs  /dev/shm/v11f/kvm/s4/m-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
