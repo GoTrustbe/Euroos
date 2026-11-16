@@ -887,15 +887,23 @@ class Chrome(gs.Guest):
         #    framebuffer (the GOP framebuffer, address and stride from the boot
         #    log), ~0.3 MB instead of a 6 MB screen: the lock is held for a
         #    fraction of a millisecond. The step's verdict uses this method.
-        res = {}
+        #  The field is emptied between the two: once the x's fill it, the text
+        #  scrolls by one identical glyph and a key no longer changes its pixels
+        #  (only the caret's next blink does, ~500 ms later).
+        res, typed_first = {}, 0
         for method in ("screendump", "fbread"):
+            if res:
+                typed_first = len(self.field("A") or "")
+                self.key("ctrl", "a")
+                self.key("backspace")
+                self.nap(0.6)
             res[method] = self._keys(n_keys, region, method)
         lat = res["fbread"][0] or res["screendump"][0]
         dump_ms = res["fbread"][1] or res["screendump"][1]
         old = res["screendump"][0]
         self.key_methods = {m: [round(x) for x in sorted(r[0])] for m, r in res.items()}
         n_keys *= 2
-        typed = self.field("A") or ""
+        typed = "x" * typed_first + (self.field("A") or "")
         if lat:
             lat.sort()
             med, p90 = statistics.median(lat), lat[int(len(lat) * 0.9) - 1]
