@@ -1,0 +1,113 @@
+# markers-compare.py, KVM self-test boots: 06e913e (validation 2026-11e, /srv/euroos/val-runs/kvm/v1) and 3ecde9e (b0, this run) -> 732e5f5 (v2)
+
+== 06e913e 1 GiB
+== /srv/euroos/val-runs/kvm/v1/k-1g.log  vs  kvm/v2/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   kwork: OKx1
+
+== 06e913e 2 GiB
+== /srv/euroos/val-runs/kvm/v1/k-2g.log  vs  kvm/v2/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   kwork: OKx1
+
+== 06e913e 4 GiB
+== /srv/euroos/val-runs/kvm/v1/k-4g.log  vs  kvm/v2/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   kwork: OKx1
+
+== 06e913e 8 GiB
+== /srv/euroos/val-runs/kvm/v1/k-8g.log  vs  kvm/v2/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   kwork: OKx1
+
+== 3ecde9e 1 GiB
+== kvm/b0/k-1g.log  vs  kvm/v2/k-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== 3ecde9e 2 GiB
+== kvm/b0/k-2g.log  vs  kvm/v2/k-2g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== 3ecde9e 4 GiB
+== kvm/b0/k-4g.log  vs  kvm/v2/k-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== 3ecde9e 8 GiB
+== kvm/b0/k-8g.log  vs  kvm/v2/k-8g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1
+
+== 3ecde9e 4 vCPU
+== kvm/s4/b0-4g.log  vs  kvm/s4/v2-4g.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 9
+   ap-parity: OKx1
+   ap-user: OKx1
+   aslr: FAILx1
+   entropy-health: OKx1
+   nmi-bound: OKx1
+   randid: OKx2
+   rename-disk: OKx1
+   reseed: OKx1
+   root-heap: OKx1

@@ -1,0 +1,17 @@
+== MODE=plain (self-test image)
+[ro-install] PASS: install reported
+[ro-install] PASS: install on the writable disk 0 verified OK
+[ro-install] PASS: wizard does not offer the read-only disk 1
+[ro-install] PASS: marker [randid] dhcp xid
+[ro-install] PASS: marker [randid] smb client challenge
+[ro-install] PASS: marker [nmi-bound]
+== MODE=inject (self-test image)
+[ro-install] PASS: install reported
+[ro-install] PASS: nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false
+[ro-install] PASS: install verdict FAILED
+== MODE=ro0 (self-test image)
+[ro-install] PASS: install reported
+[ro-install] PASS: no kernel panic
+[ro-install] PASS: serial line: falls back to the RAM root
+[ro-install] PASS: boot reaches the desktop
+[ro-install] PASS: on-screen message queued ([notify] ... RAM root)

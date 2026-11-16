@@ -2871,3 +2871,21 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   path with `O_CREAT` that is not a path.
 - **Next:**     find the self-test that creates `\x01` and `\x04`; let `vfs_open_create` refuse a name that does not start
   with `/` (ENOENT); clear the dirty list at the end of the boot self-tests.
+
+### BUG-280 — a stalled virtual disk (host write load) stops the main loop long enough to trip the deadman: `[3g2-wire] WATCHDOG TRIPPED`, one `churn fs` of 36 s ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (only seen when the host disk of the guest is busy with other guests; not seen on a quiet host in 2 x 2 h)
+- **Found:**    2026-11-15 · re-validation of `732e5f5`, `proof/revalidate-2026-11e/`: the first 2 h soak ran beside installs, a TCG matrix and the q35 legs, which write the same host disk.
+- **Actual:**   at t = 1 240 s of the soak: `[blk] slow flush at sector 0: 202/263/208/233/354 ms`, `[blk] slow write ... 366 ms`, then `[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb)`, and that `churn fs 1` took 36.4 s (limit 12). Everything else of that run was normal (5 148 commands an hour, 0 errors). The repeat on a host without that disk load: 0 watchdog, churn fs worst 10.96 s.
+- **Cause:**    not investigated: the main loop waits synchronously on a virtio-blk flush/write; a host stall of a few hundred ms per request, repeated, adds up to the deadman limit.
+- **Next:**     reproduce with `ionice`/`blkio` throttling of the soak disk; let the deadman pet from the flush wait, or make the write-back asynchronous.
+
+### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (0.6 % of the pool an hour, limit of the verdict 5 %; no kill, no refused fork, demand pool free 2 469 MiB after 11 rounds)
+- **Found:**    2026-11-16 · `proof/revalidate-2026-11e/chrome-soak2h*.txt`: two sessions of `732e5f5` (9 rounds with the H.264 clip, 11 rounds VP9 only): slope +16.6 and +20.3 MiB/h; heap flat (+0.8 MiB/h); "NOT flat" is returned because 40 MiB (1.2 % of the pool) have no owner at the worst moment (limit 1 %). Validation 2026-11e: +13.3 MiB/h, "flat". One live-site step (OpenStreetMap, "content still changing") failed in 178/179 of the second session.
+- **Next:**     run the same session on `3ecde9e` (not measured) to see whether the slope is new; look at the 40 MiB without an owner (`mem-curve.py` columns `procs`, `shm`).
+
+### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
+- **Found:**    2026-11-16 · `run-metal-matrix.py` default leg list on `732e5f5`; `nvmeroot` repeated on `3ecde9e`: FAIL the same way.
+- **Actual:**   the live system reaches the desktop loop but the install-to-NVMe/AHCI marker never appears; the serial tail shows `[init] service ticker` restarts (3 starts, then "no restart (ceiling/policy)") and desktop passes of 1.1-1.2 s.
+- **Next:**     find out whether the leg is out of date (wizard now needed) or the install really does not start; remove the legs from the default list or fix them.

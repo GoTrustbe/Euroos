@@ -1,0 +1,6 @@
+# chrome-smoke --starts 20 --smp 2: 732e5f5 browser image and, beside it at the same time, 3ecde9e
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0
+# 3ecde9e
+[chrome-smoke] starts: 20/20 PASS
+timer-probe FROZEN: 0

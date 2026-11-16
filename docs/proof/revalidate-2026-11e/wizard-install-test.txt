@@ -1,0 +1,19 @@
+[wizard-test] RUN 1: live image + blank 4 GiB virtio target
+[wizard-test] PASS: live desktop up
+[wizard-test] PASS: install media read from own ESP
+[wizard-test] PASS: live boot did not write the blank disk (RAM root)
+[wizard-test] PASS: the first-run tour waits while the install wizard is open
+[wizard-test] PASS: executor ran
+[wizard-test] PASS: install verified OK ([q1x3] ... OK)
+[wizard-test] PASS: euroid store on target verified
+[wizard-test] PASS: wizard reported completion
+[wizard-test] RUN 2: boot the installed disk alone
+[wizard-test] PASS: installed root mounted from disk
+[wizard-test] PASS: identity store loaded from disk
+[wizard-test] PASS: lockscreen reached
+[wizard-test] PASS: no unattended auto-login on the installed system
+[wizard-test] PASS: wrong password rejected
+[wizard-test] PASS: typed password signs in as the created user
+[wizard-test] PASS: desktop after login
+[wizard-test] first-run tour closed with Esc
+[wizard-test] 15/15 checks passed; screenshots + serial logs in /srv/euroos/reval-runs/wizard/

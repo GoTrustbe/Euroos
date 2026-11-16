@@ -1,0 +1,35 @@
+# Soak, R630 KVM, self-test image of 732e5f5, clean second run: loadtest.py --kvm --smp 4 --nic e1000e --restrict --nmi-on-hang --mem 16G --disks 8G --host-http --hammer 4 --procs 32 --scenario soak --soak-churn-proc 8 --duration 7500, CPUs 30-33 (siblings 10-13 idle)
+732e5f5: 10699 commands over 125.1 min = 5133 per hour; by status {'ok': 10699}
+   churn proc    n=1371  median     1437 ms  mean     1412 ms  p10      822  p90     1856  max     3390
+   spawn worker  n=1028  median      617 ms  mean      623 ms  p10      570  p90      691  max      839
+   churn fs      n= 343  median     8622 ms  mean     8856 ms  p10     8120  p90     9976  max    10962
+   churn net     n= 342  median       76 ms  mean       94 ms  p10       52  p90      122  max      886
+   sha256sum     n=1028  median      431 ms  mean      438 ms  p10      380  p90      491  max     1693
+   fetch         n=1028  median      282 ms  mean      280 ms  p10      121  p90      442  max      561
+06e913e: 10668 commands over 125.0 min = 5119 per hour; by status {'ok': 10668}
+   churn proc    n=1367  median     1370 ms  mean     1297 ms  p10      777  p90     1617  max     3345
+   spawn worker  n=1025  median      645 ms  mean      647 ms  p10      588  p90      708  max      860
+   churn fs      n= 342  median     9365 ms  mean     9380 ms  p10     8343  p90    10304  max    11505
+   churn net     n= 341  median       76 ms  mean       87 ms  p10       55  p90      116  max      939
+   sha256sum     n=1025  median      421 ms  mean      428 ms  p10      362  p90      472  max     2368
+   fetch         n=1025  median      292 ms  mean      284 ms  p10      116  p90      446  max      583
+  KERNEL PANIC: 0
+  GENERAL PROTECTION: 0
+  [idt] PAGE FAULT: 0
+  DOUBLE FAULT: 0
+  NMI PROBE: 0
+  WATCHDOG TRIPPED: 0
+  timer-probe] FROZEN: 0
+  LOCK ORDER INVERSION: 0
+  [oom]: 3
+  [spawn-refused]: 3
+  [churn-proc] verdict lines: 7889, with FAILED: 0
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 740922, "err": 0, "p50_ms": 6.0, "p99_ms": 435.2, "max_ms": 6638.0, "busy_windows": 343, "busy_s": 3038, "busy": {"ok": 316245, "err": 0, "p50_ms": 6.0, "p99_ms": 426.0, "max_ms": 1740.2}, "idle": {"ok": 424677, "err": 0, "p50_ms": 6.1, "p99_ms": 443.3, "max_ms": 6638.0}}
+--- first (disturbed) run, soak/: see README
+first-run: 10732 commands over 125.1 min = 5148 per hour; by status {'ok': 10732}
+   churn proc    n=1375  median     1396 ms  mean     1358 ms  p10      806  p90     1723  max     3362
+   spawn worker  n=1031  median      630 ms  mean      633 ms  p10      576  p90      695  max     1522
+   churn fs      n= 344  median     8872 ms  mean     9008 ms  p10     8063  p90     9944  max    36445
+   churn net     n= 343  median       77 ms  mean       93 ms  p10       53  p90      117  max      979
+   sha256sum     n=1031  median      431 ms  mean      434 ms  p10      380  p90      490  max     1612
+   fetch         n=1031  median      281 ms  mean      281 ms  p10      111  p90      452  max      645

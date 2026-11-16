@@ -1,0 +1,6 @@
+# inst.py: phase 0 of rename-persist.py alone, ten at once on eight host CPUs (6-9, 26-29); public image of 732e5f5
+      1 [inst] OK up=True done=True install 20s :: [q1x3] EuroInstall 
+      2 [inst] OK up=True done=True install 22s :: [q1x3] EuroInstall 
+      2 [inst] OK up=True done=True install 24s :: [q1x3] EuroInstall 
+      4 [inst] OK up=True done=True install 25s :: [q1x3] EuroInstall 
+      1 [inst] OK up=True done=True install 26s :: [q1x3] EuroInstall 

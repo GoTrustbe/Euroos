@@ -1,0 +1,20 @@
+# markers-compare.py, public image, gui-smoke KVM 4 vCPU 4 GiB: 3ecde9e (gs-b0) -> 732e5f5 (gs-pub); then 06e913e (validation runs/gs-pub) -> 732e5f5
+== /tmp/gs-b0.markers  vs  /tmp/gs-pub.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   ap-parity: OKx1
+   root-heap: OKx1
+
+== /tmp/gs-v1.markers  vs  /tmp/gs-pub.markers
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+# [smp] AP lines (06e913e, 3ecde9e, 732e5f5):
+/srv/euroos/val-runs/runs/gs-pub/serial.log:[smp] 0/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+runs/gs-b0/serial.log:[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+runs/gs-pub/serial.log:[smp] 3/3 AP(s) idle in hlt, taking kernel work from per-CPU queues
+# [kwork] line (732e5f5 public image 4 vCPU):
