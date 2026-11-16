@@ -25,7 +25,7 @@ IMG = sys.argv[1] if len(sys.argv) > 1 else "eurokernel.img"
 OVMF = "/usr/share/ovmf/OVMF.fd"
 WORK = tempfile.mkdtemp(prefix="ek-ahciroot-")
 TARGET = os.path.join(WORK, "ahciroot.img")
-BOOT_DEADLINE = 480
+BOOT_DEADLINE = int(os.environ.get("EK_BOOT_DEADLINE", "480"))  # TCG on a busy host is slower
 # The self-test image carries its own install media (kernel x2, loader, signatures: 131 MiB
 # in 2026-11); the installer keeps it in the kernel heap, so a 512 MiB guest has 59 MiB of heap
 # free and the media is skipped ("installer unavailable"). The install also wants a target of
