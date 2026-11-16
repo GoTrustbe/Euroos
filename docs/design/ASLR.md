@@ -1,7 +1,7 @@
 # ASLR for Linux-ABI processes: a virtual arena per process (BUG-088)
 
-Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); the
-other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
+Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); S0 and S1
+implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); the other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -438,3 +438,66 @@ Corrections:
 reaper use it as both. `try_build_address_space_rwx_big` + `arena_split` must build the arena under the zone
 slot (`map_user_arena` already can) and leave PML4[0] without a USER leaf; `free_address_space` already frees
 such a chain. `table_frames` and the native reaper (A12) stay on PML4[0].
+
+## 8. Verified in S0/S1
+
+Branch `feature/11f-aslr-s01` (from `feature/11f-aslr-s23` `3a51bc6`). Proof: `docs/proof/11f-aslr-s01/`.
+
+| commit | step |
+|---|---|
+| `6504c66` | S0: `euromm::layout` (host tests), boot option `aslr=`, probe `gaslrx`, the lines `[aslr]` (+vDSO), `[aslr-phys]`, `[aslr-ind]`, `[aslr-fork]`, `[aslr-exec]`, `[demand-slots]` |
+| `deaba4d` | S1: demand zone 32..96 TiB, one draw per launch and per exec (exe base, mmap floor, vDSO), per-process layout in `ChildMem`, test `[vdso-ro]` (tests first) |
+| `0073feb` | BUG-350 (vDSO in fork and exec children), BUG-353 (vDSO read-only) |
+| `277b4dc` | `aslr=on` is the default |
+| `1d95d9b` | BUG-355: no vDSO after exec again (the network service of Chromium aborted with one) |
+
+**What is where now (`aslr=on`).** `euromm::layout::draw(32 bytes, mode, exe_span, exe_align)` is the one cut of
+a draw (section 4); `ring3::image_layout` calls it once per launch (`run_glibc`, `spawn_glibc_persistent`,
+`glibc_disk_launch`) and once per exec (`do_child_execve`). The demand region is `zone(mode)`: 32..96 TiB with
+`on`/`off`, slot 2 with `legacy` (`demand_base()`, `demand_size()`, `demand_slots()` replace the constants of
+class C; the walks of class C are the `dz_*` helpers, one loop over the slots). Per process, in `ChildMem`:
+`EXE_BASE`/`EXE_END` (the exe window), `DEMAND_FLOOR`, `VDSO_CUR` (0 after an exec). The stack builder takes the vDSO base as a
+parameter (`VDSO_EHDR_NEXT` is gone, correction A3). `aslr=off` is the same code with every draw 0: exe 32 TiB,
+floor 40 TiB, vDSO 100 TiB, arena slides 0.
+
+**Entropy measured** (`[aslr]`, 64 starts of `gaslrx`, KVM 1/2/4/8 GiB, and the Chromium launch/exec lines):
+
+| region | before (`3a51bc6`) | `aslr=on` | how |
+|---|---|---|---|
+| program from disk (Chromium) | 0 | 30 (its `p_align` is 4 KiB) | 4 TiB window above 32 TiB |
+| mmap floor: libc, 1 MiB mmap, thread stacks, heaps of Chromium | 19 | 30 | 4 TiB window above 40 TiB |
+| vDSO (launched process and its fork children) | 0 | 27 | a page of PML4 200; none after exec (BUG-355) |
+| embedded PIE, ld.so | 0 | 0 | arena, identity (S4, S5) |
+| stack, brk, small mmap | 8, 8, 9..10 | 8, 8, 9..10 | arena slides (S5, S6) |
+
+The varying bits of the 64 starts equal the bits of the draw (30, 30, 27): every draw bit reaches the address.
+
+**Corrections found in S0/S1:**
+
+- Question 6 (section 6.2, item 7): the probe is rebuilt with the gcc 15.2.0 of the R630 (the compiler of the
+  existing `gaslr`, read from its `.comment`); nothing installed. It is a new binary `gaslrx` with its own signature;
+  `gaslr` and its signature are unchanged. Symbols needed: up to `GLIBC_2.34` (the image has 2.39).
+- `[aslr-exec]` cannot be measured with the probe: `do_child_execve` re-executes only the persistent program from
+  disk (`CHILD_EXE_PATH`); an embedded program gets ENOEXEC. The line measures the exec placement kernel side
+  (`ring3::place`, the function the exec path uses) and says so; the real execs are the `[aslr-layout] exec` lines
+  of Chromium (every child gets a new exe base, floor and vDSO).
+- 1.2, "fork child: same as parent": not for the vDSO. A fork child had **no** vDSO mapping and died on its first
+  clock call through it (BUG-350); an exec'd child got `AT_SYSINFO_EHDR` 0. The fork child now maps it at the parent's
+  address (tables from the process pool, `paging::VDSO_SLOT`). Giving the exec'd image a vDSO at its new draw (design
+  2.4) made Chromium's network service abort (BUG-355), so an exec'd image still has none: the vDSO is random per
+  launch, not per exec, and `[aslr-exec]` says so.
+- The vDSO was mapped user-writable in every process (BUG-353), now read-only.
+- `DEMAND_FLOOR` was global: an exec in a child moved the swap range of the browser main (BUG-354). Now per process.
+- Class C also has `interrupts.rs` (`[pf-diag]` range of plausible code pointers) and the `exit_group` diagnostics
+  (the exe window); both follow the zone now.
+- Assumption 4 (section 6.2): `swapmgr` takes `[base, end)` from the caller and skips 2 MiB per missing table; it
+  assumes no slot. Holds. With a floor..next range of tens of GiB its scan is as long as before (Chromium's
+  reservations did not grow, below).
+- Found, not fixed: getrandom into a copy-on-write page of a fork child returns EFAULT (BUG-351); a fork child killed
+  by isolation is never reported to `wait4`, the parent waits 60 s (BUG-352).
+
+**What S4 needs (updated list):** design 1.3 A1..A13 as before, plus: `phys_probe_note` and `[aslr-phys]` compare an
+address with its frame (`translate_in`), so S4 sees the line turn OK without a change to the test; `place()` takes
+the arena base, so S5 only has to draw it; `free_fork_tables` frees the vDSO chain of `VDSO_SLOT`, a moved arena
+must not land in that slot (zone 8..12 TiB, slot 200: no overlap); `[aslr-exec]` reports ld.so as kept until S5
+  draws the arena base in `do_child_execve`, and the vDSO until BUG-355 is solved.

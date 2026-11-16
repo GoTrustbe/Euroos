@@ -1,0 +1,25 @@
+# Reservations >= 1 GiB ([demand-res] lines) summed over the 20 starts per mode, 1d95d9b public image
+## on
+    100 [demand-res] mmap anon RESERVE 1413119 MiB align=0x1000 -> granted (lazy)
+    200 [demand-res] mmap anon RESERVE 16384 MiB align=0x400000000 -> granted (lazy)
+    300 [demand-res] mmap anon RESERVE 32768 MiB align=0x800000000 -> granted (lazy)
+    200 [demand-res] mmap anon RESERVE 4096 MiB align=0x1000 -> granted (lazy)
+## off
+    100 [demand-res] mmap anon RESERVE 1413119 MiB align=0x1000 -> granted (lazy)
+    201 [demand-res] mmap anon RESERVE 16384 MiB align=0x400000000 -> granted (lazy)
+    302 [demand-res] mmap anon RESERVE 32768 MiB align=0x800000000 -> granted (lazy)
+    201 [demand-res] mmap anon RESERVE 4096 MiB align=0x1000 -> granted (lazy)
+## legacy
+    100 [demand-res] mmap anon RESERVE 1413119 MiB align=0x1000 -> ENOMEM
+    204 [demand-res] mmap anon RESERVE 16384 MiB align=0x400000000 -> granted (lazy)
+    100 [demand-res] mmap anon RESERVE 266239 MiB align=0x1000 -> granted (lazy)
+    308 [demand-res] mmap anon RESERVE 32768 MiB align=0x800000000 -> granted (lazy)
+    204 [demand-res] mmap anon RESERVE 4096 MiB align=0x1000 -> granted (lazy)
+    100 [demand-res] mmap anon RESERVE 528383 MiB align=0x1000 -> ENOMEM
+# memory per start (last [mem] line: pool - free; [memstat] sum tables, unattributed; reserved GiB summed over processes), median over 20
+on: pool in use median 429.0 MiB (min 419, max 455), reserved median 5905.0 GiB
+off: pool in use median 429.0 MiB (min 420, max 458), reserved median 6204.0 GiB
+legacy: pool in use median 444.0 MiB (min 405, max 471), reserved median 1717.0 GiB
+on census:  20 tables=5; 20 unattributed=0 KiB;
+off census:  19 tables=5; 1 tables=6; 19 unattributed=0 KiB;
+legacy census:  19 tables=5; 2 tables=6; 21 unattributed=0 KiB;

@@ -1,0 +1,84 @@
+# 31 TCG boots combined-smp1-iommu-1g (1 GiB, smp 1, intel-iommu, nvme + megasas, e1000e restrict=on), -cpu qemu64,+smep,+smap, AFTER=120 s; fin = 1d95d9b self-test image (aslr=on), base = 3a51bc6; one CPU each of 18, 19, 38, 39
+fin boots 30, desktop 30, watchdog 0, NMI 0, crash lines 0
+[aslr-fork] OK in 30/30
+[demand-slots] OK in 30/30
+[vdso-ro] OK in 30/30
+[arena-hi] OK in 30/30
+[elf-bias] OK in 30/30
+[fuzz]/[eurofuzz]/[churn*] FAILED lines: 0
+## FAILED tags (fin): in how many boots
+     30 [aslr]
+     30 [aslr-exec]
+     30 [aslr-ind]
+     30 [aslr-phys]
+     30 [conn]
+     30 [glibc]
+     30 [linux-abi]
+     30 [udrv-crash]
+     30 [udrv-linux]
+     30 [udrv-net]
+## FAILED tags, base-t00
+[aslr] [conn] [glibc] [linux-abi] [udrv-crash] [udrv-linux] [udrv-net] 
+## markers-compare against base-t00 (only WORSE shown)
+fin-t01: -- WORSE: 0 
+fin-t02: -- WORSE: 0 
+fin-t03: -- WORSE: 0 
+fin-t04: -- WORSE: 0 
+fin-t05: -- WORSE: 0 
+fin-t06: -- WORSE: 0 
+fin-t07: -- WORSE: 0 
+fin-t08: -- WORSE: 0 
+fin-t09: -- WORSE: 0 
+fin-t10: -- WORSE: 0 
+fin-t11: -- WORSE: 0 
+fin-t12: -- WORSE: 0 
+fin-t13: -- WORSE: 0 
+fin-t14: -- WORSE: 0 
+fin-t15: -- WORSE: 0 
+fin-t16: -- WORSE: 0 
+fin-t17: -- WORSE: 0 
+fin-t18: -- WORSE: 0 
+fin-t19: -- WORSE: 0 
+fin-t20: -- WORSE: 0 
+fin-t21: -- WORSE: 0 
+fin-t22: -- WORSE: 0 
+fin-t23: -- WORSE: 0 
+fin-t24: -- WORSE: 0 
+fin-t25: -- WORSE: 0 
+fin-t26: -- WORSE: 0 
+fin-t27: -- WORSE: 0 
+fin-t28: -- WORSE: 0 
+fin-t29: -- WORSE: 0 
+fin-t30: -- WORSE: 0 
+## lanes
+base-t00 done 21:59:08 after 476s desktop=1 wd=0 nmi=0
+fin-t08 done 21:59:18 after 486s desktop=1 wd=0 nmi=0
+fin-t16 done 21:59:53 after 491s desktop=1 wd=0 nmi=0
+fin-t24 done 21:59:53 after 491s desktop=1 wd=0 nmi=0
+fin-t01 done 22:07:04 after 476s desktop=1 wd=0 nmi=0
+fin-t09 done 22:07:19 after 481s desktop=1 wd=0 nmi=0
+fin-t25 done 22:07:59 after 486s desktop=1 wd=0 nmi=0
+fin-t17 done 22:08:04 after 491s desktop=1 wd=0 nmi=0
+fin-t02 done 22:15:05 after 481s desktop=1 wd=0 nmi=0
+fin-t10 done 22:15:21 after 482s desktop=1 wd=0 nmi=0
+fin-t26 done 22:16:06 after 487s desktop=1 wd=0 nmi=0
+fin-t18 done 22:16:11 after 487s desktop=1 wd=0 nmi=0
+fin-t03 done 22:23:07 after 482s desktop=1 wd=0 nmi=0
+fin-t11 done 22:23:22 after 481s desktop=1 wd=0 nmi=0
+fin-t27 done 22:24:07 after 481s desktop=1 wd=0 nmi=0
+fin-t19 done 22:24:27 after 496s desktop=1 wd=0 nmi=0
+fin-t04 done 22:31:03 after 476s desktop=1 wd=0 nmi=0
+fin-t12 done 22:31:18 after 476s desktop=1 wd=0 nmi=0
+fin-t28 done 22:32:13 after 486s desktop=1 wd=0 nmi=0
+fin-t20 done 22:32:33 after 486s desktop=1 wd=0 nmi=0
+fin-t05 done 22:39:04 after 481s desktop=1 wd=0 nmi=0
+fin-t13 done 22:39:19 after 481s desktop=1 wd=0 nmi=0
+fin-t29 done 22:40:19 after 486s desktop=1 wd=0 nmi=0
+fin-t21 done 22:40:39 after 486s desktop=1 wd=0 nmi=0
+fin-t06 done 22:47:10 after 486s desktop=1 wd=0 nmi=0
+fin-t14 done 22:47:25 after 486s desktop=1 wd=0 nmi=0
+fin-t30 done 22:48:20 after 481s desktop=1 wd=0 nmi=0
+fin-t22 done 22:48:40 after 481s desktop=1 wd=0 nmi=0
+fin-t07 done 22:55:11 after 481s desktop=1 wd=0 nmi=0
+fin-t23 done 22:55:16 after 396s desktop=1 wd=0 nmi=0
+fin-t15 done 22:55:21 after 476s desktop=1 wd=0 nmi=0

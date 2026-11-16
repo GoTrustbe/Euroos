@@ -1,0 +1,38 @@
+# aslr=on, 1d95d9b public image, 20 Chromium starts (20 boots), smp 2, pins 18,38.
+# Per boot: the [aslr-layout] launch line of the browser (exe base, mmap floor, vDSO), the number of execs, aborts, FROZEN.
+start-01 exe 0x22f0ff9da000 floor 0x2a9c85554000 vdso 0x647a06d88000 execs=9 aborts=0 frozen=0
+start-02 exe 0x21d85ac70000 floor 0x2b2783d44000 vdso 0x6410ad908000 execs=9 aborts=0 frozen=0
+start-03 exe 0x21e5ac229000 floor 0x2bb8b72b6000 vdso 0x6440dcded000 execs=9 aborts=0 frozen=0
+start-04 exe 0x21820a213000 floor 0x2bd95c0a7000 vdso 0x6446f541d000 execs=9 aborts=0 frozen=0
+start-05 exe 0x21a98c608000 floor 0x28e83a4fc000 vdso 0x641b0f384000 execs=9 aborts=0 frozen=0
+start-06 exe 0x227120040000 floor 0x282de988c000 vdso 0x645efe1bf000 execs=9 aborts=0 frozen=0
+start-07 exe 0x2187b9049000 floor 0x29f4cbbb8000 vdso 0x645ce1edf000 execs=9 aborts=0 frozen=0
+start-08 exe 0x205a023b0000 floor 0x2a13a9e62000 vdso 0x64336d414000 execs=9 aborts=0 frozen=0
+start-09 exe 0x2350ec35b000 floor 0x280b969be000 vdso 0x642640ebc000 execs=9 aborts=0 frozen=0
+start-10 exe 0x206d5b487000 floor 0x2acec2694000 vdso 0x644db72f2000 execs=9 aborts=0 frozen=0
+start-11 exe 0x23b3dbb7e000 floor 0x29d94dde5000 vdso 0x641b21fcd000 execs=9 aborts=0 frozen=0
+start-12 exe 0x20261b553000 floor 0x2af775073000 vdso 0x645f3a7b2000 execs=9 aborts=0 frozen=0
+start-13 exe 0x22ea183bd000 floor 0x2bbc21e0b000 vdso 0x6417b2129000 execs=9 aborts=0 frozen=0
+start-14 exe 0x200d3cf2f000 floor 0x2acb48061000 vdso 0x641b74242000 execs=9 aborts=0 frozen=0
+start-15 exe 0x20737ce6a000 floor 0x2a3df9a47000 vdso 0x6434813a9000 execs=9 aborts=0 frozen=0
+start-16 exe 0x22fed1981000 floor 0x29aa88464000 vdso 0x6479f3c57000 execs=9 aborts=0 frozen=0
+start-17 exe 0x21e539502000 floor 0x2aeb65d2e000 vdso 0x6427c04b0000 execs=9 aborts=0 frozen=0
+start-18 exe 0x23b8dc367000 floor 0x2966a3bf8000 vdso 0x647bce6e0000 execs=9 aborts=0 frozen=0
+start-19 exe 0x2215fce3d000 floor 0x29360b346000 vdso 0x6471cb5f6000 execs=9 aborts=0 frozen=0
+start-20 exe 0x22c17a01e000 floor 0x2bc114d86000 vdso 0x6410b3af6000 execs=9 aborts=0 frozen=0
+# launch exe: 20 distinct of 20 boots, varying bits 30
+# launch floor: 20 distinct of 20 boots, varying bits 30
+# launch vdso: 20 distinct of 20 boots, varying bits 27
+# exec exe: 180 distinct of 180 execs, varying bits 30
+# exec floor: 180 distinct of 180 execs, varying bits 30
+## start-01: launch and every exec
+[aslr-layout] launch /pack/chrome: exe 0x22f0ff9da000 (span 323 MiB, align 0x1000) floor 0x2a9c85554000 vdso 0x647a06d88000 ld.so 0x42400000 brk 0x43c0a000 stack 0x49a77000 (aslr=on)
+[aslr-layout] exec task 32: exe 0x20d5191e5000 floor 0x2bfb4a627000 ld.so 0x42400000 brk 0x43c78000 stack 0x49a3f000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 43: exe 0x21e707431000 floor 0x2a9d55b4e000 ld.so 0x42400000 brk 0x43c90000 stack 0x49afd000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 60: exe 0x23e35628f000 floor 0x2b6d9d70a000 ld.so 0x42400000 brk 0x43c20000 stack 0x49a41000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 61: exe 0x20ce365d0000 floor 0x2ac304d43000 ld.so 0x42400000 brk 0x43cb3000 stack 0x49a92000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 62: exe 0x2046727e6000 floor 0x29e7d40a5000 ld.so 0x42400000 brk 0x43c5f000 stack 0x49a40000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 94: exe 0x20ba2b2c4000 floor 0x28ce24bc0000 ld.so 0x42400000 brk 0x43cca000 stack 0x49aa2000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 95: exe 0x2177d8a04000 floor 0x2bd5cdfe5000 ld.so 0x42400000 brk 0x43c06000 stack 0x49a3b000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 95: exe 0x2277223a0000 floor 0x284d627ad000 ld.so 0x42400000 brk 0x43cdf000 stack 0x49a5d000 vdso 0x0 (aslr=on)
+[aslr-layout] exec task 102: exe 0x23322cb43000 floor 0x294bc2d5a000 ld.so 0x42400000 brk 0x43c70000 stack 0x49ac4000 vdso 0x0 (aslr=on)

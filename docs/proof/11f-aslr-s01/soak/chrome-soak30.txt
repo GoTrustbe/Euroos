@@ -1,0 +1,64 @@
+# chrome-mem-soak.py --hours 0.5 --mem 8192M --local-video-dir (vp9.webm only), aslr=on, 1d95d9b public image, smp 2, pins 19,39
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 12.9 s (seconds after Enter: launched 3.2, window on screen 3.4, X connection 4.8, first child process 5.2, renderer 7.6), 1
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 1.0 s, load finished 3.1 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 129 ms; fds: 7 processes, 367 descriptors, 330 objects, 211/4096 file ob
+[gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.8 s, load finished 3.5 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 104 ms; fds: 9 processes, 453 descriptors, 40
+[gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.7 s, load finished 17.9 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 170 ms; fds: 10 processes, 519 descriptors,
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tou
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.7 s, load finished 11.0 s later; content 283 colours, commonest 88%; desktop loop: slowest console answer 407 ms; fds: 12 processes, 669 descriptors, 579 objects, 363/409
+[gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.0 s, load finished 3.0 s later; content 2285 colours, commonest 36%; desktop loop: slowest console answer 141 ms; fds: 11 processes, 620 descriptors, 53
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.7 s, load finished 2.7 s later; content 140 colours, commonest 58%; desktop loop
+[gui-smoke] FAIL youtube: the watch page loads (round 1): the tab never showed watch with a title of its own: [('https://www.youtube.com/watch?v=aqz-KE-bpKQ', 'Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film - YouTube')] after 99.1 s | X input
+[gui-smoke] FAIL site youtube-play: round 1: the watch page did not load; RAM files (109, 1337, 0) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL site video-play: round 1: 120 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.web
+[gui-smoke] ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.81 -> 60.81 s in 60.2 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158, 1158])
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 60.81, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[chrome-mem-soak] round 1 done after 940 s: heap 122 MiB used, 389 MiB free; big 34/477 MiB (peak 40); files 43 MiB; demand 2564 MiB free
+[chrome-smoke] running - 19/22 steps ok, report and screenshots in /dev/shm/aslr01/on-soak
+[gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/ after 0.1 s, load finished 5.1 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 112 ms; fds: 9 processes, 528 descriptors, 463 objects, 312/4096 file objec
+[gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 3.2 s later; content 591 colours, commonest 78%; desktop loop: slowest console answer 217 ms; fds: 10 processes, 578 descriptors, 5
+[gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.0 s, load finished 15.6 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 366 ms; fds: 10 processes, 576 descriptors,
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 3.5 s, load finished 10.2 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 221 ms; fds: 12 processes, 699 descriptors, 604 objects, 392/409
+[gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.8 s, load finished 3.8 s later; content 378 colours, commonest 92%; desktop loop: slowest console answer 195 ms; fds: 11 processes, 628 descriptors, 543
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.5 s, load finished 2.4 s later; content 140 colours, commonest 58%; desktop loop
+[gui-smoke] FAIL youtube: the watch page loads (round 2): the tab never showed watch with a title of its own: [('https://www.youtube.com/watch?v=aqz-KE-bpKQ', 'Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film - YouTube')] after 99.1 s | X input
+[gui-smoke] FAIL site youtube-play: round 2: the watch page did not load; RAM files (109, 1337, 0) | X input modifiers=0x0 (1 Shift, 2 Lock, 4 Control, 8 Alt, 0x80 AltGr) buttons=0x0 focus=0x400003 shown=0x400003 E0-pending=false
+[gui-smoke] FAIL site video-play: round 2: 120 s of https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.360p.vp9.webm: https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.web
+[gui-smoke] ok   local video vp9+opus: the page loads from the host and the browser knows the codec: http://10.0.2.2:18780/vp9.html; state {'st': 'paused', 't': 0.0, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.74 -> 61.24 s in 60.4 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor (RMS [1158, 1158, 1158, 1158, 1158, 1157, 1158, 1158, 1157, 1158, 1157, 1158])
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.24, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[chrome-mem-soak] round 2 done after 1918 s: heap 122 MiB used, 389 MiB free; big 34/477 MiB (peak 40); files 43 MiB; demand 2658 MiB free
+[chrome-smoke] running - 35/41 steps ok, report and screenshots in /dev/shm/aslr01/on-soak
+[chrome-smoke] FAIL (6 step(s)) - 35/41 steps ok, report and screenshots in /dev/shm/aslr01/on-soak
+[chrome-mem-soak] FAIL (6 step(s)): 2 rounds in 1918 s
+# serial: aborts=0 FROZEN=0 [oom]=0 ring0-faults=0 reservation-ENOMEM=0
+# memstat sum unattributed (count of samples):
+     74 unattributed=0 KiB
+      1 unattributed=128 KiB
+      2 unattributed=16 KiB
+      1 unattributed=25964 KiB
+      2 unattributed=4 KiB
+# mem-curve:
+   1000 network.CrUtilit       5     0     0
+   1001 storage.CrUtilit       4     0     0
+   1002 CrRendererMain        15     0     0
+   1011 on_device_model.       1     0     0
+   1033 CrRendererMain        22     0     0
+   1044 CrRendererMain        32     1     0
+   1045 CrRendererMain         7     0     0
+   1046 CrRendererMain         7     0     0

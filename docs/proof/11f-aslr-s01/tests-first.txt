@@ -1,0 +1,48 @@
+# Tests first. s0 = 6504c66 (S0, default legacy), s1a-on/off = deaba4d (S1 + [vdso-ro], before the BUG-350/353 fix), KVM 4 GiB 2 vCPU, pins 18,38 / 19,39
+## s0-4g: s0-4g end=timeout after 602s failed-lines=1 crash-lines=0
+      8 [isolation] ring-3 page fault addr=0x1f00000045e code=PageFaultErrorCode(USER_MODE | INSTRUCTION_FETCH) -> process pid 0 (task 6) TERMINATED
+[wait4] blocking wait for pid 1341 gave up after 60 s
+[wait4] blocking wait for pid 1340 gave up after 60 s
+[wait4] blocking wait for pid 1339 gave up after 60 s
+[wait4] blocking wait for pid 1338 gave up after 60 s
+[wait4] blocking wait for pid 1337 gave up after 60 s
+[wait4] blocking wait for pid 1336 gave up after 60 s
+[wait4] blocking wait for pid 1335 gave up after 60 s
+[demand-slots] pages at 0x200000001000 and 0x5ffffffff000 (PML4 64 and 191): the census walk does not find every page; census 0 pages, frames 0/0, pool 256 -> 243; demand slots 2..3 (aslr=legacy) -> FAILED ✗
+[bootopt] aslr=legacy
+## s1a-on-4g: s1a-on-4g end=marker after 252s failed-lines=6 crash-lines=0
+[wait4] blocking wait for pid 1335 gave up after 60 s
+[vdso-ro] writable for the process: image, clock page (the frames are shared by every glibc process: BUG-353) → FAILED
+[demand-slots] pages at 0x200000001000 and 0x5ffffffff000 (PML4 64 and 191): census 4 pages 9 tables, fork copy 4 -> 4 frames (2 shared), freed in both, pool 256 -> 256; demand slots 64..192 -> OK ✓
+[bootopt] aslr=on
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 10 (4 KiB 10, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[aslr]   vdso     first 0x64095e520000  varying bits 27  distinct 64/64
+[aslr]   stack    first 0x000138292d1c  varying bits  8  distinct 56/64
+[aslr]   mmapbig  first 0x287824142000  varying bits 30  distinct 64/64
+[aslr]   mmap     first 0x0001244b0000  varying bits 10  distinct 59/64
+[aslr]   libc     first 0x287823f90100  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x000120c00000  varying bits  0  distinct 1/64
+[aslr]   exe      first 0x000120401460  varying bits  0  distinct 1/64
+[aslr]   brk      first 0x000122490000  varying bits  8  distinct 58/64
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED (not yet: the arena leaves the identity map in step S4)
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 9 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31 → FAILED (not yet: stack-mmap, exe-stack, exe-mmap move with one arena base until step S6)
+[aslr-fork] a fork child of the probe died before it printed its addresses (after 0 that did) → FAILED
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 8/8 floor 0/8 vdso 8/8 brk 0/8 mmap 0/8 stack 0/8 → FAILED (not yet: ld.so (the arena base stays until S5), vDSO (an exec'd child has none))
+## s1a-off-4g: s1a-off-4g end=marker after 250s failed-lines=5 crash-lines=0
+[wait4] blocking wait for pid 1335 gave up after 60 s
+[vdso-ro] writable for the process: image, clock page (the frames are shared by every glibc process: BUG-353) → FAILED
+[demand-slots] pages at 0x200000001000 and 0x5ffffffff000 (PML4 64 and 191): census 4 pages 9 tables, fork copy 4 -> 4 frames (2 shared), freed in both, pool 256 -> 256; demand slots 64..192 -> OK ✓
+[bootopt] aslr=off
+[aslr] 64 starts of a glibc PIE (aslr=off): varying bits mmap 0 (4 KiB 0, 1 MiB 0), stack 0, PIE base 0, brk 0, ld.so 0, libc 0, vDSO 0; Linux x86-64 gives mmap 28, stack 22, PIE 28 → off (boot option aslr=off: fixed addresses on purpose) ⬜
+[aslr]   vdso     first 0x640000000000  varying bits  0  distinct 1/64
+[aslr]   stack    first 0x0001382ffd1c  varying bits  0  distinct 1/64
+[aslr]   mmapbig  first 0x280000212000  varying bits  0  distinct 1/64
+[aslr]   mmap     first 0x000124405000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x280000060100  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000120c00000  varying bits  0  distinct 1/64
+[aslr]   exe      first 0x000120401460  varying bits  0  distinct 1/64
+[aslr]   brk      first 0x000122400000  varying bits  0  distinct 1/64
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED (not yet: the arena leaves the identity map in step S4)
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 0, exe-stack 0, exe-mmap 0 (want >= 20); libc-exe 0, vDSO-mmap1MiB 0 → off (boot option aslr=off) ⬜
+[aslr-fork] a fork child of the probe died before it printed its addresses (after 0 that did) → FAILED
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=off), kept the address of the parent: exe 8/8 ldso 8/8 floor 8/8 vdso 8/8 brk 8/8 mmap 8/8 stack 8/8 → FAILED (not yet: exe, ld.so (the arena base stays until S5), mmap floor, vDSO (an exec'd child has none), brk, mmap, stack)

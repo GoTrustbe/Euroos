@@ -1,0 +1,123 @@
+# BUG-355, image 277b4dc (vDSO mapped into exec-ed children by 0073feb), Chromium smp 2 pins 19,39 and 18,38
+# on-sites round 1 (site euro-os) and on-starts start 2: the network service aborts
+## runs/first-try/on-sites-serial.log
+[execve] task 32 is --type=utility
+[aslr-layout] exec task 32: exe 0x23b94eadb000 floor 0x2b03349eb000 ld.so 0x42400000 brk 0x43c20000 stack 0x49a5f000 vdso 0x6419f08e9000 (aslr=on)
+[execve] task 43 is --type=utility
+[aslr-layout] exec task 43: exe 0x2318a1d32000 floor 0x29966cb1f000 ld.so 0x42400000 brk 0x43c79000 stack 0x49a58000 vdso 0x640df09da000 (aslr=on)
+[execve] task 60 is --type=renderer
+[aslr-layout] exec task 60: exe 0x215f3f89a000 floor 0x29939b4d7000 ld.so 0x42400000 brk 0x43c58000 stack 0x49a3a000 vdso 0x646d2c120000 (aslr=on)
+[execve] task 62 is --type=renderer
+[aslr-layout] exec task 62: exe 0x232c48d97000 floor 0x2b322e53b000 ld.so 0x42400000 brk 0x43c04000 stack 0x49a1e000 vdso 0x64504be4a000 (aslr=on)
+[execve] task 63 is --type=renderer
+[aslr-layout] exec task 63: exe 0x229e35ce9000 floor 0x2b75bb441000 ld.so 0x42400000 brk 0x43c8b000 stack 0x49ad0000 vdso 0x6428082c1000 (aslr=on)
+[execve] task 94 is --type=renderer
+[aslr-layout] exec task 94: exe 0x22a4ba25f000 floor 0x28e715889000 ld.so 0x42400000 brk 0x43cae000 stack 0x49a50000 vdso 0x64418dbab000 (aslr=on)
+[execve] task 95 is --type=utility
+[aslr-layout] exec task 95: exe 0x206b72629000 floor 0x2bed8c458000 ld.so 0x42400000 brk 0x43cfe000 stack 0x49a1a000 vdso 0x64252a405000 (aslr=on)
+[execve] task 112 is --type=utility
+[aslr-layout] exec task 112: exe 0x23c86404c000 floor 0x2b969898c000 ld.so 0x42400000 brk 0x43c31000 stack 0x49a66000 vdso 0x6465b2731000 (aslr=on)
+[execve] task 104 is --type=utility
+[aslr-layout] exec task 104: exe 0x2143fbf7e000 floor 0x2af6d3bcf000 ld.so 0x42400000 brk 0x43cd5000 stack 0x49a7b000 vdso 0x644a95d1b000 (aslr=on)
+#0 0x23b95a72df02 <unknown>
+#1 0x23b95a71a41e <unknown>
+#2 0x23b95a65863c <unknown>
+#3 0x23b95a65850c <unknown>
+#4 0x23b95a643372 <unknown>
+#5 0x23b95a64305b <unknown>
+#6 0x23b95ac88cec <unknown>
+#7 0x23b95ac8b9f3 <unknown>
+#8 0x23b95ac89179 <unknown>
+#9 0x23b95ac87bd3 <unknown>
+#10 0x23b95ac8aae5 <unknown>
+#11 0x23b95a6b421e <unknown>
+#12 0x23b95a6d1141 <unknown>
+#13 0x23b95a6d0a9b <unknown>
+#14 0x23b95a73d810 <unknown>
+#15 0x23b95a6d1984 <unknown>
+#16 0x23b95a692591 <unknown>
+#17 0x23b95a6f6ea8 <unknown>
+#18 0x23b95e42c498 <unknown>
+#19 0x23b95a6f700b <unknown>
+#20 0x23b95a70ecaf <unknown>
+#21 0x2b033525aaa4 <unknown>
+#22 0x2b03352e7c6c <unknown>
+#0 0x23b95acb93b1 <unknown>
+  "service-name" = "network.mojom.NetworkService"
+  "ptype" = "utility"
+[abort] t39 "Chrome_ChildIOTh" tgkill(tgid=1, tid=39, sig=6) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump
+[execve] task 32 is --type=utility
+[aslr-layout] exec task 32: exe 0x22ec6a056000 floor 0x2b056c8cd000 ld.so 0x42400000 brk 0x43c5e000 stack 0x49a7c000 vdso 0x64362699a000 (aslr=on)
+[execve] task 116 is --type=renderer
+[aslr-layout] exec task 116: exe 0x20a617c02000 floor 0x29bac0481000 ld.so 0x42400000 brk 0x43ce1000 stack 0x49aeb000 vdso 0x64442dac5000 (aslr=on)
+[execve] task 73 is --type=utility
+[aslr-layout] exec task 73: exe 0x20d6db760000 floor 0x2be475955000 ld.so 0x42400000 brk 0x43cd8000 stack 0x49a8d000 vdso 0x640d0a8d0000 (aslr=on)
+[execve] task 73 is --type=renderer
+[aslr-layout] exec task 73: exe 0x213857ead000 floor 0x2994f63f6000 ld.so 0x42400000 brk 0x43c4d000 stack 0x49a31000 vdso 0x6469a7f42000 (aslr=on)
+[execve] task 128 is --type=utility
+[aslr-layout] exec task 128: exe 0x23c7abb36000 floor 0x29f0163ab000 ld.so 0x42400000 brk 0x43c2a000 stack 0x49ae6000 vdso 0x6457eeeaf000 (aslr=on)
+[execve] task 72 is --type=renderer
+[aslr-layout] exec task 72: exe 0x20e278c82000 floor 0x2a3bf6091000 ld.so 0x42400000 brk 0x43ccd000 stack 0x49a02000 vdso 0x646dc90e9000 (aslr=on)
+## runs/first-try/on-starts-02-serial.log
+[execve] task 31 is --type=utility
+[aslr-layout] exec task 31: exe 0x23c2c3941000 floor 0x2aad8511d000 ld.so 0x42400000 brk 0x43c84000 stack 0x49a16000 vdso 0x641d926d5000 (aslr=on)
+[execve] task 42 is --type=utility
+[aslr-layout] exec task 42: exe 0x229a7762b000 floor 0x28bee5ed1000 ld.so 0x42400000 brk 0x43c9a000 stack 0x49af6000 vdso 0x64748638e000 (aslr=on)
+[execve] task 59 is --type=renderer
+[aslr-layout] exec task 59: exe 0x23f7cf0b9000 floor 0x2a0e4aef9000 ld.so 0x42400000 brk 0x43cca000 stack 0x49ab5000 vdso 0x6417d2a27000 (aslr=on)
+[execve] task 61 is --type=renderer
+[aslr-layout] exec task 61: exe 0x22bb1878d000 floor 0x2aa270d2e000 ld.so 0x42400000 brk 0x43c22000 stack 0x49ab3000 vdso 0x643058445000 (aslr=on)
+[execve] task 62 is --type=renderer
+[aslr-layout] exec task 62: exe 0x22a5d4a89000 floor 0x29d179ccc000 ld.so 0x42400000 brk 0x43c41000 stack 0x49a7a000 vdso 0x646b55dda000 (aslr=on)
+[execve] task 94 is --type=renderer
+[aslr-layout] exec task 94: exe 0x21c24cd56000 floor 0x2b028bdf5000 ld.so 0x42400000 brk 0x43cf7000 stack 0x49a9b000 vdso 0x647437684000 (aslr=on)
+[execve] task 95 is --type=utility
+[aslr-layout] exec task 95: exe 0x22fd9dfca000 floor 0x289fbb8eb000 ld.so 0x42400000 brk 0x43cfe000 stack 0x49a96000 vdso 0x6446e29c3000 (aslr=on)
+[execve] task 111 is --type=utility
+[aslr-layout] exec task 111: exe 0x20a7cfcdf000 floor 0x2ac8268b5000 ld.so 0x42400000 brk 0x43c31000 stack 0x49ac9000 vdso 0x64267ee28000 (aslr=on)
+#0 0x23c2cf593f02 <unknown>
+#1 0x23c2cf58041e <unknown>
+#2 0x23c2cf4be63c <unknown>
+#3 0x23c2cf4be50c <unknown>
+#4 0x23c2cf4a9372 <unknown>
+#5 0x23c2cf4a905b <unknown>
+#6 0x23c2cfaeecec <unknown>
+#7 0x23c2cfaf19f3 <unknown>
+#8 0x23c2cfaef179 <unknown>
+#9 0x23c2cfaedbd3 <unknown>
+#10 0x23c2cfaf0ae5 <unknown>
+#11 0x23c2cf51a21e <unknown>
+#12 0x23c2cf537141 <unknown>
+#13 0x23c2cf536a9b <unknown>
+#14 0x23c2cf5a3810 <unknown>
+#15 0x23c2cf537984 <unknown>
+#16 0x23c2cf4f8591 <unknown>
+#17 0x23c2cf55cea8 <unknown>
+#18 0x23c2d3292498 <unknown>
+#19 0x23c2cf55d00b <unknown>
+#20 0x23c2cf574caf <unknown>
+#21 0x2aad8598caa4 <unknown>
+#22 0x2aad85a19c6c <unknown>
+#0 0x23c2cfb1f3b1 <unknown>
+  "service-name" = "network.mojom.NetworkService"
+  "ptype" = "utility"
+[abort] t38 "Chrome_ChildIOTh" tgkill(tgid=1, tid=38, sig=6) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump
+[execve] task 33 is --type=utility
+[aslr-layout] exec task 33: exe 0x20cecdc64000 floor 0x286a17707000 ld.so 0x42400000 brk 0x43ce6000 stack 0x49a70000 vdso 0x6461a8ba6000 (aslr=on)
+[execve] task 107 is --type=renderer
+[aslr-layout] exec task 107: exe 0x23066c105000 floor 0x2b1765c09000 ld.so 0x42400000 brk 0x43c44000 stack 0x49ae5000 vdso 0x64053ca30000 (aslr=on)
+## symbolized (on-sites, network service exe base 0x23b94eadb000, addr2line on the chrome of chrome-pack2.img)
+base::debug::CollectStackTrace(base::span<void const*, 18446744073709551615ul, void const**>)	stack_trace_posix.cc:?
+base::debug::StackTrace::StackTrace()	stack_trace.cc:?
+logging::LogMessage::Flush()	logging.cc:?
+logging::LogMessage::~LogMessage()	logging.cc:?
+logging::(anonymous namespace)::CheckLogMessage::~CheckLogMessage()	check.cc:?
+logging::CheckNoreturnError::~CheckNoreturnError()	check.cc:?
+net::HttpNetworkTransaction::RecordStreamRequestResult(int)	http_network_transaction.cc:?
+net::HttpNetworkTransaction::DoCreateStreamComplete(int)	http_network_transaction.cc:?
+net::HttpNetworkTransaction::DoLoop(int)	http_network_transaction.cc:?
+net::HttpNetworkTransaction::OnIOComplete(int)	http_network_transaction.cc:?
+net::HttpNetworkTransaction::OnStreamReady(net::ProxyInfo const&, std::__Cr::unique_ptr<net::HttpStream, std::__Cr::default_delete<net::HttpStream> >)
+base::TaskAnnotator::RunTaskImpl(base::PendingTask&)	task_annotator.cc:?
+content::(anonymous namespace)::ChildIOThread::Run(base::RunLoop*)	child_process.cc:?
+[gui-smoke] FAIL site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 2.3 s, load finished 2.0 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 558 ms; fds:

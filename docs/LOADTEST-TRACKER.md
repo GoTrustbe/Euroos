@@ -1756,6 +1756,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   take the virtual address and the kernel-side address separately, self-test `[elf-bias]`. Every caller still
   passes one address twice; `[aslr]` gives the same bits as before. Proof `docs/proof/11f-aslr-s23/`.
   Next: S0, S1, S4 (the launched process at a non-identity base).
+- **2026-11-16 (`feature/11f-aslr-s01`, S0 and S1):** boot option `aslr=on|off|legacy`, default `on`. With `on` the
+  demand region is 32..96 TiB (PML4 64..191); per launch and per exec one draw places the program from disk (Chromium),
+  the mmap floor (libraries, large mmaps) and the vDSO: `[aslr]` mmap 1 MiB 19 -> 30, libc 19 -> 30, vDSO 0 -> 27 bits.
+  PIE of embedded programs, ld.so (0) and stack (8) need the arena to leave the identity map (S4, S5): `[aslr]` stays
+  FAILED. New lines `[aslr-phys]`, `[aslr-ind]`, `[aslr-exec]` FAILED as "not yet", `[aslr-fork]`, `[demand-slots]`,
+  `[vdso-ro]` OK. Found on the way: BUG-350 to BUG-355. Proof `docs/proof/11f-aslr-s01/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3031,3 +3037,59 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      the body of `forget_clients` runs in `without_interrupts`.
 - **Test:**     `[xlock]` also runs `forget_clients` (only when no connection is open) and counts X locks taken with IF on:
   `= 1 (want 0) -> FAILED` (`eb239c5`, KVM 2 GiB) -> `= 0 -> OK` (`7253cb1`, KVM 1/2/4/8 GiB).
+### BUG-350 — a glibc fork child had no vDSO: its first clock call through it was a fault ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`) · **Severity:** HIGH for programs that fork without exec (Chromium children exec at once)
+- **Found:**    2026-11-16 · by the new `[aslr-fork]` self-test (ASLR S0): every fork child of the probe `gaslrx` died with
+  an instruction fetch fault at the vDSO address (`rip=0x1f00000045e`), and its parent then waited 60 s (BUG-352).
+- **Cause:**    `do_glibc_fork` builds the child's tables (`fill_remap_tables_lazy`, `clone_demand_region`) but never mapped
+  the vDSO; the child runs the parent's code, whose copied memory holds `AT_SYSINFO_EHDR`. An exec in a fork child gave
+  the new image `AT_SYSINFO_EHDR` 0 (no vDSO at all).
+- **Fix:**      the child maps the vDSO image and clock page at the parent's address (tables from the process pool, freed by
+  `free_fork_tables`); an exec frees that chain and the new image runs without a vDSO, as before (`0073feb` also
+  mapped one at the new draw; that was taken back for BUG-355 in `1d95d9b`).
+  `[aslr-fork]` FAILED (`deaba4d`) -> OK 8/8 (`0073feb`, `1d95d9b`) in KVM boots at 1/2/4/8 GiB. Proof `proof/11f-aslr-s01/`.
+
+### BUG-351 — getrandom in a fork child into a copy-on-write page returns EFAULT ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (glibc falls back; a program that checks the error sees EFAULT)
+- **Found:**    2026-11-16 · `[cst]` lines of the `[aslr-fork]` children: `318(0x2b3be3735178,0x8,0x1) = -14` in 8 of 8 fork
+  children on `277b4dc` (glibc's malloc asks 8 bytes into its tcache, a demand page shared copy-on-write with the parent).
+- **Likely cause (not verified):** the kernel's copy to user memory does not break a copy-on-write share before it
+  writes, and refuses the read-only page instead.
+- **Next:**     a self-test that forks, writes nothing, and calls getrandom into a heap buffer; then break the share in
+  the copy-out path as the page-fault path does.
+
+### BUG-352 — a fork child killed by a ring-3 fault is not reported to the parent's wait4 ⬜ OPEN
+- **Status:**   OPEN · **Severity:** MEDIUM (the parent hangs 60 s per dead child, then gets no status)
+- **Found:**    2026-11-16 · S0 boot of the self-test image: after each `[isolation] ... TERMINATED` of a fork child,
+  `[wait4] blocking wait for pid N gave up after 60 s`, then `[fork] child pid N ... outlived its run`. 8 children took
+  the `[aslr]` self-test 8 minutes. With BUG-350 fixed the probe no longer triggers it; any other child fault still would.
+- **Next:**     give the parent the child's status (killed by SIGSEGV) when isolation ends a fork child.
+
+### BUG-353 — the vDSO pages were mapped user-writable in every glibc process ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`) · **Severity:** HIGH (security: one process could rewrite code and time that
+  every glibc process runs)
+- **Found:**    2026-11-16 · reading `map_user_4k_falloc` for ASLR S1; test first: `[vdso-ro]` FAILED on `deaba4d` ("writable
+  for the process: image, clock page").
+- **Cause:**    the vDSO mapper set `WRITABLE | USER` on the leaf; the image frames and the clock frame are shared by all.
+- **Fix:**      user read-only (`map_user_4k_falloc`, and `map_user_4k_pool` for children). `[vdso-ro]` OK at 1/2/4/8 GiB.
+
+### BUG-355 — Chromium's network service aborts when an exec'd child has a vDSO ⬜ OPEN (avoided)
+- **Status:**   OPEN, avoided (`1d95d9b`: no vDSO after exec, as before) · **Severity:** MEDIUM (a page load fails)
+- **Found:**    2026-11-16 · ASLR S1 Chromium runs with `0073feb` (vDSO mapped into exec'd children): the network service
+  (`--type=utility`, `network.mojom.NetworkService`) aborted in 2 of 6 sessions (site matrix round 1, start 2 of 20):
+  `[abort] t39 "Chrome_ChildIOTh"`, CHECK in `net::HttpNetworkTransaction::RecordStreamRequestResult` (stack symbolized
+  with the chrome of `chrome-pack2.img` and the exe base of the `[aslr-layout] exec` line). Logs:
+  `proof/11f-aslr-s01/bug355/`.
+- **Likely cause (not verified):** the vDSO clock (`userland/glibc/vdso.c`) is the tick anchor plus rdtsc, capped at two
+  ticks; across a late tick or another CPU it can return a monotonic time below an earlier one, and the network stack
+  CHECKs the order of its timestamps. The browser main process has always used the vDSO; its children never did.
+- **Next:**     a self-test of vDSO monotonicity against the syscall on all CPUs over tick boundaries; then the vDSO for exec'd
+  children again (it is what makes `[aslr-exec]` give a vDSO a new draw).
+
+### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)
+- **Found:**    2026-11-16 · reading `do_child_execve` for ASLR S1: it stores its new mmap floor in the global `DEMAND_FLOOR`,
+  which `ChildMem` did not swap, so the parent's swap eviction range `[DEMAND_FLOOR, DEMAND_NEXT)` changed with every
+  child exec. With per-process random floors that range could become empty.
+- **Fix:**      `DEMAND_FLOOR` is per process (in `ChildMem`, with the exe window and the vDSO base).
+
