@@ -1,0 +1,12 @@
+# chrome-smoke, browser image of 1a6edd9, smp 2
+[chrome-smoke] starts: 20/20 PASS
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/11fb/f2sites3
+# gui-smoke, public image of 1a6edd9, KVM 4 vCPU 4 GiB
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/11fb/f2gs
+
+# the same on the image of 5861686 (before 1a6edd9)
+[chrome-smoke] starts: 20/20 PASS
+[chrome-smoke] FAIL (2 step(s)) - 34/36 steps ok, report and screenshots in /dev/shm/11fb/sites3
+[gui-smoke] FAIL site youtube: ... content 268 colours, commonest 89%; desktop loop: slowest console answer 1502 ms; fds: 12 processes, 673 descriptors, 583 objects, 367/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; kernel stopwatch:
+[gui-smoke] FAIL site openstreetmap: ... content 274 colours, commonest 85%, still changing; desktop loop: slowest console answer 330 ms; fds: 12 processes, 637 descriptors, 551 objects, 354/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of hol
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/11fb/gs

@@ -1,0 +1,24 @@
+# chrome-mem-soak 1 h at 8 GiB, local VP9+Opus, image of 5861686 (before 1a6edd9)
+[chrome-mem-soak] round 1 done after 651 s: heap 123 MiB used, 388 MiB free; big 42/469 MiB (peak 44); files 43 MiB; demand 2491 MiB free
+[chrome-mem-soak] round 2 done after 1321 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 47); files 43 MiB; demand 2489 MiB free
+[chrome-mem-soak] round 3 done after 2003 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 47); files 43 MiB; demand 2485 MiB free
+[chrome-mem-soak] round 4 done after 2678 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 47); files 43 MiB; demand 2478 MiB free
+[chrome-mem-soak] round 5 done after 3357 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 47); files 43 MiB; demand 2473 MiB free
+[chrome-mem-soak] round 6 done after 4030 s: heap 124 MiB used, 387 MiB free; big 37/474 MiB (peak 47); files 43 MiB; demand 2472 MiB free
+[chrome-mem-soak] PASS: 6 rounds in 4031 s
+after the warm-up (15 min): 136 samples over 51 min
+owner                   first   last    min    max    MiB/h
+in use (pool - free)      801    759    696    941    -19.0
+anon                      319    285    248    448    -21.2
+zero                        7      8      5     15     -0.5
+noaccess                    0      0      0      0     +0.0
+fileprivate               179    164    149    194     -6.7
+tables                     13     15     11     17     +3.4
+pagecache                 243    246    243    246     +2.2
+shm                        47     47     37     76     +4.5
+heap_used                 123    124    123    124     +0.6
+big_used                   39     37     33     43     -1.9
+ramfile_bytes               1      1      1      1     +0.0
+
+lowest free: 2290 MiB of 3231; largest unattributed: 4216 KiB
+verdict: flat (in use -19.0 MiB/h = -0.6% of the pool per hour; 0 kill/exhaustion lines; 4 MiB without an owner at the worst)

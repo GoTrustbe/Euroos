@@ -2497,8 +2497,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 
 - **Copy-on-write (`feature/mem-2026-11e`):** fork shares the arena and demand pages copy-on-write (`dc0b337`, `d29ff3d`; test `c793def`): `[memt] cowfork`, a 64 MiB process, 72 336 kB of frames per fork before, 340 kB after. `design/MEMORY-RECLAIM.md` section 8.
 
-### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ⬜ NOT REPRODUCED (the probe that hung is fixed)
-- **Status:**   NOT REPRODUCED in 20 sessions of the s4 kind on `28d5d33` (`proof/chrome-mem2/s4-repeats.txt`: 0 hangs) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
+### BUG-157 — a 4 GiB browser guest hung after 5 minutes, the BSP in schedule_core with interrupts off ✅ CLOSED: cannot reproduce (11f-mem)
+- **Status:**   CLOSED, cannot reproduce (11f-mem; 0 hangs in 20 + 2 sessions since the probe fix) · **Severity:** HIGH when it happens (once in 12 sessions on `f9a8870`)
 - **Actual:**   run s4 of `proof/chrome-mem/` (4 GiB, site matrix, after the fourth site): "the desktop loop did not
   answer the serial console within 40 s". NMI probe: `sched::schedule_core+0x27c`, IF=0, CR2 0x11c030d9000.
 - **Read again (`proof/chrome-mem2/`):** the serial log of s4 shows a guest that RUNS up to the probe: the console answers
@@ -2526,6 +2526,11 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   used up its 24 lines), so nothing names what held the timer. `f08c678`: the FROZEN line is followed by the whole
   in-service register, the TSC since the last timer tick and the lost-tick total, and a late tick of 200 ms or more
   is always logged (first 64). Not reproduced here; open on their branch.
+- **11f-mem (bounded, about one hour of machine time):** two s4 sessions (4 GiB, 2 vCPU, site matrix without video,
+  2 rounds of 15 min, `chrome-mem-soak.py --mem 4096M --no-video --hours 0.25`) on the browser image of this branch:
+  0 hangs, 0 NMI probes, 0 "did not answer"; 1 step failed (openstreetmap "still changing", as in earlier rounds).
+  Next to them, without a hang either: 40 Chromium starts, 2 x 3 site rounds, two 1 h sessions at 8 GiB. Both candidate causes are fixed (the allocating probe, `f2baa29`
+  and `28d5d33`; the doubly handed out task slot, `3990f17`), and the scheduler it was found in is gone (S1).
 
 ### Notes (not bugs, measured)
 - **Boot-time background musl processes and the native bg-app tests only run under KVM with
@@ -2657,13 +2662,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      a disk root that can be neither mounted nor formatted falls back to a RAM root: serial line `[euro] the install on disk 0 failed ... booting a RAM root`, the registered boot disk is the RAM one, and the desktop queues the notice "Disk not usable". `ro-install-test.py MODE=ro0`: before `KERNEL PANIC ... EuroFS format: IoError` (no desktop), after 5/5 and the desktop. Not changed: a root that does not mount is still formatted.
 - **Proof:**    `proof/small-2026-11e/bug220/`
 
-### BUG-230 — a system call `madvise` (28) runs 80-130 ms with IF=0 at boot of the self-test image ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (no tick, no input for that long; the same class as BUG-182)
+### BUG-230 — a system call `madvise` (28) runs 80-130 ms with IF=0 at boot of the self-test image ✅ FIXED (`7c8fc5c`, 11f-mem)
+- **Status:**   FIXED (`7c8fc5c`; test `1913094`, feature/11f-mem) · **Severity:** LOW (no tick, no input for that long; the same class as BUG-182)
 - **Actual:**   `[if0-window] 113 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms ...) task 30`, eleven windows of
   81-131 ms in one boot of the self-test image (16 GiB, KVM), all ending in user mode after `madvise`; three more of
   110-218 ms with task 0 in kernel code (`cause=kernel`). Seen with the `[if0-window]` lines of sched-d1 (`proof/sched-d1/if0-window.txt`).
 - **Next:**     which advice and range (likely MADV_DONTNEED over a large range, cleared with IF=0); clear in chunks with a
   tick allowed in between, or out of the system call.
+- **Cause:**    (11f-mem, `proof/11f-mem/bug230.txt`) not madvise. Task 30 is the `[eurofuzz]` app (efuzz, Euro API); its
+  `log()` call (0x6107) with 4 KiB of binary data wrote the whole line to the UART inside the call, with interrupts off:
+  `[slowcall] task 30 call 0x6107(..., 0x1000, ...)` 79-163 ms, eleven times per boot. The `[if0-window]` line said
+  "syscall 28" because the background path never wrote LAST_SYS: the 28 was a stale madvise of an earlier owner of slot 30.
+- **Fix:**      the serial copy of a Euro log line is at most 160 printable characters plus "(+N characters)"; the app's
+  output keeps the whole line. The background path records its last call in LAST_SYS like the Linux path.
+- **Test:**     `[eurofuzz]` fails when one call of a background process holds the CPU 50 ms or more (`[slowcall]` names
+  any of 20 ms or more). KVM 4 GiB: longest call 0x6107 112 ms FAILED (`1913094`) -> 6 ms OK; final image 7-10 ms at
+  1/2/4/8 GiB. 16 GiB 4 vCPU: [if0-window] lines with this cause 11 (81-148 ms) -> 0.
+- **Left:**     the other windows of 50-75 ms (read/write/rt_sigprocmask of boot programs) and ~250 ms `cause=kernel`
+  of task 0 were there before and are not this bug: BUG-310.
 
 ### BUG-231 — the inbound HTTP hammer of the soak is 11 times slower after S1/S2 (p50 5.4 -> 60.9 ms) ✅ FIXED (D2 step B)
 - **Status:**   FIXED · **Severity:** MEDIUM (0 errors, but half the requests in the same 2 h)
@@ -2839,8 +2855,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Fix:**      a named file written during a demand-paged run is made of frames (BUG-154 for files with a name): one memory
   for read, write and every mapping. 15/15 at 1, 2, 4, 8 GiB.
 
-### BUG-243 — /bin/msock as a background process does not run at all when its arena lies at 0xc200000 (TCG, 1 GiB) ⬜ OPEN (worked around)
-- **Status:**   OPEN, cause not found · **Severity:** LOW (seen in one self-test; the arena placement that shows it is gone)
+### BUG-243 — /bin/msock as a background process does not run at all when its arena lies at 0xc200000 (TCG, 1 GiB) ✅ CLOSED (cause found: the scheduler before S1; no memory bug)
+- **Status:**   CLOSED, cause found (11f-mem, `proof/11f-mem/bug243.txt`) · **Severity:** LOW (gone since S1, `cdf5aff`)
 - **Actual:**   with `dc0b337` the copy-on-write holder counts (128 frames at 1 GiB) were taken from the frame allocator early in
   the boot. Every later allocation moved: the bg-musl arenas of the network self-tests landed at 0xc200000 instead of
   0x200000 (PML4 0x206000 instead of 0x186000). There, `/bin/msock` (`[bgnet-cap]`, no CAP_NET) was spawned and printed
@@ -2850,6 +2866,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Workaround:** the holder counts live in the kernel heap (`9c30378`); the layout is as before and `[bgnet-cap]` passes.
 - **Next:**     place a bg-musl arena at 0xc200000 on purpose (TCG, 1 GiB, storage config) and find where msock stands
   (NMI probe or the syscall ring of task 22).
+- **Reproduced:** the holder counts back in frames (the `dc0b337` placement) on `3f6bdb3` (mem-2026-11e tip): TCG 1 GiB
+  storage and combined, `[bgnet-cap]` FAILED 2 of 2, msock at arena 0xc200000, task 22, PML4 0x206000 as reported.
+- **Cause:**    msock was never scheduled. At the end of the 30 s: state Ready, 0 system calls, 0 page faults, resume
+  frame still at its entry (rip 0xc201261, IF=1); its code pages equal a fresh load of the binary (only the relocated
+  data words differ). Its vruntime was 112-345 ticks (x 1344, the step of nice 0) ahead of the five busy self-test
+  tasks t7-t11: the scheduler of that time charged a step per tick, gave every new task the vruntime of the task that
+  started it (`spawn_user`: `max(current, min_vr)`), and the desktop task that runs the boot self-tests takes every
+  other tick, so its vruntime runs about five times faster than the pack. The spinners did not catch up within 30 s.
+  The placement of the counts only changed the timing (how far task 0 was ahead when msock started).
+- **Not a memory bug:** no stray write, no frame with two owners, no double free (code intact, no fault, the frames of
+  the arena belonged to msock alone).
+- **Since S1:** the same frames placement passes: `b6eb05d` (first merge of mem with S1) 2 of 2 and `e4b8ba4` 2 of 2,
+  msock again at 0xc200000 with PML4 0x206000. S1 charges TSC time with weights and the desktop task runs at nice -10.
+  The rule "a new task starts at the vruntime of its parent" is still in `spawn_user` (as in Linux CFS); with the
+  desktop at nice -10 it no longer puts a child far ahead. No change to the scheduler here (team A).
+- **Workaround:** kept (comment corrected in `949be13`). The counts cost 2 bytes per frame of kernel heap (4 MiB at
+  8 GiB); moving them back would change the boot layout of every image right before the release for no gain. Above
+  ~64 GiB of RAM frames would be the better place (32 MiB of heap).
 
 <!-- Add BUG-NNN entries above this line. Keep newest at the bottom of the relevant group. -->
 
@@ -2879,13 +2913,34 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Cause:**    not investigated: the main loop waits synchronously on a virtio-blk flush/write; a host stall of a few hundred ms per request, repeated, adds up to the deadman limit.
 - **Next:**     reproduce with `ionice`/`blkio` throttling of the soak disk; let the deadman pet from the flush wait, or make the write-back asynchronous.
 
-### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (0.6 % of the pool an hour, limit of the verdict 5 %; no kill, no refused fork, demand pool free 2 469 MiB after 11 rounds)
+### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ✅ FIXED (accounting gap, `5861686`, `1a6edd9`, 11f-mem)
+- **Status:**   FIXED (`5861686`, `1a6edd9`; test `1913094`, feature/11f-mem) · **Severity:** LOW (no leak: one census sample at a time)
 - **Found:**    2026-11-16 · `proof/revalidate-2026-11e/chrome-soak2h*.txt`: two sessions of `732e5f5` (9 rounds with the H.264 clip, 11 rounds VP9 only): slope +16.6 and +20.3 MiB/h; heap flat (+0.8 MiB/h); "NOT flat" is returned because 40 MiB (1.2 % of the pool) have no owner at the worst moment (limit 1 %). Validation 2026-11e: +13.3 MiB/h, "flat". One live-site step (OpenStreetMap, "content still changing") failed in 178/179 of the second session.
 - **Next:**     run the same session on `3ecde9e` (not measured) to see whether the slope is new; look at the 40 MiB without an owner (`mem-curve.py` columns `procs`, `shm`).
+- **Cause:**    (11f-mem, `proof/11f-mem/bug281.txt`) an accounting gap, not a leak. The frames without an owner are one
+  sample each (2 h sessions: 76 MiB once in 324 samples, 94 and 57 MiB twice in 324; all other samples -3..+1 MiB), each
+  at a census that met a fork of the browser: the parent's pages were already shared copy-on-write (each holder counts
+  its part: chrome anon 77 -> 41 MiB in that sample) while the child was not in the list yet, so the child's part and
+  its new tables had no owner. The next sample was 0 again. The slope itself (+16-20 MiB/h, 0.6 % of the pool an hour)
+  is under the 5 % limit of the verdict; a run of `3ecde9e` was not needed.
+- **Fix:**      the census walks a fork in progress as a process of its own (pid 0, "(fork in progress)", FORK_IN_FLIGHT
+  held so an undo cannot free its tables under the walk), and is taken again (up to 3 times) when a fork started or
+  ended or a child left during it (MM_GEN). `1a6edd9`: interrupts off before the range lists of that fork are read.
+- **Test:**     `[memt] cowfork` takes a census in the middle of its first fork: 30 852 KiB without an owner FAILED
+  (`1913094`) -> 0 KiB OK (KVM 1/2/4/8/16 GiB).
+- **Session:**  1 h at 8 GiB with the local VP9+Opus clip, final image (`proof/11f-mem/chrome-soak1h.txt`): 6 rounds,
+  99/99 steps, verdict **flat**, in use +10.5 MiB/h, 3 MiB without an owner at the worst, 0 kills.
 
 ### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
 - **Found:**    2026-11-16 · `run-metal-matrix.py` default leg list on `732e5f5`; `nvmeroot` repeated on `3ecde9e`: FAIL the same way.
 - **Actual:**   the live system reaches the desktop loop but the install-to-NVMe/AHCI marker never appears; the serial tail shows `[init] service ticker` restarts (3 starts, then "no restart (ceiling/policy)") and desktop passes of 1.1-1.2 s.
 - **Next:**     find out whether the leg is out of date (wizard now needed) or the install really does not start; remove the legs from the default list or fix them.
+
+### BUG-310 — boot of the self-test image: [if0-window] of 50-75 ms in read/write/rt_sigprocmask, ~250 ms `cause=kernel` of task 0 ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (boot self-tests only; the same class as BUG-182 and BUG-230)
+- **Found:**    2026-11-16 · 11f-mem, `proof/11f-mem/bug230.txt`: what is left in a 16 GiB 4 vCPU boot once BUG-230 is fixed:
+  windows of 51-76 ms with `cause=syscall 0/1/14` (boot programs, tasks 6-17) and 108-251 ms `cause=kernel` of task 0.
+  All were there on `e4b8ba4` too; the background path now names its calls, so the numbers are right.
+- **Next:**     `[slowcall]` names the background ones; the same timing on the Linux path (rt_sigprocmask 54-56 ms is
+  suspicious for a call that does no I/O), and what task 0 does with interrupts off for 250 ms after exit_group.
