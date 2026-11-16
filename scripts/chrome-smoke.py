@@ -898,6 +898,24 @@ class Chrome(gs.Guest):
                 self.key("backspace")
                 self.nap(0.6)
             res[method] = self._keys(n_keys, region, method)
+        # --perf-smpuser-ab: the fbread keys once more with `smpuser on` (ring-3
+        # threads may run on the APs, S5), then back off. Reported, not judged:
+        # the evidence for or against moving more of chrome's work off the BSP.
+        if getattr(self.a, "perf_smpuser_ab", False):
+            self.key("ctrl", "a")
+            self.key("backspace")
+            self.nap(0.6)
+            self.serial.send_line("smpuser on")
+            self.nap(1.0)
+            on = self._keys(n_keys, region, "fbread")
+            self.serial.send_line("smpstat")
+            self.nap(0.5)
+            self.serial.send_line("smpuser off")
+            self.nap(1.0)
+            if on[0]:
+                print(f"[chrome-smoke]   keys, fbread with smpuser on: median {statistics.median(on[0]):.0f} ms over {len(on[0])} keys "
+                      f"(off: {statistics.median(res['fbread'][0]) if res['fbread'][0] else 0:.0f} ms)", flush=True)
+            res["fbread-smpuser-on"] = on
         lat = res["fbread"][0] or res["screendump"][0]
         dump_ms = res["fbread"][1] or res["screendump"][1]
         old = res["screendump"][0]
@@ -956,6 +974,8 @@ class Chrome(gs.Guest):
         self.nap(1.2)                      # past the caret's first blink
         self.serial.send_line("keylat reset")
         self.nap(0.3)
+        self.serial.send_line("sched-stat start")
+        self.nap(0.3)
         for i in range(n_keys):
             before = look()
             t0 = time.time()
@@ -980,6 +1000,8 @@ class Chrome(gs.Guest):
                 print(f"[chrome-smoke]   {method} key {i + 1}: {dt:.0f} ms (poll returned {cap[-1]:.0f} ms, bracket {brk[-1]:.1f} ms), "
                       f"QMP send {(t_sent - t0) * 1000:.1f} ms, {n} polls", flush=True)
             time.sleep(0.25)
+        self.serial.send_line("sched-stat")
+        self.nap(0.5)
         pos = self.serial.mark()
         self.serial.send_line("keylat")
         self.serial.wait_for("[keylat-cpu] delivery to screen", 10 * self.slow, pos)
@@ -1553,6 +1575,7 @@ def main():
     ap.add_argument("--nic", default="virtio-net-pci", help="virtio-net-pci or e1000e (the userspace driver e1000d)")
     ap.add_argument("--extra", default="")
     ap.add_argument("--only", default="", help="comma list of: sites, interact, youtube, perf (default: sites, interact, perf)")
+    ap.add_argument("--perf-smpuser-ab", action="store_true", help="perf: type the fbread keys once more with smpuser on (S5), reported only")
     ap.add_argument("--sites", default="", help="comma list of site names (default: all of the matrix)")
     ap.add_argument("--rounds", type=int, default=1, help="repeat the site matrix this many times in one browser session")
     ap.add_argument("--soak-hours", type=float, default=0.0, help="repeat sites + interaction in one session for this long")
