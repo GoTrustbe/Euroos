@@ -2776,14 +2776,24 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   desktop task is charged at nice 0 (`48df3b0`); without an X client nothing changes. Merged `f53eec1` against `3ecde9e`, quiet, paired:
   smp 4 200-236 against 284-326 ms, smp 2 214-274 against 304-347 ms. `proof/fix-d2/keylat-*.txt`, `final-keylat.txt`.
 
-### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once
-- **Status:**   OPEN (intermittent) · **Severity:** LOW
+### BUG-275 — TCG, 1 GiB combined, smp 1: `[churn-forkthreads]` ended with "(no result line) (exit 0)" once ✅ FIXED (the test's time budget)
+- **Status:**   FIXED (`kernel/src/churn.rs`) · **Severity:** LOW
 - **Actual:**   TCG matrix of `48dfd05`, `combined-smp1-iommu-1g`: `[churn-forkthreads] ... (no result line) (exit 0)` FAILED (validate-2026-11d: 40 of 40 rounds PASS).
-  The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. Not reproduced, so no cause.
-- **Proof:**    `proof/validate-2026-11e/tcg-summary.txt`, `comparison-tcg.txt`.
-- **Rerun (fix-d2):** the same configuration 20 times at once on the merged self-test image of feature/fix-d2 (`f53eec1`):
-  `[churn-forkthreads]` OK 20/20, desktop 20/20, 0 watchdog, 0 NMI; markers-compare against the validation rerun `rr3` 0 worse in all 20.
-  Not reproduced; not investigated further. `proof/fix-d2/bug275-tcg20.txt`.
+  The same configuration again, three times: PASS 3/3; the other 1 GiB configurations PASS. fix-d2: 20 of 20 PASS (not reproduced).
+- **Reproduced (11f-C):** 100 boots of that configuration, 4 at once on 2 physical cores of the R630 (the cores were also used by KVM runs during part of it): 97 reached the desktop, in those `[churn-forkthreads]` PASS 93, **no result line 4**. `proof/11f-small/bug275-tcg100.txt`, logs of the four: `bug275-no-result-line-4-logs.tar.gz`.
+- **Cause:**    the time budget, not the kernel. `run_glibc` kills a program after `GLIBC_DEADLINE_TICKS` (12 000 ticks = 120 s of the guest clock, which runs in real time). `gslots` does 41 forks of 7 tasks each; a passing boot shows 41 `[fork] pid` lines, the four failing ones were killed at fork 37, 39, 40 and 38, every one of them still progressing normally (fork, 6 thread creations, exit, `wait4`; no stall in the syscall dump): `[glibc] TIMEOUT waiting ...` then `timed-out program killed`, so the program printed no `GSLOTS:` line and the exit code is the default 0. Three of the four were on host CPU 18 and one on its SMT sibling 38, the pair that also ran my KVM runs; the pair 19/39 had none. Same mechanism as BUG-273 (a program on a shared host core running into its deadline).
+- **Fix:**      `fork_thread_churn` runs the program with a 36 000-tick (6 minute) budget and puts the old value back (as `llm.rs` does). The check itself is unchanged (exit 88, task table, kernel stacks, process pool and demand pool back to the start); a real hang still ends it after 6 minutes. KVM: the test takes seconds.
+- **After:**    40 boots of the same configuration on the fixed image, with two extra busy loops on the loaded core pair: 40 of 40 desktop, `[churn-forkthreads]` PASS 40/40, 0 watchdog. `proof/11f-small/bug275-tcgfix40.txt`.
+
+### BUG-320 — TCG, 1 GiB combined, smp 1: the boot wedges in the SDL self-test, the X client spins on `XCONNS` with interrupts off while the desktop task was preempted holding it ✅ FIXED
+- **Status:**   FIXED (`xserver::pump_mouse`, `window_at`; test `[xlock]`) · **Severity:** MEDIUM (a whole boot stops; seen 3 times in 100 boots of one TCG configuration, never on KVM)
+- **Found:**    2026-11-16 · the 100-boot run of BUG-275: 3 boots (`c38-4`, `c38-5`, `c18-7`) showed no desktop within 900 s silent; the harness NMI probe (`[nmi]`) was identical in all three.
+- **Actual:**   serial log stops right after `[linux-abi] GSDL: window created`. NMI: CPU 0 at the same instruction in all three, `epoll_fd_ready+0x1d4` (a `lock cmpxchg` / `pause` spin loop on the byte at `xserver::XCONNS`), `CS=0x8`, `RFLAGS` with IF=0, current task = the SDL test process in `poll()` (last syscall 7). Task 0 (the desktop loop) is `Ready`, with IF=1, resuming at `xserver::pump_mouse+0x4d` (once) and `+0x5d` (twice): inside the scan of `XCONNS`.
+- **Cause:**    `pump_mouse` took `XCONNS` (a plain `spin::Mutex`) with interrupts ON, in task 0. A timer tick that preempts task 0 inside that scan leaves it holding the lock; the X client's `poll()` path (`unix_fd_readable` -> `xserver::readable`) takes the same lock with IF=0 and spins; one CPU, no tick can preempt the spinner, so the holder never runs again. The same rule is written next to `pump_keyboard` and `deliver_focus` (BUG-007 class: "a preemption holding this lock would deadlock"); `pump_mouse` was missed. `window_at` (the `PRESENTED` lock, also taken by the client path) had the same shape.
+- **Test first:** boot marker `[xlock]` (self-test builds, after interrupts are on): runs `pump_mouse` and `window_at` once and counts the times they held an X server lock with interrupts enabled. Before: `= 2 (want 0) -> FAILED`; after: `= 0 -> OK`. `proof/11f-small/bug320-xlock.txt`.
+- **Fix:**      both take their lock inside `without_interrupts`.
+- **After:**    40 boots of the same configuration with the fix: 40 of 40 reached the desktop (first run: 97 of 100). KVM markers-compare against `e4b8ba4`: 0 worse. `proof/11f-small/bug275-tcgfix40.txt`, `bug320-nmisym.txt` (symbolised probe of `c38-4`), `bug320-tcg-wedge-c38-4.log.gz`.
+- **Not done:** the other users of `XCONNS` in task 0 were not audited one by one (the three wedges all ended in `pump_mouse`; the callers inside `without_interrupts` were left as they are).
 
 ### BUG-250 — after the 2026-11e integration the storage configurations at 1 GiB hit the RAM-file limit (`[rename]` FAILED) ✅ FIXED
 - **Status:**   FIXED (`c70dddf`; test `8a6f333`) · **Severity:** LOW (1 GiB guests with a RAM root only; 2 GiB and larger pass)
@@ -2906,12 +2916,15 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Next:**     find the self-test that creates `\x01` and `\x04`; let `vfs_open_create` refuse a name that does not start
   with `/` (ENOENT); clear the dirty list at the end of the boot self-tests.
 
-### BUG-280 — a stalled virtual disk (host write load) stops the main loop long enough to trip the deadman: `[3g2-wire] WATCHDOG TRIPPED`, one `churn fs` of 36 s ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (only seen when the host disk of the guest is busy with other guests; not seen on a quiet host in 2 x 2 h)
+### BUG-280 — a stalled virtual disk (host write load) stops the main loop long enough to trip the deadman: `[3g2-wire] WATCHDOG TRIPPED`, one `churn fs` of 36 s ✅ FIXED (watchdog side; not reproduced end to end)
+- **Status:**   FIXED (`5184f4b` test, `e7cd1e8` fix) · **Severity:** LOW (only seen when the host disk of the guest is busy with other guests; not seen on a quiet host in 2 x 2 h)
 - **Found:**    2026-11-15 · re-validation of `732e5f5`, `proof/revalidate-2026-11e/`: the first 2 h soak ran beside installs, a TCG matrix and the q35 legs, which write the same host disk.
 - **Actual:**   at t = 1 240 s of the soak: `[blk] slow flush at sector 0: 202/263/208/233/354 ms`, `[blk] slow write ... 366 ms`, then `[3g2-wire] WATCHDOG TRIPPED - main loop hung; would reset (i6300esb)`, and that `churn fs 1` took 36.4 s (limit 12). Everything else of that run was normal (5 148 commands an hour, 0 errors). The repeat on a host without that disk load: 0 watchdog, churn fs worst 10.96 s.
-- **Cause:**    not investigated: the main loop waits synchronously on a virtio-blk flush/write; a host stall of a few hundred ms per request, repeated, adds up to the deadman limit.
-- **Next:**     reproduce with `ionice`/`blkio` throttling of the soak disk; let the deadman pet from the flush wait, or make the write-back asynchronous.
+- **Cause:**    the watchdog treated "the desktop loop has not been back at the top of its loop for 15 s" as a hang. `churn fs 1` is a shell command run by the loop itself: 3 rounds of 120 files with write, rename, read and remove, each a synchronous virtio-blk request. On a starved host disk every request took 200-400 ms (`[blk] slow ...`), so the command took 36 s, the loop never got back to `watchdog::pet()`, and the tick checker tripped at 15 s. Every one of those requests completed (the 60 s request timeout never fired): the loop was waiting on a slow disk, not hung. On a quiet host the same command takes up to 11 s, which is why the margin is thin.
+- **Fix:**      `virtio_blk::kick_and_wait_inner` calls `watchdog::io_progress()` when a request completes; it pets when the running task is the one that armed the watchdog (the desktop loop). A request that never completes still leaves the loop without a pet (60 s request limit against the 15 s deadman: the trip comes as before), and block traffic of other tasks counts for nothing. Only virtio-blk (the case seen); NVMe and AHCI roots are not changed.
+- **Test:**     boot marker `[wd-io]` (self-test builds): four block reads by the task that pets must give four pets. Before: `pets gained 0 (want 4) -> FAILED`; after: `gained 4 -> OK`. KVM, markers-compare against `e4b8ba4`: 0 worse. `proof/11f-small/bug280-watchdog-io.txt`.
+- **Not done:** the slow host disk itself was not reproduced (no throttled-disk run of `churn fs`); the cause above is from the log lines of the original run and the code. If the trip comes back without `[blk] slow` lines before it, it is something else.
+- **Next:**     NVMe/AHCI roots have the same wait loops; add `io_progress()` there if a slow disk of those kinds trips the deadman.
 
 ### BUG-281 — browser session of 2 h at 8 GiB: mem-curve verdict "NOT flat" (in use +16.6 and +20.3 MiB/h, 40 MiB without an owner) ✅ FIXED (accounting gap, `5861686`, `1a6edd9`, 11f-mem)
 - **Status:**   FIXED (`5861686`, `1a6edd9`; test `1913094`, feature/11f-mem) · **Severity:** LOW (no leak: one census sample at a time)
@@ -2931,11 +2944,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Session:**  1 h at 8 GiB with the local VP9+Opus clip, final image (`proof/11f-mem/chrome-soak1h.txt`): 6 rounds,
   99/99 steps, verdict **flat**, in use +10.5 MiB/h, 3 MiB without an owner at the worst, 0 kills.
 
-### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
+### BUG-282 — q35 matrix legs `nvmeroot` and `ahciroot` fail: "phase A: reached loop=True, install-marker=False" ✅ FIXED (harness)
+- **Status:**   FIXED (the harness, not the kernel) · **Severity:** LOW (not part of the 13 CI legs; also fails on the 3ecde9e self-test image, so not a regression)
 - **Found:**    2026-11-16 · `run-metal-matrix.py` default leg list on `732e5f5`; `nvmeroot` repeated on `3ecde9e`: FAIL the same way.
 - **Actual:**   the live system reaches the desktop loop but the install-to-NVMe/AHCI marker never appears; the serial tail shows `[init] service ticker` restarts (3 starts, then "no restart (ceiling/policy)") and desktop passes of 1.1-1.2 s.
-- **Next:**     find out whether the leg is out of date (wizard now needed) or the install really does not start; remove the legs from the default list or fix them.
+- **Cause:**    the two harness scripts (`test-nvme-root.py`, `test-ahci-root.py`) were written when the install media was small. Two fixed numbers no longer fit the self-test image: (1) `-m 512M`: the kernel keeps its install media (loader, kernel A and B, signatures: 131 MiB) in its heap, 59 MiB were free, so `[inst] install media (131 MiB) does not fit the heap ... installer unavailable` and the blank disk is left alone ("NVMe disk is not EuroFS and not blank, booting a RAM root"); (2) a 512 MiB target: with enough RAM the install refuses with `[q1x3] target NVMe disk too small (512 MiB, need 513 MiB)`. The kernel does what it says; the live system reaches the desktop, so only the install marker was missing.
+- **Fix:**      both scripts now use a 1 GiB guest and a 1 GiB target (`EK_GUEST_RAM`, `EK_TARGET_SIZE` to change them). Nothing weakened: the same markers (install, root on the installed disk, standalone boot from it, boot medium untouched) are asked for.
+- **Proof:**    `proof/11f-small/bug282-q35-root-legs.txt`: nvmeroot and ahciroot PASS (phase A and phase B) on the self-test image of `e4b8ba4`.
+- **Note:**     a public image (release profile) has no self-test auto-install; the wizard installs there (`wizard-install-test.py`). The two legs need the self-test image.
 
 ### BUG-300 — the keylat harness slowed the guest it measured: screendump polling holds QEMU's big lock ✅ FIXED
 - **Status:**   FIXED (`2924d28`, harness) · **Severity:** MEDIUM (every keylat number since W23 was 60-150 ms too high)

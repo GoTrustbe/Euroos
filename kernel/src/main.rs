@@ -1205,6 +1205,9 @@ fn main() -> Status {
     }
 
     boottime::phase("storage-rootfs");
+    if SELFTEST {
+        watchdog::io_progress_selftest(); // BUG-280
+    }
     // EuroUpdate (F1): A/B slot decision + attempt counter/rollback on every boot.
     update::boot_init(&mut fs);
     // G4: prove the direct image→slot-partition write (EuroOS-B, sector I/O + read-back).
@@ -2538,6 +2541,7 @@ fn main() -> Status {
         // APs (per-CPU queues + work stealing).
         klock::selftest();
         kwork::selftest();
+        xserver::xlock_selftest(); // BUG-320 (needs interrupts on)
     }
     // `lockbench` image: run the multi-core lock benchmark and power off.
     #[cfg(feature = "lockbench")]

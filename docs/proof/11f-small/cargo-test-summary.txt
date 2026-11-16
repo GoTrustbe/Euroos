@@ -1,0 +1,2 @@
+# cargo test (default members), e4b8ba4 + 11f-C, CARGO_TARGET_DIR=target/host, jobs 6
+binaries 188, passed 1381, failed 0, ignored 1

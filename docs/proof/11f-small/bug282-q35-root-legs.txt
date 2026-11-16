@@ -1,0 +1,31 @@
+# BUG-282: q35 legs nvmeroot and ahciroot (self-test image of e4b8ba4, TCG, 4 host CPUs)
+
+## before: scripts as in e4b8ba4 (-m 512M, 512 MiB target) - nvmeroot
+[nvmeroot] phase A: installing EuroOS to the blank NVMe disk
+[nvmeroot] phase A: reached loop=True, install-marker=False, nvme-root=False
+[nvmeroot] phase A FAILED; serial tail:
+   | [notify] Welcome to EuroOS: Click here to see notifications
+   (serial log of that run, the two lines that explain it:)
+   [inst] install media (131 MiB) does not fit the heap (59 MiB free) - preload skipped, installer unavailable on this machine
+   [euro] NVMe disk is not EuroFS and not blank - booting a RAM root; it stays intact + mountable at /nvme
+
+## 1 GiB guest, 512 MiB target (only the RAM raised)
+[nvmeroot] phase A: installing EuroOS to the blank NVMe disk
+[nvmeroot] phase A: reached loop=True, install-marker=False, nvme-root=False
+[nvmeroot] phase A FAILED; serial tail:
+   [inst] install media read from own ESP: loader 66560 B, kernel-A 68833792 B, kernel-B 68833792 B, signatures present
+   [q1x3] target NVMe disk too small (512 MiB, need 513 MiB) for installation
+
+## after: scripts with a 1 GiB guest and a 1 GiB target
+[nvmeroot] phase A: installing EuroOS to the blank NVMe disk
+[nvmeroot] phase A: reached loop=True, install-marker=True, nvme-root=True
+[nvmeroot] phase B: booting standalone from the NVMe disk
+[nvmeroot] phase B: reached loop=True, standalone-nvme-root=True
+[nvmeroot] PASS ✓ — installed to NVMe and booted standalone with root on NVMe
+[ahciroot] phase A: installing to the blank AHCI disk (boot medium must stay intact)
+[ahciroot] phase A: loop=True, install=True, root=True, single-install(boot-medium-safe)=True (1 install(s))
+[ahciroot] phase B: booting standalone from the installed SATA disk
+[ahciroot] phase B: loop=True, standalone-sata-root=True
+[ahciroot] PASS ✓ — installed to a blank SATA disk (boot medium untouched) and booted standalone with root on it
+
+## ahciroot before: same failure on the same image, see docs/proof/revalidate-2026-11e/q35-matrix.txt (phase A FAILED); same two numbers in the same harness

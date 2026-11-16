@@ -1,0 +1,129 @@
+# BUG-275 / BUG-320: 100 TCG boots of combined-smp1-iommu-1g (1 GiB, smp 1, intel-iommu, storage.nvme=user + megasas, e1000e restrict=on)
+# self-test image of e4b8ba4 (base-st.img), 4 boots at once on host CPUs 18 19 38 39 (one per CPU: two physical cores), 25 each, AFTER=30 s.
+# CPUs 18/38 were also used by my KVM runs (q35 matrix, chrome-smoke) during part of this; 19/39 were not.
+
+## result
+boots: 100; desktop reached: 97; WATCHDOG TRIPPED: 0 boots
+[churn-forkthreads] in the 97 boots with a desktop: PASS 93, '(no result line) (exit 0)' 4
+no desktop (silent 900 s, NMI probe): 3 boots, all in the same place (BUG-320)
+
+## per slot: boot time (s) and result
+# slot18
+c18-1 after 471s desktop=1
+c18-2 after 537s desktop=1
+c18-3 after 632s desktop=1
+c18-4 after 617s desktop=1
+c18-5 after 622s desktop=1
+c18-6 after 592s desktop=1
+c18-7 after 1098s desktop=0
+c18-8 after 577s desktop=1
+c18-9 after 422s desktop=1
+c18-10 after 426s desktop=1
+c18-11 after 416s desktop=1
+c18-12 after 397s desktop=1
+c18-13 after 401s desktop=1
+c18-14 after 396s desktop=1
+c18-15 after 417s desktop=1
+c18-16 after 406s desktop=1
+c18-17 after 401s desktop=1
+c18-18 after 401s desktop=1
+c18-19 after 387s desktop=1
+c18-20 after 386s desktop=1
+c18-21 after 386s desktop=1
+c18-22 after 381s desktop=1
+c18-23 after 392s desktop=1
+c18-24 after 401s desktop=1
+c18-25 after 401s desktop=1
+# slot19
+c19-1 after 391s desktop=1
+c19-2 after 391s desktop=1
+c19-3 after 412s desktop=1
+c19-4 after 401s desktop=1
+c19-5 after 411s desktop=1
+c19-6 after 412s desktop=1
+c19-7 after 436s desktop=1
+c19-8 after 426s desktop=1
+c19-9 after 422s desktop=1
+c19-10 after 416s desktop=1
+c19-11 after 416s desktop=1
+c19-12 after 417s desktop=1
+c19-13 after 411s desktop=1
+c19-14 after 411s desktop=1
+c19-15 after 402s desktop=1
+c19-16 after 391s desktop=1
+c19-17 after 482s desktop=1
+c19-18 after 692s desktop=1
+c19-19 after 396s desktop=1
+c19-20 after 396s desktop=1
+c19-21 after 386s desktop=1
+c19-22 after 377s desktop=1
+c19-23 after 386s desktop=1
+c19-24 after 386s desktop=1
+c19-25 after 376s desktop=1
+# slot38
+c38-1 after 461s desktop=1
+c38-2 after 537s desktop=1
+c38-3 after 637s desktop=1
+c38-4 after 1108s desktop=0
+c38-5 after 1124s desktop=0
+c38-6 after 612s desktop=1
+c38-7 after 571s desktop=1
+c38-8 after 437s desktop=1
+c38-9 after 426s desktop=1
+c38-10 after 417s desktop=1
+c38-11 after 401s desktop=1
+c38-12 after 406s desktop=1
+c38-13 after 397s desktop=1
+c38-14 after 416s desktop=1
+c38-15 after 401s desktop=1
+c38-16 after 412s desktop=1
+c38-17 after 406s desktop=1
+c38-18 after 386s desktop=1
+c38-19 after 386s desktop=1
+c38-20 after 397s desktop=1
+c38-21 after 386s desktop=1
+c38-22 after 386s desktop=1
+c38-23 after 396s desktop=1
+c38-24 after 387s desktop=1
+c38-25 after 326s desktop=1
+# slot39
+c39-1 after 391s desktop=1
+c39-2 after 391s desktop=1
+c39-3 after 407s desktop=1
+c39-4 after 411s desktop=1
+c39-5 after 411s desktop=1
+c39-6 after 412s desktop=1
+c39-7 after 436s desktop=1
+c39-8 after 426s desktop=1
+c39-9 after 412s desktop=1
+c39-10 after 421s desktop=1
+c39-11 after 421s desktop=1
+c39-12 after 417s desktop=1
+c39-13 after 416s desktop=1
+c39-14 after 411s desktop=1
+c39-15 after 412s desktop=1
+c39-16 after 391s desktop=1
+c39-17 after 487s desktop=1
+c39-18 after 712s desktop=1
+c39-19 after 396s desktop=1
+c39-20 after 386s desktop=1
+c39-21 after 387s desktop=1
+c39-22 after 381s desktop=1
+c39-23 after 381s desktop=1
+c39-24 after 376s desktop=1
+c39-25 after 391s desktop=1
+
+## boots that did not reach the desktop
+c38-4: no desktop (silent 900s) 09:36:31
+c38-5: no desktop (silent 900s) 09:55:15
+c18-7: no desktop (silent 900s) 10:06:57
+
+## boots with (no result line): forks done before the program was killed (a passing boot: 41)
+c18-2 forks=37 reaped=37 no result line
+c18-3 forks=39 reaped=38 no result line
+c18-5 forks=40 reaped=39 no result line
+c38-2 forks=38 reaped=37 no result line
+c18-1 forks=41 reaped=41 PASS
+c19-1 forks=41 reaped=41 PASS
+c38-1 forks=41 reaped=41 PASS
+c39-1 forks=41 reaped=41 PASS

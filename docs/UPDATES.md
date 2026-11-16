@@ -6,6 +6,26 @@ A/B slot, and boots it with automatic rollback. No image download, no USB stick.
 This document is the operator's view: what happens on the machine, what happens on
 the server, and how the signing keys are managed without a second machine.
 
+## Version numbers
+
+Releases are named by their date: `2026.11.14`, `2026.11.16`, in the form year.month.day.
+The old numbers of the early previews (0.1, 0.2) are not used any more. Inside the
+system the same date is a build version of eight digits, `20261116`: that is what
+`euroupdate status` shows and what the update check compares. A server version is
+newer when this number is larger; an older one is refused (anti-rollback, below).
+
+## What changed for users and administrators in 2026.11.16
+
+- **Several cores for programs.** `smpuser=off|test|on`, off by default; see
+  [BOOT-OPTIONS.md](BOOT-OPTIONS.md).
+- **Drivers cannot starve the desktop.** `sched.drvbudget` and `sched.drvwindow`
+  (default: 10 % of every 500 ms at high priority); see [BOOT-OPTIONS.md](BOOT-OPTIONS.md).
+- **Open video and sound formats only** in the browser (VP9, VP8, AV1, Opus, Vorbis;
+  no H.264, HEVC or AAC).
+- **Reproducible image file.** Building the image twice from the same commit on one machine
+  gives the same file, byte for byte (`scripts/build.sh`; `SOURCE_DATE_EPOCH` fixes the
+  time stamps in it).
+
 ## On the machine
 
 | Step | What | Where |
