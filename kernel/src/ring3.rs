@@ -11236,6 +11236,10 @@ fn do_glibc_fork() -> u64 {
     if arena == 0 || span == 0 {
         return (-38i64) as u64; // no glibc process active
     }
+    let census = FORK_CENSUS_NEXT.load(Ordering::Relaxed) > 0 && FORK_CENSUS_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
+    if census {
+        FORK_CENSUS_BEFORE.store(census_unattributed_kib(), Ordering::Relaxed);
+    }
     let nblocks = span >> 21;
     // BUG-156: the child has no arena in one piece any more (128 MiB of the
     // process pool per browser process, copied whole at every fork, and the
@@ -11321,6 +11325,10 @@ fn do_glibc_fork() -> u64 {
     // frames via the arena copy).
     // [memt]: the self-test asks for the next forks to be refused here, the
     // place where a fork has taken everything it takes.
+    if census {
+        FORK_CENSUS_DURING.store(census_unattributed_kib(), Ordering::Relaxed);
+        FORK_CENSUS_TAKEN.fetch_add(1, Ordering::Relaxed);
+    }
     let injected = FORK_REFUSE_NEXT.load(Ordering::Relaxed) > 0 && FORK_REFUSE_NEXT.fetch_sub(1, Ordering::Relaxed) > 0;
     // [memt] forkkill: the forking thread stops here, as if its copy never
     // ended, until the launcher's deadline kills the run (BUG-180). Bounded,
@@ -13880,6 +13888,23 @@ fn shared_frames_drop_all() {
     *RAMFILE_BUDGET.lock() = euromm::ramfile::Budget::none();
 }
 
+/// BUG-281 ([memt] cowfork): the next fork takes a memory census at its start
+/// and again where it has taken everything (the child's tables, its share of
+/// the pages), before the child is registered. The pool's frames without an
+/// owner in KiB at both moments.
+static FORK_CENSUS_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FORK_CENSUS_TAKEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static FORK_CENSUS_BEFORE: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+static FORK_CENSUS_DURING: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(0);
+
+/// Frames of the demand pool in use that the census gives no owner, in KiB
+/// (the `unattributed` of the `[memstat] sum` line).
+fn census_unattributed_kib() -> i64 {
+    let (t, procs) = mem_census();
+    let named: usize = t.pcache + t.shm_frames + procs.iter().map(|p| p.anon + p.file_private + p.tables).sum::<usize>();
+    (t.pool_total.saturating_sub(t.pool_free) as i64 - named as i64) * 4
+}
+
 /// Forks to refuse from now on (the [memt] self-test).
 static FORK_REFUSE_NEXT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Forks that stop where a refused one would be refused, until their run is
@@ -13927,6 +13952,8 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         FORK_PARK_NEXT.store(kill as u32, Ordering::Relaxed);
         FORK_PARKED.store(0, Ordering::Relaxed);
         GLIBC_DEADLINE_TICKS.store(if kill { 3_000 } else { 36_000 }, Ordering::Relaxed);
+        FORK_CENSUS_NEXT.store((mode == "cowfork") as u32, Ordering::Relaxed);
+        FORK_CENSUS_TAKEN.store(0, Ordering::Relaxed);
         // forkkill runs the forks of forkmany; its first one is held.
         let arg: &[u8] = if kill { b"forkmany" } else { mode.as_bytes() };
         // The small arena for every mode: 270 forks copy it 270 times, and on a
@@ -13942,6 +13969,7 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
         FORK_REFUSE_NEXT.store(0, Ordering::Relaxed);
         FORK_PARK_NEXT.store(0, Ordering::Relaxed);
         GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
+        FORK_CENSUS_NEXT.store(0, Ordering::Relaxed);
         DEMAND_POOL_CAP_FRAMES.store(0, Ordering::Relaxed);
         GLIBC_ARENA_MIB.store(prev_arena, Ordering::Relaxed);
         if exit == u64::MAX {
@@ -13964,6 +13992,19 @@ pub fn memt_selftest(falloc: &mut FrameAllocator) {
             (held == 1 && back, alloc::format!("killed by the deadline while its fork was held ({held} held)"))
         } else {
             (exit == 0 && sum.contains("PASS") && back, sum)
+        };
+        // BUG-281: the census in the middle of the fork gives every frame an
+        // owner, as it does before the fork (a 1 MiB margin for what the
+        // fork itself allocates on the way).
+        let ok = if mode == "cowfork" {
+            let (b, d) = (FORK_CENSUS_BEFORE.load(Ordering::Relaxed), FORK_CENSUS_DURING.load(Ordering::Relaxed));
+            let taken = FORK_CENSUS_TAKEN.load(Ordering::Relaxed);
+            let c = taken == 1 && (d - b).abs() <= 1024;
+            crate::serial_println!("[memt] cowfork: census in the middle of the fork: {d} KiB without an owner (at its start {b} KiB, {taken} census taken) → {}",
+                if c { "OK ✓" } else { "FAILED" });
+            ok && c
+        } else {
+            ok
         };
         all &= ok;
         crate::serial_println!("[memt] {mode}: {sum} (exit {}); frames after the run: {free1} free (was {free0}), process pool {pp1} (was {pp0}) → {}",
@@ -14932,6 +14973,11 @@ fn bg_syscall(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
     (-38i64) as u64 // the process went away between the gate and here
 }
 
+static BG_SLOW_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The longest call of a background process so far (microseconds) and its number.
+pub static BG_CALL_MAX_US: AtomicU64 = AtomicU64::new(0);
+pub static BG_CALL_MAX_NUM: AtomicU64 = AtomicU64::new(0);
+
 /// Syscall dispatcher (ring 0). Returns the return value in rax.
 #[no_mangle]
 pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
@@ -14957,7 +15003,20 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
     // A THREAD shares the process of its main task. Descriptors become
     // objects at the gate (fdtab.rs), as on the Linux path below.
     if BG.lock().iter().any(|p| p.task == cur || p.threads.contains(&cur)) {
-        return fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
+        // BUG-230: a call of a background process runs with interrupts off
+        // from start to end; the longest one is kept, and one of 20 ms or
+        // more is named (24 lines at most).
+        let t0 = crate::hpet::ns();
+        let r = fdtab::syscall(num, a1, a2, a3, a4, a5, &mut |n, b1, b2, b3, b4, b5| bg_syscall(cur, n, b1, b2, b3, b4, b5));
+        let us = crate::hpet::ns().wrapping_sub(t0) / 1000;
+        if us > BG_CALL_MAX_US.load(Ordering::Relaxed) {
+            BG_CALL_MAX_US.store(us, Ordering::Relaxed);
+            BG_CALL_MAX_NUM.store(num, Ordering::Relaxed);
+        }
+        if us >= 20_000 && BG_SLOW_SHOWN.fetch_add(1, Ordering::Relaxed) < 24 {
+            crate::serial_println!("[slowcall] task {cur} call {num:#x}({a1:#x}, {a2:#x}, {a3:#x}, {a4:#x}, {a5:#x}) -> {r:#x}: {} ms with interrupts off", us / 1000);
+        }
+        return r;
     }
     // Linux-ABI compatibility: programs compiled for x86_64-linux
     // use Linux syscall numbers + semantics. Translate to our handlers.
