@@ -1,0 +1,80 @@
+# keylat pairs of the FINAL code 544d5a2 (kf3-*, f) against e4b8ba4 (b0), browser images, started together, chrome-smoke --only perf with both methods; median key to screen ms
+# smp 4: f and b0 on 4-7 / 8-11 (sides swapped every round); smp 2: two pairs at once on 4-5/8-9 and 6-7/10-11; kf3-0-f-2 a single smp 2 run. Siblings 24-31 idle, tmpfs.
+# kernel [keylat] total median us: screendump half, fbread half (the kernel stops at the first paint after the first draw)
+kf3-1-f-4: screendump 167, fbread 96, kernel total [101394 78244 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.67 s (min 0.42, max 3.92), first change median 0.20 s, n=5
+kf3-1-b0-4: screendump 247, fbread 149, kernel total [157586 108166 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.72 s (min 0.82, max 5.43), first change median 0.23 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 149 ms, p90 187 ms, max 350 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (u
+kf3-2-f-4: screendump 163, fbread 96, kernel total [101802 78623 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.06 s (min 3.37, max 6.57), first change median 0.20 s, n=5
+kf3-2-b0-4: screendump 249, fbread 134, kernel total [155729 96525 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.51 s (min 0.89, max 4.72), first change median 0.19 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 134 ms, p90 170 ms, max 276 ms over 30 keys (60 characters arrived); one poll takes 2.9 ms, which is in every number; screendump method (u
+kf3-3-f-4: screendump 154, fbread 99, kernel total [102260 75078 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.89 s (min 3.30, max 5.43), first change median 0.19 s, n=5
+kf3-3-b0-4: screendump 223, fbread 128, kernel total [159706 97290 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.51 s (min 0.86, max 5.35), first change median 0.34 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 128 ms, p90 162 ms, max 188 ms over 30 keys (60 characters arrived); one poll takes 2.8 ms, which is in every number; screendump method (u
+kf3-1-f-2a: screendump 141, fbread 93, kernel total [106703 79283 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.97 s (min 3.52, max 6.49), first change median 0.20 s, n=5
+kf3-1-b0-2a: screendump 222, fbread 148, kernel total [154798 105045 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.28 s (min 0.84, max 4.79), first change median 0.24 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 148 ms, p90 166 ms, max 228 ms over 30 keys (60 characters arrived); one poll takes 2.6 ms, which is in every number; screendump method (u
+kf3-1-f-2b: screendump 150, fbread 92, kernel total [100500 77344 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.58 s (min 0.79, max 4.23), first change median 0.19 s, n=5
+kf3-1-b0-2b: screendump 223, fbread 149, kernel total [158854 110822 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.92 s (min 0.84, max 5.30), first change median 0.20 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 149 ms, p90 168 ms, max 186 ms over 30 keys (60 characters arrived); one poll takes 2.3 ms, which is in every number; screendump method (u
+kf3-2-f-2a: screendump 151, fbread 83, kernel total [104941 71533 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.92 s (min 1.05, max 4.03), first change median 0.20 s, n=5
+kf3-2-b0-2a: screendump 225, fbread 147, kernel total [184801 103168 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.52 s (min 0.81, max 5.86), first change median 0.28 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 147 ms, p90 165 ms, max 194 ms over 30 keys (60 characters arrived); one poll takes 2.5 ms, which is in every number; screendump method (u
+kf3-2-f-2b: screendump 157, fbread 90, kernel total [112909 77095 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.97 s (min 0.71, max 4.78), first change median 0.19 s, n=5
+kf3-2-b0-2b: screendump 239, fbread 139, kernel total [162217 101182 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.59 s (min 1.00, max 5.58), first change median 0.23 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 139 ms, p90 167 ms, max 206 ms over 30 keys (60 characters arrived); one poll takes 2.3 ms, which is in every number; screendump method (u
+kf3-0-f-2: screendump 138, fbread 91, kernel total [99677 75844 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.78 s (min 0.79, max 3.91), first change median 0.19 s, n=5
+
+# the same pairs on 049ed8f (before eee05a6 and the futex fix)
+# keylat pairs, final (f = 049ed8f, browser image) against e4b8ba4 (b0, browser image), started together, chrome-smoke --only perf with both methods; median key to screen ms
+# smp 4: f and b0 on 4-7 / 8-11 (sides swapped every round); smp 2: two pairs at once on 4-5/8-9 and 6-7/10-11. Siblings 24-31 idle, tmpfs.
+# kernel [keylat] total median us: screendump half, fbread half (the kernel stops at the first paint after the first draw)
+k1-f-4: screendump 171, fbread 94, kernel total [109609 79834 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.04 s (min 0.43, max 4.31), first change median 0.20 s, n=5
+k1-b0-4: screendump 288, fbread 144, kernel total [177000 103078 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 5.19 s (min 0.84, max 5.77), first change median 0.23 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 144 ms, p90 176 ms, max 211 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (u
+k2-f-4: screendump 161, fbread 94, kernel total [94592 71684 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.30 s (min 3.66, max 6.33), first change median 0.19 s, n=5
+k2-b0-4: screendump 255, fbread 156, kernel total [152946 104046 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.66 s (min 0.71, max 5.39), first change median 0.19 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 156 ms, p90 179 ms, max 198 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (u
+k3-f-4: screendump 160, fbread 96, kernel total [105435 79819 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.10 s (min 0.42, max 4.38), first change median 0.20 s, n=5
+k3-b0-4: screendump 251, fbread 141, kernel total [150250 99747 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 5.01 s (min 0.83, max 5.74), first change median 0.20 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 141 ms, p90 167 ms, max 206 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (u
+k1-f-2a: screendump 159, fbread 97, kernel total [108978 78445 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.15 s (min 0.80, max 4.42), first change median 0.19 s, n=5
+k1-b0-2a: screendump 245, fbread 142, kernel total [168645 100693 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.84 s (min 1.53, max 5.47), first change median 0.24 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 142 ms, p90 167 ms, max 201 ms over 30 keys (60 characters arrived); one poll takes 2.3 ms, which is in every number; screendump method (u
+k1-f-2b: screendump 169, fbread 88, kernel total [122593 78394 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.11 s (min 0.72, max 4.23), first change median 0.19 s, n=5
+k1-b0-2b: screendump 257, fbread 149, kernel total [202008 102957 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.90 s (min 4.80, max 7.92), first change median 0.24 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 149 ms, p90 194 ms, max 361 ms over 30 keys (60 characters arrived); one poll takes 2.9 ms, which is in every number; screendump method (u
+k2-f-2a: screendump 159, fbread 82, kernel total [104481 66597 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.73 s (min 0.48, max 4.25), first change median 0.20 s, n=5
+k2-b0-2a: screendump 247, fbread 142, kernel total [170544 100996 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 5.47 s (min 0.83, max 5.76), first change median 0.26 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 142 ms, p90 169 ms, max 203 ms over 30 keys (60 characters arrived); one poll takes 2.6 ms, which is in every number; screendump method (u
+k2-f-2b: screendump 161, fbread 90, kernel total [104039 73831 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.96 s (min 0.71, max 4.70), first change median 0.19 s, n=5
+k2-b0-2b: screendump 246, fbread 145, kernel total [157183 113970 ], omnibox/navigation misses 0
+    [gui-smoke] FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 4.61 s (min 0.50, max 5.63), first change median 0.24 s, n=5
+    [gui-smoke] FAIL perf: key to screen under 100 ms: median 145 ms, p90 181 ms, max 254 ms over 30 keys (60 characters arrived); one poll takes 2.9 ms, which is in every number; screendump method (u

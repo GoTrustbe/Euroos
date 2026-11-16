@@ -1,0 +1,317 @@
+# chrome-smoke --only perf, every build of this sprint (R630, KVM, tmpfs work dirs, CPUs 4-11 with SMT siblings 24-31 idle).
+# base-b0-*: e4b8ba4 with the W23 harness (screendump only). m0..m8: e4b8ba4 + the commits of feature/11f-keylat up to that step, with both harness methods
+# (screendump = the old method; fbread = QMP pmemsave of the field rows). Kernel lines: first block = screendump half, second = fbread half.
+# m0-m2: instrumentation only; m3: + console sender on an AP (a344592); m4: + damage-limited composite (379fd72); m5/m6: + instrumentation of idle/tick wakes;
+# m7: + epoll/poll wake with unblock_any (navigation stalled in m7-4 and m7b-4); m8: + wake_sleeping (763a9bc as committed)
+== base-b0-4
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 241 ms, p90 328 ms, max 424 ms over 30 keys (30 characters arrived); one screendump takes 25 ms, which is in every number
+== base-b0-2
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 255 ms, p90 433 ms, max 829 ms over 30 keys (30 characters arrived); one screendump takes 22 ms, which is in every number
+== m0-2
+[chrome-smoke]   keys, capture method: median 274 ms (bracket median 17 ms, so the change was at most that much earlier), old method median 277 ms
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 277 ms, p90 460 ms, max 562 ms over 30 keys (30 characters arrived); one screendump takes 17 ms, which is in every number
+[keylat]   total: median 161626 us, max 313244 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 32 ms; other tasks on the CPU 99 ms; CPU idle 10 ms; X frames presented 4; composite 7708 us
+[desk-cpu] desktop loop on the CPU 3073 ms of 17087 ms in 1016 passes (3024 us a pass): network and DevTools 233, devices and windows 1343, menus 1, keys and drawing 600, hosted window and console 805, between passes 91
+== m1-4
+[chrome-smoke]   keys, capture method: median 277 ms (bracket median 18 ms, so the change was at most that much earlier), old method median 281 ms
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 281 ms, p90 401 ms, max 448 ms over 30 keys (30 characters arrived); one screendump takes 18 ms, which is in every number
+[keylat]   total: median 178584 us, max 318129 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 27 ms; other tasks on the CPU 106 ms; CPU idle 8 ms; X frames presented 3; composite 5960 us
+[desk-cpu] desktop loop on the CPU 2984 ms of 17097 ms in 987 passes (3023 us a pass): network and DevTools 97, devices and windows 1555, menus 1, keys and drawing 481, hosted window and console 774, between passes 76
+== m1-2
+[chrome-smoke]   keys, capture method: median 299 ms (bracket median 19 ms, so the change was at most that much earlier), old method median 302 ms
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 302 ms, p90 439 ms, max 457 ms over 30 keys (30 characters arrived); one screendump takes 18 ms, which is in every number
+[keylat]   total: median 169291 us, max 333937 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 27 ms; other tasks on the CPU 114 ms; CPU idle 9 ms; X frames presented 3; composite 6863 us
+[desk-cpu] desktop loop on the CPU 2990 ms of 16867 ms in 972 passes (3076 us a pass): network and DevTools 141, devices and windows 1380, menus 1, keys and drawing 538, hosted window and console 829, between passes 101
+== m1b-4
+[chrome-smoke]   keys, screendump: median 273 ms, poll median 18.6 ms, bracket median 18.1 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 156 ms, poll median 2.9 ms, bracket median 2.9 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 156 ms, p90 657 ms, max 666 ms over 30 keys (60 characters arrived); one poll takes 2.9 ms, which is in every number; screendump method (until 11e): median 273 ms
+[keylat]   total: median 183599 us, max 305812 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 23 ms; other tasks on the CPU 110 ms; CPU idle 9 ms; X frames presented 3; composite 6374 us
+[desk-cpu] desktop loop on the CPU 2976 ms of 16586 ms in 985 passes (3021 us a pass): network and DevTools 150, devices and windows 1600, menus 2, keys and drawing 423, hosted window and console 727, between passes 74
+[keylat]   total: median 105169 us, max 130032 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 7 ms; other tasks on the CPU 75 ms; CPU idle 18 ms; X frames presented 3; composite 4885 us
+[desk-cpu] desktop loop on the CPU 1342 ms of 15036 ms in 1567 passes (856 us a pass): network and DevTools 91, devices and windows 192, menus 2, keys and drawing 398, hosted window and console 490, between passes 169
+== m1b-2
+[chrome-smoke]   keys, screendump: median 288 ms, poll median 18.9 ms, bracket median 18.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 166 ms, poll median 2.7 ms, bracket median 2.6 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 166 ms, p90 642 ms, max 711 ms over 30 keys (60 characters arrived); one poll takes 2.7 ms, which is in every number; screendump method (until 11e): median 288 ms
+[keylat]   total: median 158231 us, max 601448 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 24 ms; other tasks on the CPU 110 ms; CPU idle 8 ms; X frames presented 3; composite 5349 us
+[desk-cpu] desktop loop on the CPU 2805 ms of 17574 ms in 968 passes (2897 us a pass): network and DevTools 78, devices and windows 1398, menus 1, keys and drawing 498, hosted window and console 736, between passes 94
+[keylat]   total: median 107091 us, max 197744 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 5 ms; other tasks on the CPU 80 ms; CPU idle 20 ms; X frames presented 3; composite 10386 us
+[desk-cpu] desktop loop on the CPU 1328 ms of 15348 ms in 1641 passes (809 us a pass): network and DevTools 97, devices and windows 186, menus 2, keys and drawing 427, hosted window and console 458, between passes 158
+== m2-4
+[chrome-smoke]   keys, screendump: median 385 ms, poll median 19.0 ms, bracket median 18.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 178 ms, poll median 3.0 ms, bracket median 3.0 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 178 ms, p90 657 ms, max 687 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 385 ms
+[keylat]   total: median 258980 us, max 404688 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 30 ms; other tasks on the CPU 185 ms; CPU idle 8 ms; X frames presented 4; composite 5701 us
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 338 ms; desktop loop 55 ms; other tasks 275 ms; CPU idle 9 ms;
+[desk-cpu] desktop loop on the CPU 3054 ms of 19413 ms in 946 passes (3228 us a pass): network and DevTools 219, devices and windows 1424, menus 1, keys and drawing 515, hosted window and console 794, between passes 101
+[keylat]   total: median 117643 us, max 148523 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 6 ms; other tasks on the CPU 90 ms; CPU idle 21 ms; X frames presented 3; composite 9143 us
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 172 ms; desktop loop 21 ms; other tasks 124 ms; CPU idle 31 ms;
+[desk-cpu] desktop loop on the CPU 1383 ms of 15498 ms in 1562 passes (885 us a pass): network and DevTools 83, devices and windows 200, menus 2, keys and drawing 415, hosted window and console 523, between passes 160
+== m2-2
+[chrome-smoke]   keys, screendump: median 387 ms, poll median 20.9 ms, bracket median 22.0 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 172 ms, poll median 2.8 ms, bracket median 2.9 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 172 ms, p90 685 ms, max 714 ms over 30 keys (60 characters arrived); one poll takes 2.8 ms, which is in every number; screendump method (until 11e): median 387 ms
+[keylat]   total: median 278845 us, max 548472 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 40 ms; other tasks on the CPU 199 ms; CPU idle 9 ms; X frames presented 3; composite 7876 us
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 370 ms; desktop loop 61 ms; other tasks 273 ms; CPU idle 11 ms;
+[desk-cpu] desktop loop on the CPU 3539 ms of 20086 ms in 918 passes (3855 us a pass): network and DevTools 73, devices and windows 1896, menus 1, keys and drawing 541, hosted window and console 926, between passes 102
+[keylat]   total: median 117828 us, max 374084 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 7 ms; other tasks on the CPU 87 ms; CPU idle 19 ms; X frames presented 3; composite 8939 us
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 170 ms; desktop loop 18 ms; other tasks 127 ms; CPU idle 23 ms;
+[desk-cpu] desktop loop on the CPU 1384 ms of 15688 ms in 1634 passes (847 us a pass): network and DevTools 108, devices and windows 181, menus 2, keys and drawing 417, hosted window and console 519, between passes 157
+== m3-4
+[chrome-smoke]   keys, screendump: median 313 ms, poll median 19.5 ms, bracket median 17.9 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 145 ms, poll median 2.9 ms, bracket median 3.0 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 145 ms, p90 181 ms, max 218 ms over 30 keys (60 characters arrived); one poll takes 2.9 ms, which is in every number; screendump method (until 11e): median 313 ms
+[keylat]   total: median 231601 us, max 457950 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 19 ms; other tasks on the CPU 198 ms; CPU idle 8 ms; X frames presented 3; composite 6026 us
+[keylat] composite of the hosted window for a key: median 6026 us -> FAILED (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 303 ms; desktop loop 38 ms; other tasks 260 ms; CPU idle 8 ms;
+[desk-cpu] desktop loop on the CPU 2539 ms of 18214 ms in 1082 passes (2346 us a pass): network and DevTools 151, devices and windows 1723, menus 1, keys and drawing 536, hosted window and console 6, between passes 122
+[keylat]   total: median 118079 us, max 209583 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 2 ms; other tasks on the CPU 82 ms; CPU idle 28 ms; X frames presented 3; composite 10102 us
+[keylat] composite of the hosted window for a key: median 10102 us -> FAILED (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 138 ms; desktop loop 7 ms; other tasks 98 ms; CPU idle 37 ms;
+[desk-cpu] desktop loop on the CPU 878 ms of 12468 ms in 2017 passes (435 us a pass): network and DevTools 109, devices and windows 196, menus 2, keys and drawing 382, hosted window and console 7, between passes 182
+== m3-2
+[chrome-smoke]   keys, screendump: median 347 ms, poll median 19.1 ms, bracket median 18.0 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 147 ms, poll median 2.8 ms, bracket median 2.9 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 147 ms, p90 187 ms, max 257 ms over 30 keys (60 characters arrived); one poll takes 2.8 ms, which is in every number; screendump method (until 11e): median 347 ms
+[keylat]   total: median 240832 us, max 479273 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 19 ms; other tasks on the CPU 196 ms; CPU idle 7 ms; X frames presented 3; composite 8043 us
+[keylat] composite of the hosted window for a key: median 8043 us -> FAILED (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 323 ms; desktop loop 45 ms; other tasks 278 ms; CPU idle 9 ms;
+[desk-cpu] desktop loop on the CPU 2590 ms of 19060 ms in 1067 passes (2427 us a pass): network and DevTools 134, devices and windows 1729, menus 1, keys and drawing 534, hosted window and console 78, between passes 114
+[keylat]   total: median 108421 us, max 248631 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 4 ms; other tasks on the CPU 73 ms; CPU idle 28 ms; X frames presented 3; composite 5053 us
+[keylat] composite of the hosted window for a key: median 5053 us -> FAILED (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 141 ms; desktop loop 9 ms; other tasks 92 ms; CPU idle 34 ms;
+[desk-cpu] desktop loop on the CPU 885 ms of 12559 ms in 1951 passes (453 us a pass): network and DevTools 105, devices and windows 225, menus 2, keys and drawing 353, hosted window and console 37, between passes 163
+== m4-4
+[chrome-smoke]   keys, screendump: median 332 ms, poll median 20.4 ms, bracket median 19.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 133 ms, poll median 3.0 ms, bracket median 3.0 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 133 ms, p90 168 ms, max 178 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 332 ms
+[keylat]   total: median 222281 us, max 362726 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 17 ms; other tasks on the CPU 198 ms; CPU idle 8 ms; X frames presented 3; composite 785 us
+[keylat] composite of the hosted window for a key: median 785 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 319 ms; desktop loop 34 ms; other tasks 260 ms; CPU idle 8 ms;
+[desk-cpu] desktop loop on the CPU 2349 ms of 18304 ms in 1138 passes (2064 us a pass): network and DevTools 179, devices and windows 1750, menus 1, keys and drawing 280, hosted window and console 10, between passes 129
+[keylat]   total: median 93515 us, max 130552 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 68 ms; CPU idle 26 ms; X frames presented 3; composite 561 us
+[keylat] composite of the hosted window for a key: median 561 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 131 ms; desktop loop 2 ms; other tasks 97 ms; CPU idle 31 ms;
+[desk-cpu] desktop loop on the CPU 599 ms of 12157 ms in 2004 passes (298 us a pass): network and DevTools 89, devices and windows 197, menus 2, keys and drawing 151, hosted window and console 8, between passes 152
+== m4-2
+[chrome-smoke]   keys, screendump: median 269 ms, poll median 21.1 ms, bracket median 23.8 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 144 ms, poll median 2.4 ms, bracket median 2.2 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 144 ms, p90 175 ms, max 337 ms over 30 keys (60 characters arrived); one poll takes 2.4 ms, which is in every number; screendump method (until 11e): median 269 ms
+[keylat]   total: median 186084 us, max 436021 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 16 ms; other tasks on the CPU 158 ms; CPU idle 8 ms; X frames presented 3; composite 649 us
+[keylat] composite of the hosted window for a key: median 649 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 237 ms; desktop loop 30 ms; other tasks 199 ms; CPU idle 11 ms;
+[desk-cpu] desktop loop on the CPU 2454 ms of 17594 ms in 1092 passes (2247 us a pass): network and DevTools 148, devices and windows 1900, menus 1, keys and drawing 268, hosted window and console 54, between passes 83
+[keylat]   total: median 106965 us, max 214577 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 3 ms; other tasks on the CPU 70 ms; CPU idle 28 ms; X frames presented 3; composite 464 us
+[keylat] composite of the hosted window for a key: median 464 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 140 ms; desktop loop 6 ms; other tasks 100 ms; CPU idle 33 ms;
+[desk-cpu] desktop loop on the CPU 694 ms of 12588 ms in 2031 passes (341 us a pass): network and DevTools 104, devices and windows 222, menus 2, keys and drawing 183, hosted window and console 65, between passes 118
+== m5-4
+[chrome-smoke]   keys, screendump: median 287 ms, poll median 19.7 ms, bracket median 19.4 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 145 ms, poll median 3.0 ms, bracket median 3.0 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 145 ms, p90 167 ms, max 188 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 287 ms
+[keylat]   total: median 219694 us, max 427009 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 18 ms; other tasks on the CPU 170 ms; CPU idle 9 ms; X frames presented 3; composite 682 us
+[keylat] composite of the hosted window for a key: median 682 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 253 ms; desktop loop 34 ms; other tasks 196 ms; CPU idle 10 ms;
+[desk-cpu] desktop loop on the CPU 2625 ms of 17046 ms in 1112 passes (2360 us a pass): network and DevTools 130, devices and windows 2045, menus 1, keys and drawing 323, hosted window and console 16, between passes 110
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1346 ms; ended by the timer tick 1346 ms (67 halts), by another interrupt 0 ms (0 halts)
+[keylat]   total: median 108201 us, max 182076 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 77 ms; CPU idle 27 ms; X frames presented 3; composite 535 us
+[keylat] composite of the hosted window for a key: median 535 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 139 ms; desktop loop 2 ms; other tasks 106 ms; CPU idle 31 ms;
+[desk-cpu] desktop loop on the CPU 634 ms of 12378 ms in 2053 passes (308 us a pass): network and DevTools 94, devices and windows 211, menus 2, keys and drawing 146, hosted window and console 8, between passes 173
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1545 ms; ended by the timer tick 1545 ms (175 halts), by another interrupt 0 ms (0 halts)
+== m5-2
+[chrome-smoke]   keys, screendump: median 303 ms, poll median 20.1 ms, bracket median 18.7 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 142 ms, poll median 2.4 ms, bracket median 2.1 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 142 ms, p90 166 ms, max 183 ms over 30 keys (60 characters arrived); one poll takes 2.4 ms, which is in every number; screendump method (until 11e): median 303 ms
+[keylat]   total: median 218963 us, max 573906 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 26 ms; other tasks on the CPU 183 ms; CPU idle 7 ms; X frames presented 3; composite 821 us
+[keylat] composite of the hosted window for a key: median 821 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 278 ms; desktop loop 40 ms; other tasks 215 ms; CPU idle 9 ms;
+[desk-cpu] desktop loop on the CPU 2522 ms of 18425 ms in 1096 passes (2301 us a pass): network and DevTools 117, devices and windows 1953, menus 1, keys and drawing 274, hosted window and console 74, between passes 103
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1701 ms; ended by the timer tick 1701 ms (50 halts), by another interrupt 0 ms (0 halts)
+[keylat]   total: median 101921 us, max 137062 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 2 ms; other tasks on the CPU 70 ms; CPU idle 26 ms; X frames presented 3; composite 530 us
+[keylat] composite of the hosted window for a key: median 530 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 138 ms; desktop loop 4 ms; other tasks 98 ms; CPU idle 33 ms;
+[desk-cpu] desktop loop on the CPU 650 ms of 12219 ms in 2017 passes (322 us a pass): network and DevTools 114, devices and windows 213, menus 2, keys and drawing 134, hosted window and console 52, between passes 135
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1622 ms; ended by the timer tick 1622 ms (170 halts), by another interrupt 0 ms (0 halts)
+== m6-4
+[chrome-smoke]   keys, screendump: median 200 ms, poll median 27.3 ms, bracket median 27.1 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 145 ms, poll median 3.0 ms, bracket median 3.1 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 145 ms, p90 161 ms, max 201 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 200 ms
+[keylat]   total: median 157166 us, max 279827 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 40 ms; other tasks on the CPU 100 ms; CPU idle 12 ms; X frames presented 3; composite 726 us
+[keylat] composite of the hosted window for a key: median 726 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 176 ms; desktop loop 56 ms; other tasks 107 ms; CPU idle 15 ms;
+[desk-cpu] desktop loop on the CPU 3116 ms of 15725 ms in 1263 passes (2467 us a pass): network and DevTools 105, devices and windows 2646, menus 2, keys and drawing 224, hosted window and console 7, between passes 132
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1127 ms; ended by the timer tick 1127 ms (92 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 9881 poll/select 1571 futex 1 nanosleep 0 other 1141; epoll/poll waits that found an fd ready only after sleeping 771
+[keylat]   total: median 102714 us, max 154231 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 2 ms; other tasks on the CPU 73 ms; CPU idle 25 ms; X frames presented 3; composite 608 us
+[keylat] composite of the hosted window for a key: median 608 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 140 ms; desktop loop 3 ms; other tasks 101 ms; CPU idle 32 ms;
+[desk-cpu] desktop loop on the CPU 692 ms of 13068 ms in 2131 passes (324 us a pass): network and DevTools 110, devices and windows 225, menus 3, keys and drawing 186, hosted window and console 9, between passes 159
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1317 ms; ended by the timer tick 1317 ms (157 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 7457 poll/select 1200 futex 0 nanosleep 0 other 894; epoll/poll waits that found an fd ready only after sleeping 592
+== m6-2
+[chrome-smoke]   keys, screendump: median 190 ms, poll median 20.6 ms, bracket median 18.7 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 135 ms, poll median 2.8 ms, bracket median 2.8 ms, over 30 keys
+[gui-smoke] FAIL perf: key to screen under 100 ms: median 135 ms, p90 171 ms, max 212 ms over 30 keys (60 characters arrived); one poll takes 2.8 ms, which is in every number; screendump method (until 11e): median 190 ms
+[keylat]   total: median 130241 us, max 356097 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 33 ms; other tasks on the CPU 83 ms; CPU idle 14 ms; X frames presented 3; composite 624 us
+[keylat] composite of the hosted window for a key: median 624 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 169 ms; desktop loop 44 ms; other tasks 104 ms; CPU idle 16 ms;
+[desk-cpu] desktop loop on the CPU 2903 ms of 15436 ms in 1215 passes (2389 us a pass): network and DevTools 203, devices and windows 2272, menus 1, keys and drawing 215, hosted window and console 76, between passes 136
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1161 ms; ended by the timer tick 1161 ms (85 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 8498 poll/select 1475 futex 1 nanosleep 0 other 1113; epoll/poll waits that found an fd ready only after sleeping 727
+[keylat]   total: median 99996 us, max 127093 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 1 ms; other tasks on the CPU 70 ms; CPU idle 23 ms; X frames presented 3; composite 446 us
+[keylat] composite of the hosted window for a key: median 446 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 135 ms; desktop loop 3 ms; other tasks 99 ms; CPU idle 30 ms;
+[desk-cpu] desktop loop on the CPU 660 ms of 12895 ms in 2073 passes (318 us a pass): network and DevTools 98, devices and windows 208, menus 2, keys and drawing 151, hosted window and console 52, between passes 149
+[keylat] BSP idle while a key was on its way (delivery to first paint): 1227 ms; ended by the timer tick 1227 ms (150 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 6674 poll/select 1158 futex 2 nanosleep 0 other 905; epoll/poll waits that found an fd ready only after sleeping 568
+== m7-4
+[chrome-smoke]   navigation to input-test did not happen: cdiag and an NMI census on the serial log
+[chrome-smoke]   navigation to input-test did not happen: cdiag and an NMI census on the serial log
+[gui-smoke] FAIL perf: key to screen under 100 ms: no key changed the field within 2 s
+[keylat]   total: median 35587 us, max 204576 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 9 ms; other tasks on the CPU 13 ms; CPU idle 0 ms; X frames presented 1; composite 71 us
+[keylat] composite of the hosted window for a key: median 71 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 1984 ms; desktop loop 914 ms; other tasks 870 ms; CPU idle 223 ms;
+[desk-cpu] desktop loop on the CPU 28237 ms of 69477 ms in 5430 passes (5200 us a pass): network and DevTools 1171, devices and windows 25487, menus 9, keys and drawing 1460, hosted window and console 31, between passes 79
+[keylat] BSP idle while a key was on its way (delivery to first paint): 38 ms; ended by the timer tick 38 ms (7 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 757 poll/select 246 futex 0 nanosleep 0 other 135
+[keylat]   total: median 12836 us, max 22793 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 10 ms; CPU idle 2 ms; X frames presented 1; composite 49 us
+[keylat] composite of the hosted window for a key: median 49 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 1996 ms; desktop loop 116 ms; other tasks 988 ms; CPU idle 888 ms;
+[desk-cpu] desktop loop on the CPU 3776 ms of 68704 ms in 14110 passes (267 us a pass): network and DevTools 541, devices and windows 1866, menus 17, keys and drawing 1151, hosted window and console 48, between passes 153
+[keylat] BSP idle while a key was on its way (delivery to first paint): 119 ms; ended by the timer tick 119 ms (24 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 537 poll/select 180 futex 0 nanosleep 0 other 103
+== m7-2
+[chrome-smoke]   keys, screendump: median 157 ms, poll median 21.2 ms, bracket median 19.9 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 93 ms, poll median 2.8 ms, bracket median 3.0 ms, over 30 keys
+[gui-smoke] ok   perf: key to screen under 100 ms: median 93 ms, p90 114 ms, max 131 ms over 30 keys (60 characters arrived); one poll takes 2.8 ms, which is in every number; screendump method (until 11e): median 157 ms
+[keylat]   total: median 112469 us, max 237004 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 18 ms; other tasks on the CPU 91 ms; CPU idle 3 ms; X frames presented 3; composite 557 us
+[keylat] composite of the hosted window for a key: median 557 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 144 ms; desktop loop 32 ms; other tasks 108 ms; CPU idle 3 ms;
+[desk-cpu] desktop loop on the CPU 2235 ms of 14505 ms in 1215 passes (1839 us a pass): network and DevTools 68, devices and windows 1790, menus 1, keys and drawing 186, hosted window and console 44, between passes 146
+[keylat] BSP idle while a key was on its way (delivery to first paint): 12 ms; ended by the timer tick 12 ms (2 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 8427 poll/select 1359 futex 1 nanosleep 0 other 812
+[keylat]   total: median 76640 us, max 110868 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 71 ms; CPU idle 1 ms; X frames presented 3; composite 418 us
+[keylat] composite of the hosted window for a key: median 418 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 87 ms; desktop loop 2 ms; other tasks 80 ms; CPU idle 2 ms;
+[desk-cpu] desktop loop on the CPU 585 ms of 11645 ms in 1783 passes (328 us a pass): network and DevTools 112, devices and windows 198, menus 2, keys and drawing 119, hosted window and console 38, between passes 116
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 5363 poll/select 906 futex 1 nanosleep 0 other 673
+== m7b-4
+[gui-smoke] FAIL perf: key to screen under 100 ms: no key changed the field within 2 s
+[keylat]   total: median 47294 us, max 218400 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 8 ms; other tasks on the CPU 14 ms; CPU idle 0 ms; X frames presented 1; composite 75 us
+[keylat] composite of the hosted window for a key: median 75 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 1993 ms; desktop loop 921 ms; other tasks 842 ms; CPU idle 216 ms;
+[desk-cpu] desktop loop on the CPU 28914 ms of 69420 ms in 5290 passes (5465 us a pass): network and DevTools 1321, devices and windows 26176, menus 10, keys and drawing 1268, hosted window and console 85, between passes 54
+[keylat] BSP idle while a key was on its way (delivery to first paint): 63 ms; ended by the timer tick 63 ms (9 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 933 poll/select 302 futex 0 nanosleep 0 other 181
+[keylat]   total: median 16718 us, max 43506 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 10 ms; CPU idle 2 ms; X frames presented 1; composite 47 us
+[keylat] composite of the hosted window for a key: median 47 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 1995 ms; desktop loop 78 ms; other tasks 789 ms; CPU idle 1136 ms;
+[desk-cpu] desktop loop on the CPU 2992 ms of 68576 ms in 14386 passes (207 us a pass): network and DevTools 496, devices and windows 1341, menus 15, keys and drawing 921, hosted window and console 51, between passes 168
+[keylat] BSP idle while a key was on its way (delivery to first paint): 118 ms; ended by the timer tick 118 ms (21 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 581 poll/select 184 futex 0 nanosleep 0 other 100
+[keylat]   total: median 14142 us, max 35252 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 10 ms; CPU idle 2 ms; X frames presented 1; composite 49 us
+[keylat] composite of the hosted window for a key: median 49 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 1994 ms; desktop loop 102 ms; other tasks 812 ms; CPU idle 1094 ms;
+[desk-cpu] desktop loop on the CPU 3518 ms of 68578 ms in 17804 passes (197 us a pass): network and DevTools 586, devices and windows 1574, menus 19, keys and drawing 1024, hosted window and console 57, between passes 258
+[keylat] BSP idle while a key was on its way (delivery to first paint): 149 ms; ended by the timer tick 127 ms (23 halts), by another interrupt 22 ms (8 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 600 poll/select 196 futex 0 nanosleep 0 other 96
+== m7c-4
+[chrome-smoke]   keys, screendump: median 176 ms, poll median 24.7 ms, bracket median 23.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 96 ms, poll median 3.0 ms, bracket median 3.2 ms, over 30 keys
+[gui-smoke] ok   perf: key to screen under 100 ms: median 96 ms, p90 122 ms, max 132 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 176 ms
+[keylat]   total: median 117600 us, max 374305 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 19 ms; other tasks on the CPU 97 ms; CPU idle 3 ms; X frames presented 3; composite 677 us
+[keylat] composite of the hosted window for a key: median 677 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 148 ms; desktop loop 28 ms; other tasks 114 ms; CPU idle 3 ms;
+[desk-cpu] desktop loop on the CPU 2435 ms of 15092 ms in 1223 passes (1991 us a pass): network and DevTools 141, devices and windows 1867, menus 2, keys and drawing 212, hosted window and console 11, between passes 202
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 9200 poll/select 1439 futex 0 nanosleep 0 other 825
+[keylat]   total: median 79547 us, max 120420 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 74 ms; CPU idle 1 ms; X frames presented 3; composite 435 us
+[keylat] composite of the hosted window for a key: median 435 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 96 ms; desktop loop 0 ms; other tasks 88 ms; CPU idle 1 ms;
+[desk-cpu] desktop loop on the CPU 553 ms of 11701 ms in 1797 passes (307 us a pass): network and DevTools 91, devices and windows 164, menus 3, keys and drawing 149, hosted window and console 8, between passes 138
+[keylat] BSP idle while a key was on its way (delivery to first paint): 7 ms; ended by the timer tick 7 ms (1 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 5542 poll/select 900 futex 2 nanosleep 0 other 592
+== m8a-4
+[chrome-smoke]   keys, screendump: median 171 ms, poll median 26.4 ms, bracket median 26.1 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 94 ms, poll median 3.1 ms, bracket median 3.3 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 97 ms, poll median 3.0 ms, bracket median 3.0 ms, over 30 keys
+[chrome-smoke]   keys, fbread with smpuser on: median 97 ms over 30 keys (off: 94 ms)
+[gui-smoke] ok   perf: key to screen under 100 ms: median 94 ms, p90 109 ms, max 131 ms over 30 keys (60 characters arrived); one poll takes 3.1 ms, which is in every number; screendump method (until 11e): median 171 ms
+[keylat]   total: median 107767 us, max 228962 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 18 ms; other tasks on the CPU 86 ms; CPU idle 2 ms; X frames presented 3; composite 569 us
+[keylat] composite of the hosted window for a key: median 569 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 141 ms; desktop loop 33 ms; other tasks 111 ms; CPU idle 2 ms;
+[desk-cpu] desktop loop on the CPU 2388 ms of 14897 ms in 1240 passes (1925 us a pass): network and DevTools 84, devices and windows 1901, menus 1, keys and drawing 259, hosted window and console 5, between passes 138
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 8230 poll/select 1320 futex 1 nanosleep 0 other 855
+[keylat]   total: median 75218 us, max 125705 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 72 ms; CPU idle 2 ms; X frames presented 3; composite 433 us
+[keylat] composite of the hosted window for a key: median 433 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 88 ms; desktop loop 0 ms; other tasks 84 ms; CPU idle 2 ms;
+[desk-cpu] desktop loop on the CPU 530 ms of 11539 ms in 1789 passes (296 us a pass): network and DevTools 81, devices and windows 166, menus 2, keys and drawing 151, hosted window and console 6, between passes 124
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 5238 poll/select 866 futex 0 nanosleep 0 other 582
+[keylat]   total: median 78866 us, max 111651 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 1 ms; other tasks on the CPU 74 ms; CPU idle 0 ms; X frames presented 3; composite 462 us
+[keylat] composite of the hosted window for a key: median 462 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 90 ms; desktop loop 1 ms; other tasks 85 ms; CPU idle 0 ms;
+[desk-cpu] desktop loop on the CPU 500 ms of 11589 ms in 2039 passes (245 us a pass): network and DevTools 73, devices and windows 178, menus 2, keys and drawing 160, hosted window and console 8, between passes 79
+[keylat] BSP idle while a key was on its way (delivery to first paint): 249 ms; ended by the timer tick 241 ms (35 halts), by another interrupt 8 ms (5 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 5746 poll/select 924 futex 0 nanosleep 0 other 526
+== m8b-4
+[chrome-smoke]   keys, screendump: median 146 ms, poll median 25.4 ms, bracket median 22.6 ms, over 30 keys
+[chrome-smoke]   keys, fbread: median 97 ms, poll median 3.0 ms, bracket median 3.2 ms, over 30 keys
+[gui-smoke] ok   perf: key to screen under 100 ms: median 97 ms, p90 108 ms, max 118 ms over 30 keys (60 characters arrived); one poll takes 3.0 ms, which is in every number; screendump method (until 11e): median 146 ms
+[keylat]   total: median 99976 us, max 161075 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 12 ms; other tasks on the CPU 80 ms; CPU idle 3 ms; X frames presented 3; composite 619 us
+[keylat] composite of the hosted window for a key: median 619 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 121 ms; desktop loop 20 ms; other tasks 94 ms; CPU idle 3 ms;
+[desk-cpu] desktop loop on the CPU 2121 ms of 14182 ms in 1185 passes (1789 us a pass): network and DevTools 95, devices and windows 1689, menus 1, keys and drawing 176, hosted window and console 5, between passes 155
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 6737 poll/select 1108 futex 2 nanosleep 0 other 663
+[keylat]   total: median 79442 us, max 101488 us
+[keylat-cpu] delivery to screen, medians over 30 keys: desktop loop on the CPU 0 ms; other tasks on the CPU 74 ms; CPU idle 1 ms; X frames presented 3; composite 487 us
+[keylat] composite of the hosted window for a key: median 487 us -> OK (limit 1500 us)
+[keylat-cpu] delivery to the last paint, medians over 30 keys: window 93 ms; desktop loop 0 ms; other tasks 86 ms; CPU idle 2 ms;
+[desk-cpu] desktop loop on the CPU 547 ms of 11585 ms in 1750 passes (312 us a pass): network and DevTools 84, devices and windows 169, menus 1, keys and drawing 156, hosted window and console 6, between passes 131
+[keylat] BSP idle while a key was on its way (delivery to first paint): 0 ms; ended by the timer tick 0 ms (0 halts), by another interrupt 0 ms (0 halts)
+[keylat] sleepers the tick woke meanwhile, by system call: epoll 5220 poll/select 885 futex 1 nanosleep 0 other 760

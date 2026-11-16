@@ -1,0 +1,45 @@
+# per key: frames the X client presented (time after the key's make code, PutImage/CopyArea size), paints of the hosted window, and the CPU ledger from delivery to the last paint; harness fbread time per key for the same keys
+== m2-4 (before the fixes, instrumented), fbread keys 1-10, serial log
+[keylat-ev] key 30: frames at 228(715x91) 230(715x91) 231(715x74) 278(331x21) ms; paints at 280 469 ms; delivery to last paint 446 ms: desktop loop 60, others 383 (t4 203 t133 47 t61 26 ), idle 2 ms
+[keylat-ev] key 1: frames at 77(715x91) 78(715x91) 79(715x74) 126(342x21) ms; paints at 87 141 ms; delivery to last paint 141 ms: desktop loop 15, others 106 (t61 26 t89 20 t1 17 ), idle 19 ms
+[keylat-ev] key 2: frames at 130(715x91) 131(715x91) 131(715x74) 174(353x21) ms; paints at 136 177 ms; delivery to last paint 140 ms: desktop loop 18, others 111 (t4 20 t61 20 t1 14 ), idle 11 ms
+[keylat-ev] key 3: frames at 89(715x91) 90(715x91) 91(715x74) 166(364x21) ms; paints at 103 170 ms; delivery to last paint 170 ms: desktop loop 11, others 126 (t4 36 t61 19 t1 18 ), idle 32 ms
+[keylat-ev] key 4: frames at 98(715x91) 99(715x91) 100(715x74) 166(375x21) ms; paints at 111 170 ms; delivery to last paint 170 ms: desktop loop 21, others 117 (t61 25 t4 19 t89 18 ), idle 31 ms
+[keylat-ev] key 5: frames at 96(715x91) 97(715x91) 98(715x74) 115(386x21) ms; paints at 125 ms; delivery to last paint 125 ms: desktop loop 18, others 93 (t61 19 t1 17 t89 16 ), idle 13 ms
+[keylat-ev] key 6: frames at 112(715x91) 113(715x91) 114(715x74) 172(397x21) ms; paints at 124 175 ms; delivery to last paint 174 ms: desktop loop 24, others 122 (t4 23 t61 23 t89 18 ), idle 28 ms
+[keylat-ev] key 7: frames at 108(715x91) 109(715x91) 110(715x74) 166(408x21) ms; paints at 136 172 ms; delivery to last paint 172 ms: desktop loop 21, others 126 (t61 24 t4 22 t89 20 ), idle 24 ms
+[keylat-ev] key 8: frames at 114(715x91) 115(715x91) 116(715x74) 164(419x21) ms; paints at 131 173 ms; delivery to last paint 172 ms: desktop loop 23, others 124 (t61 25 t4 20 t1 20 ), idle 25 ms
+[keylat-ev] key 9: frames at 111(715x91) 112(715x91) 113(715x74) 169(430x21) ms; paints at 128 173 ms; delivery to last paint 173 ms: desktop loop 23, others 121 (t4 24 t61 22 t89 18 ), idle 29 ms
+== m2-4 harness, fbread keys 1-10
+[chrome-smoke]   fbread key 1: 145 ms (poll returned 144 ms, bracket 3.0 ms), QMP send 2.4 ms, 46 polls
+[chrome-smoke]   fbread key 2: 183 ms (poll returned 183 ms, bracket 3.1 ms), QMP send 2.3 ms, 58 polls
+[chrome-smoke]   fbread key 3: 174 ms (poll returned 174 ms, bracket 3.1 ms), QMP send 2.3 ms, 57 polls
+[chrome-smoke]   fbread key 4: 176 ms (poll returned 176 ms, bracket 3.1 ms), QMP send 2.3 ms, 54 polls
+[chrome-smoke]   fbread key 5: 127 ms (poll returned 127 ms, bracket 3.0 ms), QMP send 2.3 ms, 38 polls
+[chrome-smoke]   fbread key 6: 179 ms (poll returned 179 ms, bracket 2.4 ms), QMP send 2.4 ms, 55 polls
+[chrome-smoke]   fbread key 7: 178 ms (poll returned 177 ms, bracket 3.0 ms), QMP send 2.4 ms, 53 polls
+[chrome-smoke]   fbread key 8: 177 ms (poll returned 177 ms, bracket 3.0 ms), QMP send 2.5 ms, 55 polls
+[chrome-smoke]   fbread key 9: 179 ms (poll returned 178 ms, bracket 3.0 ms), QMP send 2.3 ms, 57 polls
+[chrome-smoke]   fbread key 10: 134 ms (poll returned 133 ms, bracket 3.2 ms), QMP send 2.2 ms, 43 polls
+== m8b-4 (all fixes), fbread keys 1-10, serial log
+[keylat-ev] key 32: frames at 57(715x91) 58(715x91) 59(715x74) 86(582x112) 87(582x8) 595(1x21) 1095(1x21) 1595(1x21) ms; paints at 60 87 596 1096 1596 ms; delivery to last paint 1596 ms: desktop loop 49, others 351 (t62 69 t90 65 t30 43 ), idle 1195 ms
+[keylat-ev] key 1: frames at 76(715x91) 77(715x91) 78(715x74) ms; paints at 79 ms; delivery to last paint 79 ms: desktop loop 0, others 77 (t62 20 t90 13 t1 12 ), idle 1 ms
+[keylat-ev] key 2: frames at 75(715x91) 76(715x91) 77(715x74) 105(23x21) ms; paints at 79 107 ms; delivery to last paint 107 ms: desktop loop 0, others 100 (t90 22 t62 18 t1 18 ), idle 5 ms
+[keylat-ev] key 3: frames at 57(715x91) 57(715x91) 58(715x74) 67(34x21) ms; paints at 59 67 ms; delivery to last paint 64 ms: desktop loop 1, others 62 (t1 10 t90 10 t62 10 ), idle 0 ms
+[keylat-ev] key 4: frames at 79(715x91) 80(715x91) 81(715x74) ms; paints at 83 ms; delivery to last paint 83 ms: desktop loop 1, others 80 (t90 18 t62 16 t1 14 ), idle 1 ms
+[keylat-ev] key 5: frames at 86(715x91) 87(715x91) 88(715x74) ms; paints at 90 ms; delivery to last paint 90 ms: desktop loop 0, others 86 (t90 16 t142 14 t1 13 ), idle 3 ms
+[keylat-ev] key 6: frames at 57(67x21) 67(715x91) 67(715x91) 68(715x74) ms; paints at 58 69 ms; delivery to last paint 69 ms: desktop loop 0, others 67 (t62 15 t90 14 t1 12 ), idle 1 ms
+[keylat-ev] key 7: frames at 66(715x91) 67(715x91) 68(715x74) 95(78x21) ms; paints at 70 96 ms; delivery to last paint 96 ms: desktop loop 0, others 93 (t90 21 t1 17 t62 17 ), idle 2 ms
+[keylat-ev] key 8: frames at 80(715x91) 81(715x91) 82(715x74) 98(89x21) ms; paints at 84 99 ms; delivery to last paint 98 ms: desktop loop 5, others 93 (t90 20 t62 18 t1 17 ), idle 0 ms
+[keylat-ev] key 9: frames at 50(100x21) 59(715x91) 60(715x91) 60(715x74) ms; paints at 51 61 ms; delivery to last paint 61 ms: desktop loop 0, others 60 (t62 13 t90 12 t1 11 ), idle 1 ms
+== m8b-4 harness, fbread keys 1-10
+[chrome-smoke]   fbread key 1: 85 ms (poll returned 84 ms, bracket 3.1 ms), QMP send 2.3 ms, 27 polls
+[chrome-smoke]   fbread key 2: 113 ms (poll returned 113 ms, bracket 3.0 ms), QMP send 2.3 ms, 37 polls
+[chrome-smoke]   fbread key 3: 72 ms (poll returned 71 ms, bracket 3.3 ms), QMP send 2.3 ms, 22 polls
+[chrome-smoke]   fbread key 4: 88 ms (poll returned 87 ms, bracket 3.1 ms), QMP send 2.3 ms, 29 polls
+[chrome-smoke]   fbread key 5: 96 ms (poll returned 95 ms, bracket 2.8 ms), QMP send 2.2 ms, 35 polls
+[chrome-smoke]   fbread key 6: 65 ms (poll returned 64 ms, bracket 3.5 ms), QMP send 1.9 ms, 20 polls
+[chrome-smoke]   fbread key 7: 100 ms (poll returned 100 ms, bracket 3.4 ms), QMP send 2.4 ms, 31 polls
+[chrome-smoke]   fbread key 8: 105 ms (poll returned 105 ms, bracket 3.4 ms), QMP send 2.3 ms, 33 polls
+[chrome-smoke]   fbread key 9: 58 ms (poll returned 57 ms, bracket 3.4 ms), QMP send 2.3 ms, 18 polls
+[chrome-smoke]   fbread key 10: 103 ms (poll returned 102 ms, bracket 2.8 ms), QMP send 2.3 ms, 33 polls

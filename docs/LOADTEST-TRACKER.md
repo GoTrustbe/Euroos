@@ -2889,3 +2889,44 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Found:**    2026-11-16 · `run-metal-matrix.py` default leg list on `732e5f5`; `nvmeroot` repeated on `3ecde9e`: FAIL the same way.
 - **Actual:**   the live system reaches the desktop loop but the install-to-NVMe/AHCI marker never appears; the serial tail shows `[init] service ticker` restarts (3 starts, then "no restart (ceiling/policy)") and desktop passes of 1.1-1.2 s.
 - **Next:**     find out whether the leg is out of date (wizard now needed) or the install really does not start; remove the legs from the default list or fix them.
+
+### BUG-300 — the keylat harness slowed the guest it measured: screendump polling holds QEMU's big lock ✅ FIXED
+- **Status:**   FIXED (`2924d28`, harness) · **Severity:** MEDIUM (every keylat number since W23 was 60-150 ms too high)
+- **Found:**    2026-11-16 · sprint 11f-A, `proof/11f-keylat/`.
+- **Actual:**   the perf step polled QMP `screendump` (whole 1920x1080 screen, ~18-27 ms each) until the field changed. QEMU holds its big lock for the copy; every guest exit that needs it (xHCI registers the desktop loop polls, the UART) waited for it. Same boot, same keys: screendump method 251-288 ms, framebuffer read 141-156 ms (e4b8ba4); desktop loop on the CPU 1.4-3.0 ms a pass against 0.26-0.86 ms.
+- **Fix:**      `fbread`: QMP `pmemsave` of only the field rows of the GOP framebuffer (address and stride from the boot log), ~3 ms a poll; the step's verdict uses it, the screendump method is still printed.
+
+### BUG-301 — console output cost the BSP ~31 us a byte ✅ FIXED
+- **Status:**   FIXED (`89d4cba` test, `a344592`, `e33ac3f`) · **Severity:** MEDIUM
+- **Actual:**   `[serial-cost]` 8 KiB: 249-254 ms of BSP (smp 2 and 4). With `smpuser` off the BSP is also every chrome thread's CPU; the sender task ran 20-115 ms in a key's window.
+- **Fix:**      the queue is drained by a kwork job on the last online AP; the BSP sender only without APs or as a fallback. `[serial-cost]` 5 ms, OK.
+
+### BUG-302 — every frame of the hosted X window was composited whole, per pixel ✅ FIXED
+- **Status:**   FIXED (`5303e44` test, `379fd72`) · **Severity:** MEDIUM
+- **Actual:**   5-10 ms of BSP per paint for an 800x600 body (`put_pixel` with five atomic clip loads per pixel), two paints a key; a paint preempted by chrome came 100-200 ms after its frame.
+- **Fix:**      damage rows from PutImage/CopyArea, composite and present only those rows, row copies (`put_row`). `[keylat] composite` 464-561 us, OK.
+
+### BUG-303 — epoll_wait and poll re-checked every tick or two; nothing woke them ✅ FIXED (eventfd, unix stream, X)
+- **Status:**   FIXED for eventfd, unix stream sockets and X connections (`90f7ee6`/`049ed8f` test, `763a9bc`, `eee05a6`) · **Severity:** HIGH for interactive latency
+- **Actual:**   while a key was on its way every idle halt of the BSP was ended by the tick (39-52 ms a key) and the sleepers the tick woke were epoll (5363-8498) and poll (906-1475) waiters.
+- **Fix:**      waiters register wake keys of their descriptors; eventfd writes, unix sends/closes and X events queued by the desktop loop wake them (`sched::wake_sleeping`, only the waiter's own timed sleep). Tick-ended idle 0-0.4 ms a key.
+- **Left:**     pipes and inet sockets have no key and keep the re-check (12-17 late finds a key, not on the key path).
+
+### BUG-304 — epoll_wait's deadline was one static for all waiters ✅ FIXED
+- **Status:**   FIXED (`763a9bc`, `eee05a6`) · **Severity:** LOW
+- **Actual:**   `EPOLL_DEADLINE` was shared: a short wait of one thread cut another thread's long wait short (spurious timeouts, extra syscall churn). Per call now, taken once before the loop.
+
+### BUG-305 — chrome-smoke perf: a full field stops changing its pixels ✅ FIXED
+- **Status:**   FIXED (`841ab78`, harness) · **Severity:** LOW
+- **Actual:**   after ~50 x's the field scrolls by one identical glyph; a key then changed nothing until the caret blinked (~650 ms, every other key). The field is emptied between the two methods.
+
+### BUG-306 — chrome-smoke perf "reference site loads in under 3 s" fails on e4b8ba4 and on 11f-A ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (not a regression: the same step fails on `e4b8ba4`)
+- **Found:**    2026-11-16 · sprint 11f-A keylat pairs: final picture median 3.7-4.6 s on `e4b8ba4`, 4.0-4.6 s on the final branch (first change 0.2-0.3 s), loads of https://euro-os.eu/en/ over the user-mode network of the R630.
+- **Next:**     not investigated (outside the key path): see whether the late picture is the network (SLIRP) or the page's own late content.
+
+### BUG-307 — FUTEX_QUEUE keyed by the user address only: a wake in one chrome process took a waiter in another ✅ FIXED
+- **Status:**   FIXED (`544d5a2`) · **Severity:** HIGH (a renderer hangs for good: page input and navigation stop)
+- **Found:**    2026-11-16 · sprint 11f-A, after the faster epoll/poll wakeups (`763a9bc`): chrome-smoke start 3/20 (`049ed8f`), interaction 5/18 (`eee05a6`), 2 of 3 smp 4 perf runs (first form of `763a9bc`).
+- **Actual:**   renderer main thread Blocked on a futex in the chrome image whose word was already 0 (`[futex] t63 "CrRendererMain": 0x49ae6450 for 12686 ticks | word=Some(0)`), its IO thread Blocked too; the browser UI still worked. Every chrome process maps the binary at the same address, and `futex_wake` matched waiters by address alone.
+- **Fix:**      private futex operations (flag 128) key the queue by address plus the caller's address space (CR3 frame above the user half); shared futexes and clear-child-tid keep the bare address. No isolated marker: shown by the chrome-smoke runs before and after (`proof/11f-keylat/`).

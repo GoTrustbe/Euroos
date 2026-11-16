@@ -1,0 +1,20 @@
+# chrome-smoke --only interact --smp 2
+== f3-interact (544d5a2 final)
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/11fa/f3-interact
+== interact (049ed8f)
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/11fa/interact
+== f2-interact (eee05a6, before the futex fix)
+[chrome-smoke] FAIL (13 step(s)) - 5/18 steps ok, report and screenshots in /dev/shm/11fa/f2-interact
+[gui-smoke] FAIL form: typed text arrives in the field (US): state ('', '', '-', 0)
+[gui-smoke] FAIL clipboard: Ctrl+A, Ctrl+C in field A, Ctrl+V in field B: state ('', '', '-', 0)
+[gui-smoke] FAIL selection: double click selects a word on the page, copy, paste: field B = ''
+[gui-smoke] FAIL selection: a drag with the button held selects text, copy, paste: field B = ''
+== eee05a6: the renderer of the page
+[threads]   t62 cr3=0x4ca1000 "CrRendererMain": Blocked(0x0) last=44(a1=0x5)->0xc0
+[threads]   t83 cr3=0x4ca1000 "Chrome_ChildIOTh": Blocked(0x0) last=228(a1=0x1)->0x0
+
+# gui-smoke.py, public image, KVM 4 vCPU 4 GiB
+== gs-pub3 (544d5a2)
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/11fa/gs-pub3
+== gs-pub (049ed8f)
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /dev/shm/11fa/gs-pub
