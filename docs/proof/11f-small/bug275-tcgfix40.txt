@@ -1,0 +1,50 @@
+# BUG-275 / BUG-320 after the fixes: 40 TCG boots of combined-smp1-iommu-1g on the self-test image with both fixes (t5-st.img)
+# same driver, 4 boots at once on CPUs 18 19 38 39, 10 each; plus two busy loops on 18/38 (the cores that were more loaded in the first run)
+
+boots: 40; desktop reached: 40; WATCHDOG TRIPPED: 0 boots; no-desktop lines: 0
+[churn-forkthreads]: lines 40, PASS 40, no result line 0
+
+# slot18
+f18-1 after 632s desktop=1
+f18-2 after 607s desktop=1
+f18-3 after 601s desktop=1
+f18-4 after 602s desktop=1
+f18-5 after 607s desktop=1
+f18-6 after 602s desktop=1
+f18-7 after 611s desktop=1
+f18-8 after 627s desktop=1
+f18-9 after 607s desktop=1
+f18-10 after 602s desktop=1
+# slot19
+f19-1 after 507s desktop=1
+f19-2 after 571s desktop=1
+f19-3 after 607s desktop=1
+f19-4 after 511s desktop=1
+f19-5 after 507s desktop=1
+f19-6 after 527s desktop=1
+f19-7 after 461s desktop=1
+f19-8 after 376s desktop=1
+f19-9 after 386s desktop=1
+f19-10 after 381s desktop=1
+# slot38
+f38-1 after 622s desktop=1
+f38-2 after 612s desktop=1
+f38-3 after 636s desktop=1
+f38-4 after 617s desktop=1
+f38-5 after 627s desktop=1
+f38-6 after 632s desktop=1
+f38-7 after 622s desktop=1
+f38-8 after 611s desktop=1
+f38-9 after 607s desktop=1
+f38-10 after 597s desktop=1
+# slot39
+f39-1 after 502s desktop=1
+f39-2 after 561s desktop=1
+f39-3 after 597s desktop=1
+f39-4 after 516s desktop=1
+f39-5 after 507s desktop=1
+f39-6 after 511s desktop=1
+f39-7 after 467s desktop=1
+f39-8 after 386s desktop=1
+f39-9 after 381s desktop=1
+f39-10 after 376s desktop=1

@@ -1,0 +1,12 @@
+# BUG-320: [xlock] and the TCG wedge
+## before (t3b: test only, commit before the fix)
+[xlock] pump_mouse and window_at, run with interrupts on: X locks taken with interrupts enabled = 2 (want 0) -> FAILED
+## after (t4b: fix)
+[xlock] pump_mouse and window_at, run with interrupts on: X locks taken with interrupts enabled = 0 (want 0) -> OK (a preemption cannot catch task 0 holding them) ✓
+## markers-compare e4b8ba4 self-test image (basev) vs fixed (t4bv), KVM
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   wd-io: OKx1
+   xlock: OKx1

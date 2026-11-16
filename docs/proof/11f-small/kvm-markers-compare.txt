@@ -1,0 +1,11 @@
+# Final KVM boot, markers-compare: self-test image of e4b8ba4 (base) against the final kernel of feature/11f-small (t5; kernel identical to HEAD)
+# q35, KVM, 2 vCPU, 2 GiB, virtio-blk root disk 1 GiB, no NIC, pinned to CPUs 19,39
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   wd-io: OKx1
+   xlock: OKx1
+[wd-io] 4 block reads of the task that pets: reads ok=true, pets gained 4 (want 4) -> OK (a completed request is a sign of life) ✓
+[xlock] pump_mouse and window_at, run with interrupts on: X locks taken with interrupts enabled = 0 (want 0) -> OK (a preemption cannot catch task 0 holding them) ✓
+[churn-forkthreads] 40 fork children x 6 threads, ended by exit_group, a worker's exit_group and kill: 40 of 40 rounds (280 tasks of ended children), bad=0 -> PASS (exit 88) · task table 50→50 · threa

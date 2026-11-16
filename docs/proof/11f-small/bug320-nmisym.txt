@@ -1,0 +1,23 @@
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x2fccfd7a  cO7IBlcXu1_10eurokernel5ring314epoll_fd_ready+0x1d4
+   ret 0x35e5a290  cO7IBlcXu1_10eurokernel5ring314THREAD_KSTACKS+0xecec
+   ret 0x2fcc6aa8  cO7IBlcXu1_10eurokernel5ring313in_user_arena+0x24
+   ret 0x33d01ad0  cO7IBlcXu1_10eurokernel3net8UNIX_FDS+0x10
+   ret 0x33d01ad8  cO7IBlcXu1_10eurokernel3net8UNIX_FDS+0x18
+   ret 0x33cfce80  cO7IBlcXu1_10eurokernel3net13SITE_UNIX_FDS+0x0
+   ret 0x33020007  b611c04aed51560bcd56d8061f5921+0x306f
+   ret 0x35e5a340  cO7IBlcXu1_10eurokernel5ring314THREAD_KSTACKS+0xed9c
+   ret 0x2fcea204  cO7IBlcXu1_10eurokernel5ring324linux_dispatch_inner_raw+0x5544
+   ret 0x35e5b530  cO7IBlcXu1_10eurokernel5ring314THREAD_KSTACKS+0xff8c
+   ret 0x2fe4a5f5  core3fmtNtB7_9Formatter12pad_integral12write_prefix+0x2c
+   ret 0x2fda0e25  O7IBlcXu1_10eurokernel6serial6__print03TeeNtNtCsbgsWQTwQDbA_4core3fmt5Write10write_charBa_+0x0
+   ret 0x33726e01  b611c04aed51560bcd56d8061f5921+0x1
+   ret 0x35e5a560  cO7IBlcXu1_10eurokernel5ring314THREAD_KSTACKS+0xefbc
+   ret 0x33d6ab88  cO7IBlcXu1_10eurokernel6serial4UART+0x8
+   ret 0x35e5a64f  cO7IBlcXu1_10eurokernel5ring314THREAD_KSTACKS+0xf0ab
+   ret 0x2fd727b5  O7IBlcXu1_10eurokernel6serial6__print0NtB2_3TeeNtNtCsbgsWQTwQDbA_4core3fmt5Write9write_str+0x6e7
+   ret 0x336a9749  b611c04aed51560bcd56d8061f5921+0x0
+   ret 0x336a9756  b611c04aed51560bcd56d8061f5921+0x0
+   ret 0x2fe4add7  core3fmt3num3impjNtB9_7Display3fmt+0x0
+   CR2 0x000001007c006068
+   ready tasks: 
