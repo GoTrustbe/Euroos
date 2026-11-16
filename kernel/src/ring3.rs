@@ -10843,7 +10843,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
         GLIBC_CHILD_EXITS.lock().push((pid, st));
     }
     globals_release_owner(ctask); // never drop state that is loaded
-    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid); mm_changed();
     child_mem_drop(ctask);
     ram_file_sweep_due();
     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
@@ -11194,16 +11194,26 @@ unsafe fn arena_fill(dst: u64, src: Option<u64>, bytes: usize) {
 /// linked yet).
 static FORK_IN_FLIGHT: Mutex<alloc::vec::Vec<(usize, u64, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
 
+/// BUG-281: bumped whenever a fork starts or ends (registered or undone) and
+/// whenever a fork child leaves the list. A census that saw it change was
+/// taken while the list of processes moved under it and is taken again.
+static MM_GEN: AtomicU64 = AtomicU64::new(0);
+fn mm_changed() {
+    MM_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
 fn fork_in_flight_set(task: usize, arena: u64, frames: usize, pml4: u64) {
     let _g = crate::sched::IfOffGuard::new();
     let mut v = FORK_IN_FLIGHT.lock();
     v.retain(|e| e.0 != task);
     v.push((task, arena, frames, pml4));
+    mm_changed();
 }
 
 fn fork_in_flight_done(task: usize) {
     let _g = crate::sched::IfOffGuard::new();
     FORK_IN_FLIGHT.lock().retain(|e| e.0 != task);
+    mm_changed();
 }
 
 /// `task` has ended for good: give back a fork it was in the middle of.
@@ -11215,6 +11225,7 @@ fn fork_in_flight_reclaim(task: usize) {
         i.map(|i| v.swap_remove(i))
     };
     let Some((_, arena, frames, pml4)) = hit else { return };
+    mm_changed();
     let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
     if pml4 != 0 {
         crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
@@ -15950,7 +15961,73 @@ fn proc_mem_ranges(owner: usize) -> Option<(euromm::FreeRanges, euromm::FreeRang
 /// browser. Each process is walked with interrupts off (ring 3 runs on this
 /// core only, so its tables cannot go away under the walk); between two
 /// processes the timer may run.
+///
+/// BUG-281: a census that met a fork gave 40 to 94 MiB no owner for one
+/// sample: the parent's pages were already shared copy-on-write (each holder
+/// counts its part) while the child was not in the list yet, so the child's
+/// part and its new page tables belonged to nobody. A fork in progress is
+/// now walked as a process of its own, and a census during which a fork
+/// started or ended or a child left is taken again (three more times at most).
 pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
+    let mut tries = 0;
+    loop {
+        let g0 = MM_GEN.load(Ordering::SeqCst);
+        let r = mem_census_once();
+        tries += 1;
+        if MM_GEN.load(Ordering::SeqCst) == g0 || tries == 4 {
+            return r;
+        }
+    }
+}
+
+/// Walk the demand region of address space `pml4` into `m`: its pages by
+/// kind (anonymous, copy-on-write part, private file pages, maps of frames
+/// others own) and its page tables. The caller has interrupts off.
+fn census_walk(m: &mut ProcMem, pml4: u64, file: &euromm::FreeRanges, shared: &euromm::FreeRanges, none: &euromm::FreeRanges) {
+    let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
+        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let refs = crate::paging::cow_refs();
+    let mut cow_units = 0usize;
+    m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
+        if pte & 1 == 0 {
+            sw += 1;
+        } else if pte & crate::paging::COW != 0 {
+            // Shared copy-on-write: each holder counts its part, so
+            // the frame is counted once over the processes.
+            cow_units += 65536 / (refs.extra(pte & 0x000F_FFFF_FFFF_F000) as usize + 1);
+        } else if pte & 2 == 0 {
+            mc += 1;
+        } else if shared.contains(va) {
+            ms += 1;
+        } else if file.contains(va) {
+            fpriv += 1;
+        } else {
+            anon += 1;
+            if none.contains(va) {
+                anon_na += 1;
+            }
+            if (va >> 12).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60 == 0 {
+                sampled += 1;
+                let phys = pte & 0x000F_FFFF_FFFF_F000;
+                // SAFETY: a present PTE of the demand slot names an identity-mapped pool frame.
+                let words = unsafe { core::slice::from_raw_parts(phys as *const u64, 512) };
+                if words.iter().all(|&w| w == 0) {
+                    zero += 1;
+                }
+            }
+        }
+    });
+    m.anon = anon + (cow_units + 32768) / 65536;
+    m.anon_noaccess = anon_na;
+    m.sampled = sampled;
+    m.sampled_zero = zero;
+    m.file_private = fpriv;
+    m.maps_cache = mc;
+    m.maps_shared = ms;
+    m.swapped = sw;
+}
+
+fn mem_census_once() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
     let mut procs: alloc::vec::Vec<ProcMem> = alloc::vec::Vec::new();
     let mut ids: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
     {
@@ -15980,47 +16057,26 @@ pub fn mem_census() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
         let mut m = ProcMem { pid, task, name: thread_name(task), arena, reserved, ..Default::default() };
         m.noaccess = none.ranges().iter()
             .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
-        let (mut anon, mut anon_na, mut sampled, mut zero, mut fpriv, mut mc, mut ms, mut sw) =
-            (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
-        let refs = crate::paging::cow_refs();
-        let mut cow_units = 0usize;
-        m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
-            if pte & 1 == 0 {
-                sw += 1;
-            } else if pte & crate::paging::COW != 0 {
-                // Shared copy-on-write: each holder counts its part, so
-                // the frame is counted once over the processes.
-                cow_units += 65536 / (refs.extra(pte & 0x000F_FFFF_FFFF_F000) as usize + 1);
-            } else if pte & 2 == 0 {
-                mc += 1;
-            } else if shared.contains(va) {
-                ms += 1;
-            } else if file.contains(va) {
-                fpriv += 1;
-            } else {
-                anon += 1;
-                if none.contains(va) {
-                    anon_na += 1;
-                }
-                if (va >> 12).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 60 == 0 {
-                    sampled += 1;
-                    let phys = pte & 0x000F_FFFF_FFFF_F000;
-                    // SAFETY: a present PTE of the demand slot names an identity-mapped pool frame.
-                    let words = unsafe { core::slice::from_raw_parts(phys as *const u64, 512) };
-                    if words.iter().all(|&w| w == 0) {
-                        zero += 1;
-                    }
-                }
-            }
-        });
-        m.anon = anon + (cow_units + 32768) / 65536;
-        m.anon_noaccess = anon_na;
-        m.sampled = sampled;
-        m.sampled_zero = zero;
-        m.file_private = fpriv;
-        m.maps_cache = mc;
-        m.maps_shared = ms;
-        m.swapped = sw;
+        census_walk(&mut m, pml4, &file, &shared, &none);
+        procs.push(m);
+    }
+    // Forks in progress (pid 0): the child's address space as far as the
+    // fork has built it. FORK_IN_FLIGHT stays locked during the walk: a fork
+    // that is undone or reclaimed takes it before it frees those tables.
+    let forking: alloc::vec::Vec<(usize, u64)> = {
+        let _g = crate::sched::IfOffGuard::new();
+        FORK_IN_FLIGHT.lock().iter().filter(|e| e.3 != 0).map(|e| (e.0, e.3)).collect()
+    };
+    for (ftask, cpml4) in forking {
+        let Some((file, shared, none, _)) = proc_mem_ranges(fork_child_owner(ftask).unwrap_or(0)) else { continue };
+        let mut m = ProcMem { pid: 0, task: ftask, name: String::from("(fork in progress)"), ..Default::default() };
+        let _g = crate::sched::IfOffGuard::new();
+        let v = FORK_IN_FLIGHT.lock();
+        if !v.iter().any(|e| e.0 == ftask && e.3 == cpml4) {
+            continue;
+        }
+        census_walk(&mut m, cpml4, &file, &shared, &none);
+        drop(v);
         procs.push(m);
     }
     (mem_totals(), procs)
@@ -16542,7 +16598,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     // Record the exit for wait4: WEXITSTATUS lives in bits 8..16.
                     GLIBC_CHILD_EXITS.lock().push((pid, ((a1 as u32) & 0xff) << 8));
                     globals_release_owner(ctask); // parent state back BEFORE the drop
-                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid);
+                    GLIBC_FORK_CHILDREN.lock().retain(|&(p2, _, _, _, _)| p2 != pid); mm_changed();
                     child_mem_drop(ctask);
                     CHILD_THREADS.lock().retain(|&(_, m)| m != ctask);
                     // Its descriptors close; what it was the last holder of goes
