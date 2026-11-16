@@ -1507,7 +1507,8 @@ def make_args(a, workdir):
     return types.SimpleNamespace(image=a.image, workdir=workdir, kvm=a.kvm, cpu_opts="", smp=a.smp, mem=a.mem, pin=a.pin,
                                  input=a.input, net="none", layout="auto", extra=extra,
                                  boot_timeout=300 if a.kvm else 1500, alive_timeout=40 if a.kvm else 240,
-                                 slow=1.0 if a.kvm else 3.0, soak=0, seed=0, skip_smoke=True, keep_image=False)
+                                 slow=1.0 if a.kvm else 3.0, soak=0, seed=0, skip_smoke=True, keep_image=False,
+                                 perf_smpuser_ab=getattr(a, "perf_smpuser_ab", False))
 
 
 def one_boot(a, workdir, body):
