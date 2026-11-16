@@ -5814,6 +5814,10 @@ fn lost_wake_check(uaddr: u64, woken: i32) {
 const FUTEX_WATCH: u64 = 0x10014d2bb50;
 
 fn futex_wake(uaddr: u64, n: i32) -> u32 {
+    futex_wake_k(uaddr, uaddr, n)
+}
+
+fn futex_wake_k(uaddr: u64, key: u64, n: i32) -> u32 {
     if uaddr == FUTEX_WATCH {
         crate::serial_println!("[fw] @{} t{} WAKE n={n} word={:?}",
             crate::interrupts::ticks(), crate::sched::current(), read_glibc_u32(uaddr));
@@ -5841,7 +5845,7 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
     let mut woken = 0i32;
     let mut i = 0;
     while i < q.len() && woken < n {
-        if q[i].0 == uaddr {
+        if q[i].0 == key {
             let task = q[i].1;
             crate::sched::unblock_any(task); // wake Blocked OR (timed) Sleeping waiters
             q.swap_remove(i);
@@ -5861,7 +5865,29 @@ fn futex_wake(uaddr: u64, n: i32) -> u32 {
 /// FUTEX_WAIT: if *uaddr == val, block the current task on uaddr and return 0
 /// (the waiter is switched out on the next tick until a wake
 /// unblocks it; musl re-checks after a spurious wakeup). Otherwise -EAGAIN.
+/// The FUTEX_QUEUE key of a futex word (BUG-307). A PRIVATE futex (op flag
+/// 128: glibc's process-private mutexes and condition variables) belongs to
+/// one address space; the queue was keyed by the user address alone, and every
+/// chrome process maps its binary at the same address, so a wake for a lock in
+/// one renderer could take the waiter of the same lock in another, and that
+/// renderer's waiter was never woken (renderer main and IO thread Blocked on a
+/// futex whose word was 0, page input and navigation stuck). The address space
+/// (the frame of CR3) goes into the bits above the user half. Shared futexes
+/// (no flag, and the kernel's clear-child-tid wake) keep the bare address.
+fn futex_key(uaddr: u64, private: bool) -> u64 {
+    if !private {
+        return uaddr;
+    }
+    let (frame, _) = x86_64::registers::control::Cr3::read();
+    let tag = (frame.start_address().as_u64() >> 12) & 0x7fff;
+    uaddr | ((tag | 0x8000) << 48)
+}
+
 fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
+    futex_wait_k(uaddr, uaddr, val, deadline)
+}
+
+fn futex_wait_k(uaddr: u64, key: u64, val: u32, deadline: u64) -> u64 {
     FUTEX_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if uaddr == FUTEX_WATCH {
         crate::serial_println!("[fw] @{} t{} WAIT val={val} deadline={deadline} word={:?}",
@@ -5886,8 +5912,8 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if cur_val != val {
         return (-11i64) as u64; // -EAGAIN: the value already changed (drops q)
     }
-    if !q.iter().any(|&(a, t)| a == uaddr && t == cur) {
-        q.push((uaddr, cur));
+    if !q.iter().any(|&(a, t)| a == key && t == cur) {
+        q.push((key, cur));
     }
     if cur < 64 {
         FUTEX_WAIT_ADDR[cur].store(uaddr, Ordering::Relaxed);
@@ -5928,7 +5954,7 @@ fn futex_wait(uaddr: u64, val: u32, deadline: u64) -> u64 {
     if cur < 64 {
         FUTEX_WAIT_ADDR[cur].store(0, Ordering::Relaxed);
     }
-    if let Some(pos) = q.iter().position(|&(a, t)| a == uaddr && t == cur) {
+    if let Some(pos) = q.iter().position(|&(a, t)| a == key && t == cur) {
         q.swap_remove(pos);
         drop(q);
         if uaddr == FUTEX_WATCH {
@@ -19018,6 +19044,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
         218 => 1, // set_tid_address -> tid
         273 => 0, // set_robust_list
         202 => {
+            let fpriv = a2 & 128 != 0;
             // futex(uaddr, op, val, ...): real blocking wait + wake, so pthread
             // mutexes/joins work. Low 7 bits select the op (ignore PRIVATE/CLOCK).
             // glibc's pthread_join uses FUTEX_WAIT_BITSET (9) / WAKE_BITSET (10),
@@ -19062,12 +19089,12 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     } else {
                         0
                     };
-                    let r = futex_wait(a1, a3 as u32, deadline);
+                    let r = futex_wait_k(a1, futex_key(a1, fpriv), a3 as u32, deadline);
                     fop_log(op, a1, r);
                     r
                 }
                 1 | 10 => {
-                    let r = futex_wake(a1, a3 as i32) as u64;
+                    let r = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32) as u64;
                     fop_log(op, a1, r);
                     r
                 }
@@ -19092,8 +19119,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                             }
                         }
                     }
-                    let woken = futex_wake(a1, a3 as i32);
-                    let moved = futex_wake(a4, i32::MAX); // a4 = uaddr2
+                    let woken = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32);
+                    let moved = futex_wake_k(a4, futex_key(a4, fpriv), i32::MAX); // a4 = uaddr2
                     fop_log(op, a1, (woken + moved) as u64);
                     (woken + moved) as u64
                 }
@@ -19114,8 +19141,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         };
                         let _ = write_user(a4, new);
                     }
-                    let woken = futex_wake(a1, a3 as i32);
-                    let woken2 = futex_wake(a4, i32::MAX);
+                    let woken = futex_wake_k(a1, futex_key(a1, fpriv), a3 as i32);
+                    let woken2 = futex_wake_k(a4, futex_key(a4, fpriv), i32::MAX);
                     (woken + woken2) as u64
                 }
                 _ => 0,
