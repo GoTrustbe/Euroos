@@ -2662,6 +2662,7 @@ pub mod deskwatch {
     /// (the TCG watchdog trip of chrome-2026-11b) said where in 1100 lines of
     /// the loop, not what.
     pub fn step(name: &'static str) {
+        cpu_step(name.as_ptr() as u64, name.len() as u64);
         let t = now();
         let d = ms(STEP_AT.swap(t, Ordering::Relaxed), t);
         if d > LONG_MS.load(Ordering::Relaxed) {
@@ -2822,7 +2823,86 @@ pub mod deskwatch {
 
     /// Part `i` of the pass begins. 0 is the start of a pass: the previous pass
     /// and the wait after it are judged here. PARTS-1 is the end of the pass.
+    // On-CPU time of the desktop loop per part and per named step (11f-A),
+    // from its own run time on the TSC: a pass's wall time in `[desk]` also
+    // counts the turns of the tasks that preempted it.
+    const NSTEP: usize = 40;
+    static CPU_PART: [AtomicU64; PARTS] = [const { AtomicU64::new(0) }; PARTS];
+    static CPU_PREV: AtomicU64 = AtomicU64::new(PARTS as u64 - 1);
+    static CPU_LAST: AtomicU64 = AtomicU64::new(0);
+    static CPU_STEP_LAST: AtomicU64 = AtomicU64::new(0);
+    static CPU_PASSES: AtomicU64 = AtomicU64::new(0);
+    static CPU_SINCE: AtomicU64 = AtomicU64::new(0);
+    static STEP_KEY: [AtomicU64; NSTEP] = [const { AtomicU64::new(0) }; NSTEP];
+    static STEP_LEN: [AtomicU64; NSTEP] = [const { AtomicU64::new(0) }; NSTEP];
+    static STEP_CPU: [AtomicU64; NSTEP] = [const { AtomicU64::new(0) }; NSTEP];
+
+    fn cpu_step(ptr: u64, len: u64) {
+        let r = super::run_tsc_now(0);
+        let d = r.saturating_sub(CPU_STEP_LAST.swap(r, Ordering::Relaxed));
+        for k in 0..NSTEP {
+            let key = STEP_KEY[k].load(Ordering::Relaxed);
+            if key == ptr || key == 0 {
+                if key == 0 {
+                    STEP_KEY[k].store(ptr, Ordering::Relaxed);
+                    STEP_LEN[k].store(len, Ordering::Relaxed);
+                }
+                STEP_CPU[k].fetch_add(d, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+
+    fn cpu_mark(i: usize) {
+        let r = super::run_tsc_now(0);
+        let d = r.saturating_sub(CPU_LAST.swap(r, Ordering::Relaxed));
+        let prev = CPU_PREV.swap(i as u64, Ordering::Relaxed) as usize;
+        CPU_PART[prev.min(PARTS - 1)].fetch_add(d, Ordering::Relaxed);
+        CPU_STEP_LAST.store(r, Ordering::Relaxed);
+        if i == 0 {
+            CPU_PASSES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Forget the on-CPU ledger (with `keylat reset`).
+    pub fn cpu_reset() {
+        for a in CPU_PART.iter().chain(STEP_CPU.iter()) {
+            a.store(0, Ordering::Relaxed);
+        }
+        CPU_PASSES.store(0, Ordering::Relaxed);
+        CPU_SINCE.store(now(), Ordering::Relaxed);
+    }
+
+    /// The on-CPU ledger of the desktop loop since `cpu_reset`.
+    pub fn cpu_lines() -> alloc::vec::Vec<alloc::string::String> {
+        let since = CPU_SINCE.load(Ordering::Relaxed);
+        let wall = if since == 0 { 0 } else { ms(since, now()) };
+        let passes = CPU_PASSES.load(Ordering::Relaxed).max(1);
+        let p: [u64; PARTS] = core::array::from_fn(|k| ms(0, CPU_PART[k].load(Ordering::Relaxed)));
+        let total: u64 = p.iter().sum();
+        let mut out = alloc::vec![alloc::format!(
+            "[desk-cpu] desktop loop on the CPU {total} ms of {wall} ms in {passes} passes ({} us a pass): network and DevTools {}, devices and windows {}, menus {}, keys and drawing {}, hosted window and console {}, between passes {}",
+            total * 1000 / passes, p[0], p[1], p[2], p[3], p[4], p[5])];
+        let mut v: alloc::vec::Vec<(u64, usize)> = (0..NSTEP)
+            .filter(|&k| STEP_KEY[k].load(Ordering::Relaxed) != 0)
+            .map(|k| (STEP_CPU[k].load(Ordering::Relaxed), k))
+            .collect();
+        v.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut l = alloc::string::String::from("[desk-cpu] steps:");
+        for (c, k) in v.iter().take(8) {
+            // SAFETY: key and length were taken from a static str by `step`.
+            let name = unsafe {
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                    STEP_KEY[*k].load(Ordering::Relaxed) as *const u8, STEP_LEN[*k].load(Ordering::Relaxed) as usize))
+            };
+            l.push_str(&alloc::format!(" {name} {} ms;", ms(0, *c)));
+        }
+        out.push(l);
+        out
+    }
+
     pub fn mark(i: usize) {
+        cpu_mark(i);
         let t = now();
         if i == 0 {
             let m: [u64; PARTS] = core::array::from_fn(|k| MARKS[k].load(Ordering::Relaxed));

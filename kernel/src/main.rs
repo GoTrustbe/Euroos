@@ -7317,6 +7317,7 @@ fn main() -> Status {
             // its window body from the retained X buffer + blit only that rect.
             let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
             if gtk_vis { xrepaints += 1; }
+            let comp_t0 = xserver::keylat::tsc();
             if gtk_vis {
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
@@ -7341,6 +7342,7 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+                xserver::keylat::composite_from(comp_t0);
                 xserver::keylat::painted();
             }
             if euro_vis {
@@ -7357,6 +7359,7 @@ fn main() -> Status {
             // to move: 1742 ms key to screen, median of 27 keys (chrome-smoke
             // --only perf). Only the body's rectangle and the cursor are blitted.
             xrepaints += 1;
+            let comp_t0 = xserver::keylat::tsc();
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
             compositor::draw_window_body(&fb, &windows[gtk_idx]);
@@ -7366,6 +7369,7 @@ fn main() -> Status {
             compositor::draw_cursor(&fb, cmx, cmy);
             let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
             fb.present_rect(gx, gy, gw, gh);
+            xserver::keylat::composite_from(comp_t0);
             xserver::keylat::painted();
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -7636,6 +7640,7 @@ fn main() -> Status {
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         serial::kick();
         sched::desktop_hosts_client(xserver::front_window_size().is_some());
+        xserver::keylat::flush();
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();

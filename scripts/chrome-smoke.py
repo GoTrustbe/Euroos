@@ -875,34 +875,111 @@ class Chrome(gs.Guest):
         fx, fy = self.page(24, 85)
         region = (fx, fy, fx + 580, fy + 40)
         k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
-        lat, dump_ms = [], []
-        self.nap(1.2)                      # past the caret's first blink
-        for i in range(n_keys):
-            before = self.digest(self.shot(), region)
-            t0 = time.time()
-            self._send([k("x", True)])
-            dt = None
-            while time.time() - t0 < 2.0:
-                ts = time.time()
-                s = self.shot()
-                dump_ms.append((time.time() - ts) * 1000)
-                if self.digest(s, region) != before:
-                    dt = (time.time() - t0) * 1000
-                    break
-            self._send([k("x", False)])
-            if dt is not None:
-                lat.append(dt)
-            time.sleep(0.25)
+        # Key to screen, two methods (11f-A). Each is 30 keys, with the kernel's
+        # own `[keylat]` ledger reset before and printed after.
+        #  - "screendump" (the method since W23): QMP screendump of the whole
+        #    screen in a loop until the field's pixels change. A screendump holds
+        #    QEMU's big lock for its whole copy of the screen (~15 ms); every
+        #    guest exit that needs that lock (the UART, the xHCI registers the
+        #    desktop loop polls, the HPET) waits for it, so the guest runs slower
+        #    while it is measured. Reported with its capture time and bracket.
+        #  - "fbread": QMP pmemsave of only the field's rows of the guest
+        #    framebuffer (the GOP framebuffer, address and stride from the boot
+        #    log), ~0.3 MB instead of a 6 MB screen: the lock is held for a
+        #    fraction of a millisecond. The step's verdict uses this method.
+        res = {}
+        for method in ("screendump", "fbread"):
+            res[method] = self._keys(n_keys, region, method)
+        lat = res["fbread"][0] or res["screendump"][0]
+        dump_ms = res["fbread"][1] or res["screendump"][1]
+        old = res["screendump"][0]
+        self.key_methods = {m: [round(x) for x in sorted(r[0])] for m, r in res.items()}
+        n_keys *= 2
         typed = self.field("A") or ""
         if lat:
             lat.sort()
             med, p90 = statistics.median(lat), lat[int(len(lat) * 0.9) - 1]
+            oldm = f"; screendump method (until 11e): median {statistics.median(old):.0f} ms" if old else ""
             self.step("perf: key to screen under 100 ms", med < 100 and len(typed) == n_keys,
                       f"median {med:.0f} ms, p90 {p90:.0f} ms, max {lat[-1]:.0f} ms over {len(lat)} keys ({len(typed)} characters arrived); "
-                      f"one screendump takes {statistics.median(dump_ms):.0f} ms, which is in every number")
+                      f"one poll takes {statistics.median(dump_ms):.1f} ms, which is in every number{oldm}")
         else:
             self.step("perf: key to screen under 100 ms", False, "no key changed the field within 2 s")
         return loads, lat
+
+    def _fb_geometry(self):
+        """(base, stride in pixels) of the guest's GOP framebuffer, from the boot log."""
+        log = self.serial.since(0)
+        m = re.search(r"\[euro\] framebuffer @ (0x[0-9a-f]+)", log)
+        g = re.search(r"\[euro\] GOP (\d+)x(\d+) stride=(\d+) (\w+)", log)
+        if not m or not g or g.group(4) not in ("Bgr", "Rgb"):
+            return None
+        return int(m.group(1), 16), int(g.group(3))
+
+    def fb_digest(self, region):
+        """Digest of a screen region read straight from the guest framebuffer
+        (QMP pmemsave of the region's rows; 4 bytes a pixel)."""
+        base, stride = self.fb_geo
+        x0, y0, x1, y1 = region
+        f = os.path.join(self.wd, "fb.bin")
+        r = self.qmp.cmd("pmemsave", val=base + y0 * stride * 4, size=(y1 - y0) * stride * 4, filename=f)
+        self.last_dump_ret = time.time()
+        if "error" in r:
+            raise gs.Fatal(f"pmemsave: {r['error']}")
+        raw = open(f, "rb").read()
+        h = hashlib.sha1()
+        for y in range(y1 - y0):
+            h.update(raw[(y * stride + x0) * 4:(y * stride + x1) * 4])
+        return h.digest()
+
+    def _keys(self, n_keys, region, method):
+        """n_keys presses of "x" into the focused field, each timed until the
+        field's pixels change; returns (latencies ms, ms per poll)."""
+        k = lambda q, down: {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}
+        if method == "fbread":
+            self.fb_geo = self._fb_geometry()
+            if self.fb_geo is None:
+                print("[chrome-smoke]   keys, fbread: no framebuffer address in the boot log; skipped", flush=True)
+                return [], []
+            look = lambda: self.fb_digest(region)
+        else:
+            look = lambda: self.digest(self.shot(), region)
+        lat, dump_ms, cap, brk = [], [], [], []
+        self.nap(1.2)                      # past the caret's first blink
+        self.serial.send_line("keylat reset")
+        self.nap(0.3)
+        for i in range(n_keys):
+            before = look()
+            t0 = time.time()
+            self._send([k("x", True)])
+            t_sent = time.time()
+            dt, prev_ret, n = None, t_sent, 0
+            while time.time() - t0 < 2.0:
+                ts = time.time()
+                d = look()
+                tr = getattr(self, "last_dump_ret", None) or time.time()
+                dump_ms.append((time.time() - ts) * 1000)
+                n += 1
+                if d != before:
+                    dt = (time.time() - t0) * 1000
+                    cap.append((tr - t0) * 1000)
+                    brk.append((tr - prev_ret) * 1000)
+                    break
+                prev_ret = tr
+            self._send([k("x", False)])
+            if dt is not None:
+                lat.append(dt)
+                print(f"[chrome-smoke]   {method} key {i + 1}: {dt:.0f} ms (poll returned {cap[-1]:.0f} ms, bracket {brk[-1]:.1f} ms), "
+                      f"QMP send {(t_sent - t0) * 1000:.1f} ms, {n} polls", flush=True)
+            time.sleep(0.25)
+        pos = self.serial.mark()
+        self.serial.send_line("keylat")
+        self.serial.wait_for("[keylat-cpu] delivery to screen", 10 * self.slow, pos)
+        self.nap(0.5)
+        if lat:
+            print(f"[chrome-smoke]   keys, {method}: median {statistics.median(lat):.0f} ms, poll median {statistics.median(dump_ms):.1f} ms, "
+                  f"bracket median {statistics.median(brk):.1f} ms, over {len(lat)} keys", flush=True)
+        return lat, dump_ms
 
     def red_extent(self, s, rect):
         """Longest run of YouTube-red pixels in one row of `rect` (the player's progress bar:
@@ -1572,6 +1649,7 @@ def main():
             loads, lat = g.perf()
             extra["perf_loads_s"] = loads
             extra["perf_key_ms"] = [round(x) for x in lat]
+            extra["perf_key_ms_by_method"] = getattr(g, "key_methods", {})
         extra["consent_clicks"] = g.consent_log
         extra["memory_end"] = g.memory()
 
