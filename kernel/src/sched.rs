@@ -1318,14 +1318,30 @@ static T0_IDLE: AtomicBool = AtomicBool::new(false);
 /// scheduler know that the time is idle, not work.
 pub fn desktop_idle_hlt() {
     T0_IDLE.store(true, Ordering::Relaxed);
-    T0_HLT_START.store(rdtsc(), Ordering::Relaxed);
+    let t0 = rdtsc();
+    let tick0 = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    T0_HLT_START.store(t0, Ordering::Relaxed);
     x86_64::instructions::hlt();
     let st = T0_HLT_START.swap(0, Ordering::Relaxed);
     if st != 0 {
         T0_HLT_ACC.fetch_add(rdtsc().saturating_sub(st), Ordering::Relaxed);
     }
+    // 11f-A: what ended the idle halt, the timer tick or another interrupt.
+    let d = rdtsc().saturating_sub(t0);
+    // Only while a key is on its way to the screen (delivery to first paint).
+    if crate::xserver::keylat::in_flight() {
+        let k = if crate::interrupts::TICKS.load(Ordering::Relaxed) != tick0 { 0 } else { 1 };
+        IDLE_BY[k].fetch_add(d, Ordering::Relaxed);
+        IDLE_BY_N[k].fetch_add(1, Ordering::Relaxed);
+    }
     T0_IDLE.store(false, Ordering::Relaxed);
 }
+/// Idle halts of the BSP ended by the timer tick [0] or another interrupt [1]:
+/// TSC and count (`keylat` prints them, `keylat reset` clears them). Ended by
+/// the tick means nothing woke a waiting thread before it: a timed wait,
+/// which the 10 ms tick rounds up.
+pub static IDLE_BY: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static IDLE_BY_N: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// The tick in which the desktop loop was last given the CPU by the scheduler.
 static T0_TURN_TICK: AtomicU64 = AtomicU64::new(0);
 /// Turns the desktop loop got because a tick ended another task's turn.

@@ -647,6 +647,10 @@ pub mod keylat {
         EV_DONE[c].store(0, Ordering::Relaxed);
         CUR.store(c, Ordering::Relaxed);
     }
+    /// A key is between its delivery to the X client and its first paint.
+    pub fn in_flight() -> bool {
+        matches!(STAGE.load(Ordering::Relaxed), 2..=4)
+    }
     /// The X server handed the KeyPress to a client.
     pub fn delivered() {
         if at(2, 1) {
@@ -783,6 +787,11 @@ pub mod keylat {
             out.push(l);
         }
         out.extend(crate::sched::deskwatch::cpu_lines());
+        {
+            let b = |k: usize| (us(0, crate::sched::IDLE_BY[k].load(Ordering::Relaxed)) / 1000, crate::sched::IDLE_BY_N[k].load(Ordering::Relaxed));
+            let ((tm, tn), (im, inn)) = (b(0), b(1));
+            out.push(alloc::format!("[keylat] BSP idle while a key was on its way (delivery to first paint): {} ms; ended by the timer tick {tm} ms ({tn} halts), by another interrupt {im} ms ({inn} halts)", tm + im));
+        }
         out.push(wake_line());
         out
     }
@@ -809,6 +818,10 @@ pub mod keylat {
             b.store(0, Ordering::Relaxed);
         }
         crate::sched::deskwatch::cpu_reset();
+        for k in 0..2 {
+            crate::sched::IDLE_BY[k].store(0, Ordering::Relaxed);
+            crate::sched::IDLE_BY_N[k].store(0, Ordering::Relaxed);
+        }
     }
 }
 
