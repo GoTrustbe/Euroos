@@ -1183,9 +1183,17 @@ pub fn xlock_selftest() {
     let before = LOCKED_WITH_IF.load(core::sync::atomic::Ordering::Relaxed);
     pump_mouse();
     let _ = window_at(0, 0);
+    // forget_clients: the desktop loop calls it when a hosted app starts, and a client of
+    // the previous app that is still on its way out (close, read) takes the same tables
+    // with IF=0 (11f-integ). Only run with no connection open: it empties the tables.
+    let empty = x86_64::instructions::interrupts::without_interrupts(|| XCONNS.lock().iter().all(|c| c.is_none()));
+    if empty {
+        forget_clients();
+    }
     let n = LOCKED_WITH_IF.load(core::sync::atomic::Ordering::Relaxed) - before;
     crate::serial_println!(
-        "[xlock] pump_mouse and window_at, run with interrupts on: X locks taken with interrupts enabled = {n} (want 0) -> {}",
+        "[xlock] pump_mouse, window_at{}, run with interrupts on: X locks taken with interrupts enabled = {n} (want 0) -> {}",
+        if empty { " and forget_clients" } else { " (forget_clients not run: a connection is open)" },
         if n == 0 { "OK (a preemption cannot catch task 0 holding them) ✓" } else { "FAILED" }
     );
 }
@@ -2494,6 +2502,7 @@ pub fn set_windowed(on: bool) { X_WINDOWED.store(on, core::sync::atomic::Orderin
 pub fn forget_clients() {
     let gone = {
         let mut t = lock_home();
+        note_lock_held();
         let n = t.iter().flatten().count();
         for c in t.iter_mut() {
             *c = None;
