@@ -524,6 +524,7 @@ class Guest:
         self.shot_n += 1
         ppm = os.path.join(self.wd, "screen.ppm")
         r = self.qmp.cmd("screendump", filename=ppm)
+        self.last_dump_ret = time.time()   # QEMU has copied the screen (chrome-smoke perf, 11f-A)
         if "error" in r:
             raise Fatal(f"screendump: {r['error']}")
         s = Screen(ppm)

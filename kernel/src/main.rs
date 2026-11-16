@@ -7317,7 +7317,9 @@ fn main() -> Status {
             // its window body from the retained X buffer + blit only that rect.
             let gtk_vis = windows[gtk_idx].visible && xserver::take_dirty();
             if gtk_vis { xrepaints += 1; }
+            let comp_t0 = xserver::keylat::tsc();
             if gtk_vis {
+                let _ = xserver::take_damage(); // the status tick composites all of it
                 compositor::draw_window_body(&fb, &windows[gtk_idx]);
             }
             // Native app window (Euro API surface): repaint on a new frame; the
@@ -7341,6 +7343,7 @@ fn main() -> Status {
             if gtk_vis {
                 let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
                 fb.present_rect(gx, gy, gw, gh);
+                xserver::keylat::composite_from(comp_t0);
                 xserver::keylat::painted();
             }
             if euro_vis {
@@ -7357,15 +7360,23 @@ fn main() -> Status {
             // to move: 1742 ms key to screen, median of 27 keys (chrome-smoke
             // --only perf). Only the body's rectangle and the cursor are blitted.
             xrepaints += 1;
+            let comp_t0 = xserver::keylat::tsc();
             let (ox, oy) = (cmx, cmy);
             compositor::restore_cursor_bg(&fb, cmx, cmy, &cur_bg);
-            compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            // 11f-A: only the rows the client's requests changed (a key
+            // changes one line of the page), else the whole body.
+            let band = xserver::take_damage()
+                .and_then(|(y0, y1)| compositor::draw_xclient_rows(&fb, &windows[gtk_idx], y0, y1));
+            if band.is_none() {
+                compositor::draw_window_body(&fb, &windows[gtk_idx]);
+            }
             cmx = px;
             cmy = py;
             compositor::save_cursor_bg(&fb, cmx, cmy, &mut cur_bg);
             compositor::draw_cursor(&fb, cmx, cmy);
-            let (gx, gy, gw, gh) = compositor::window_body_rect(&windows[gtk_idx]);
+            let (gx, gy, gw, gh) = band.unwrap_or_else(|| compositor::window_body_rect(&windows[gtk_idx]));
             fb.present_rect(gx, gy, gw, gh);
+            xserver::keylat::composite_from(comp_t0);
             xserver::keylat::painted();
             fb.present_rect(ox, oy, compositor::CURSOR_W, compositor::CURSOR_H);
             fb.present_rect(cmx, cmy, compositor::CURSOR_W, compositor::CURSOR_H);
@@ -7636,6 +7647,15 @@ fn main() -> Status {
         compositor::LOOP_ITERATIONS.fetch_add(1, Ordering::Relaxed);
         serial::kick();
         sched::desktop_hosts_client(xserver::front_window_size().is_some());
+        xserver::keylat::flush();
+        // 11f-A: input this pass queued for X clients wakes their epoll/poll waits.
+        {
+            let mut q = [0u64; 16];
+            let n = xserver::queued_fds(&mut q);
+            for &fd in &q[..n] {
+                ring3::poll_wake(net::PK_X | fd);
+            }
+        }
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();

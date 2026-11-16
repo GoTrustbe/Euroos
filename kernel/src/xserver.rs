@@ -362,6 +362,23 @@ pub fn queued_len(fd: u64) -> usize {
 }
 
 /// Any queued output to read? (For a future poll/select.)
+/// The fds of the X connections with events or replies queued that the client
+/// has not read, into `out` (11f-A: the desktop loop then wakes the clients'
+/// epoll/poll waits). Returns how many.
+pub fn queued_fds(out: &mut [u64; 16]) -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let t = XCONNS.lock();
+        let mut n = 0;
+        for (i, c) in t.iter().enumerate() {
+            if n < out.len() && c.as_ref().is_some_and(|c| !c.outbuf.is_empty()) {
+                out[n] = XCONN_FD_BASE + i as u64;
+                n += 1;
+            }
+        }
+        n
+    })
+}
+
 pub fn readable(fd: u64) -> bool {
     XCONNS
         .lock()
@@ -492,32 +509,206 @@ pub mod keylat {
         let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
         b.saturating_sub(a) * 10_000 / per
     }
-    fn at(stage: u64, from: u64) {
+    fn at(stage: u64, from: u64) -> bool {
         if STAGE.compare_exchange(from, stage, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
             T[stage as usize].store(now(), Ordering::Relaxed);
+            return true;
         }
+        false
+    }
+    // [keylat-cpu] (11f-A): who had the CPU between the key's delivery to the
+    // X client and its paint, how many frames the client presented meanwhile and
+    // what the desktop loop's composite of the window cost. Run times per task
+    // are snapshotted at delivery (task 0, interrupts off) and taken at the paint.
+    const NT: usize = crate::sched::MAX_TASKS;
+    static RUN_AT: [AtomicU64; NT] = [const { AtomicU64::new(0) }; NT];
+    static PRESENTS: AtomicU64 = AtomicU64::new(0);
+    static COMPOSITE_TSC: AtomicU64 = AtomicU64::new(0);
+    /// Per key (ring of N): desktop loop us, other tasks us, idle us, presents, composite us.
+    static CPU_HIST: [[AtomicU64; 5]; N] = [const { [const { AtomicU64::new(0) }; 5] }; N];
+    static LAST_HIST: [[AtomicU64; 4]; N] = [const { [const { AtomicU64::new(0) }; 4] }; N];
+    static LAST_N: AtomicUsize = AtomicUsize::new(0);
+    fn snap_runs() {
+        let c = CUR.load(Ordering::Relaxed);
+        for (i, r) in RUN_AT.iter().enumerate() {
+            let v = crate::sched::run_tsc_now(i);
+            r.store(v, Ordering::Relaxed);
+            RUN_D[c][i].store(v, Ordering::Relaxed);
+        }
+        D_T[c].store(now(), Ordering::Relaxed);
+        P_T[c].store(0, Ordering::Relaxed);
+        PRESENTS.store(0, Ordering::Relaxed);
+    }
+    /// The desktop loop composited and blitted the hosted window, starting at TSC `t0`.
+    pub fn composite_from(t0: u64) {
+        COMPOSITE_TSC.store(now().saturating_sub(t0), Ordering::Relaxed);
+    }
+    pub fn tsc() -> u64 {
+        now()
+    }
+    // Every frame the client presented and every paint of the hosted window
+    // between a key and the next one (11f-A): the first paint after the first
+    // draw is not always the one that shows the character. Offsets from the
+    // key's make code; two slots (by key parity), the older one is printed by
+    // task 0 once the next key came. KEYNO counts make codes since `keylat reset`.
+    const NE: usize = 12;
+    static KEYNO: AtomicU64 = AtomicU64::new(0);
+    static CUR: AtomicUsize = AtomicUsize::new(0);
+    static EV_KEY: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    static EV_T0: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    static EV_DONE: [AtomicU64; 2] = [const { AtomicU64::new(1) }; 2];
+    static EV_N: [[AtomicUsize; 2]; 2] = [const { [const { AtomicUsize::new(0) }; 2] }; 2];
+    static EV: [[[AtomicU64; NE]; 2]; 2] = [const { [const { [const { AtomicU64::new(0) }; NE] }; 2] }; 2];
+    /// Size of the drawing request being presented (PutImage, CopyArea), packed w << 16 | h.
+    static RECT: AtomicU64 = AtomicU64::new(0);
+    pub fn rect(w: usize, h: usize) {
+        RECT.store(((w as u64 & 0xffff) << 16) | (h as u64 & 0xffff), Ordering::Relaxed);
+    }
+    // The CPU ledger from the key's delivery to the LAST paint before the next
+    // key (normally the paint that shows the character), per slot.
+    static RUN_D: [[AtomicU64; NT]; 2] = [const { [const { AtomicU64::new(0) }; NT] }; 2];
+    static RUN_P: [[AtomicU64; NT]; 2] = [const { [const { AtomicU64::new(0) }; NT] }; 2];
+    static D_T: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    static P_T: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    fn ev(kind: usize) {
+        let c = CUR.load(Ordering::Relaxed);
+        let t0 = EV_T0[c].load(Ordering::Relaxed);
+        if t0 == 0 || EV_DONE[c].load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        let t = now();
+        let d = us(t0, t);
+        let i = EV_N[c][kind].fetch_add(1, Ordering::Relaxed);
+        if i < NE {
+            let r = if kind == 0 { RECT.swap(0, Ordering::Relaxed) } else { 0 };
+            EV[c][kind][i].store((d / 1000) | (r << 32), Ordering::Relaxed);
+        }
+        if kind == 1 && D_T[c].load(Ordering::Relaxed) != 0 {
+            for (i, r) in RUN_P[c].iter().enumerate() {
+                r.store(crate::sched::run_tsc_now(i), Ordering::Relaxed);
+            }
+            P_T[c].store(t, Ordering::Relaxed);
+        }
+    }
+    fn ev_line(c: usize) -> Option<alloc::string::String> {
+        let k = EV_KEY[c].load(Ordering::Relaxed);
+        if k == 0 || EV_DONE[c].swap(1, Ordering::Relaxed) != 0 {
+            return None;
+        }
+        let mut l = alloc::format!("[keylat-ev] key {k}:");
+        for (kind, name) in [(0usize, "frames"), (1, "paints")] {
+            l.push_str(&alloc::format!(" {name} at"));
+            let n = EV_N[c][kind].load(Ordering::Relaxed).min(NE);
+            for i in 0..n {
+                let v = EV[c][kind][i].load(Ordering::Relaxed);
+                let r = v >> 32;
+                if r != 0 {
+                    l.push_str(&alloc::format!(" {}({}x{})", v & 0xffff_ffff, r >> 16, r & 0xffff));
+                } else {
+                    l.push_str(&alloc::format!(" {}", v & 0xffff_ffff));
+                }
+            }
+            l.push_str(" ms;");
+        }
+        // The ledger, delivery to the last paint.
+        let (dt, pt) = (D_T[c].load(Ordering::Relaxed), P_T[c].load(Ordering::Relaxed));
+        if dt != 0 && pt > dt {
+            let win = us(dt, pt);
+            let mut top: [(usize, u64); 3] = [(0, 0); 3];
+            let (mut desk, mut other) = (0u64, 0u64);
+            for i in 0..NT {
+                let d = us(0, RUN_P[c][i].load(Ordering::Relaxed).saturating_sub(RUN_D[c][i].load(Ordering::Relaxed)));
+                if i == 0 {
+                    desk = d;
+                    continue;
+                }
+                other += d;
+                if let Some(k) = (0..3).min_by_key(|&k| top[k].1) {
+                    if d > top[k].1 {
+                        top[k] = (i, d);
+                    }
+                }
+            }
+            top.sort_by(|a, b| b.1.cmp(&a.1));
+            l.push_str(&alloc::format!(" delivery to last paint {} ms: desktop loop {}, others {} (", win / 1000, desk / 1000, other / 1000));
+            for (i, d) in top.iter().filter(|x| x.1 > 0) {
+                l.push_str(&alloc::format!("t{i} {} ", d / 1000));
+            }
+            l.push_str(&alloc::format!("), idle {} ms", win.saturating_sub(desk + other) / 1000));
+            let slot = LAST_N.fetch_add(1, Ordering::Relaxed) % N;
+            LAST_HIST[slot][0].store(win, Ordering::Relaxed);
+            LAST_HIST[slot][1].store(desk, Ordering::Relaxed);
+            LAST_HIST[slot][2].store(other, Ordering::Relaxed);
+            LAST_HIST[slot][3].store(win.saturating_sub(desk + other), Ordering::Relaxed);
+        }
+        Some(l)
+    }
+    /// The hosted window's pixels reached the screen (any paint, any key).
+    pub fn screen() {
+        ev(1);
     }
     /// A make code entered the scancode ring (any keyboard).
     pub fn key_in() {
         // A new key restarts the measurement, whatever stage the last one reached.
         STAGE.store(0, Ordering::Relaxed);
         at(1, 0);
+        let k = KEYNO.fetch_add(1, Ordering::Relaxed) + 1;
+        let c = (k % 2) as usize;
+        EV_DONE[c].store(1, Ordering::Relaxed); // not printed in time: lost
+        D_T[c].store(0, Ordering::Relaxed);
+        P_T[c].store(0, Ordering::Relaxed);
+        EV_N[c][0].store(0, Ordering::Relaxed);
+        EV_N[c][1].store(0, Ordering::Relaxed);
+        EV_KEY[c].store(k, Ordering::Relaxed);
+        EV_T0[c].store(now(), Ordering::Relaxed);
+        EV_DONE[c].store(0, Ordering::Relaxed);
+        CUR.store(c, Ordering::Relaxed);
+    }
+    /// A key is between its delivery to the X client and its first paint.
+    pub fn in_flight() -> bool {
+        matches!(STAGE.load(Ordering::Relaxed), 2..=4)
     }
     /// The X server handed the KeyPress to a client.
-    pub fn delivered() { at(2, 1) }
+    pub fn delivered() {
+        if at(2, 1) {
+            snap_runs();
+        }
+    }
+    /// Task 0, once a pass: print the event list of the key before the current
+    /// one, and of the current one once it is 2 s old.
+    pub fn flush() {
+        let c = CUR.load(Ordering::Relaxed);
+        if let Some(l) = ev_line(1 - c) {
+            crate::serial_println!("{l}");
+        }
+        let t0 = EV_T0[c].load(Ordering::Relaxed);
+        if t0 != 0 && us(t0, now()) > 2_000_000 {
+            if let Some(l) = ev_line(c) {
+                crate::serial_println!("{l}");
+            }
+        }
+    }
     /// A client read at least one event or reply.
-    pub fn read() { at(3, 2) }
+    pub fn read() {
+        let _ = at(3, 2);
+    }
     /// A client drew into a window (the hosted window is now dirty).
-    pub fn drawn() { at(4, 3) }
+    pub fn drawn() {
+        ev(0);
+        PRESENTS.fetch_add(1, Ordering::Relaxed);
+        let _ = at(4, 3);
+    }
     /// The desktop loop put the hosted window on the screen.
     pub fn painted() {
+        screen();
         if STAGE.compare_exchange(4, 0, Ordering::AcqRel, Ordering::Relaxed).is_err() {
             return;
         }
         let t: [u64; 5] = core::array::from_fn(|i| T[i].load(Ordering::Relaxed));
         let p = now();
         let g = [us(t[1], t[2]), us(t[2], t[3]), us(t[3], t[4]), us(t[4], p), us(t[1], p)];
-        let n = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = SEQ.fetch_add(1, Ordering::Relaxed);
+        let n = KEYNO.load(Ordering::Relaxed);
         let slot = HN.fetch_add(1, Ordering::Relaxed) % N;
         for (i, v) in g.iter().enumerate() {
             HIST[slot][i].store(*v, Ordering::Relaxed);
@@ -525,6 +716,41 @@ pub mod keylat {
         crate::serial_println!(
             "[keylat] key {n}: ring to X client {} us, X queue to client read {} us, read to first draw {} us, draw to screen {} us; total {} us",
             g[0], g[1], g[2], g[3], g[4]);
+        // [keylat-cpu]: the CPU ledger of the same key, delivery to paint.
+        let win = us(t[2], p);
+        let mut top: [(usize, u64); 4] = [(0, 0); 4];
+        let (mut desk, mut other) = (0u64, 0u64);
+        for i in 0..NT {
+            let d = crate::sched::run_tsc_now(i).saturating_sub(RUN_AT[i].load(Ordering::Relaxed));
+            if d == 0 {
+                continue;
+            }
+            let d = us(0, d);
+            if i == 0 {
+                desk = d;
+                continue;
+            }
+            other += d;
+            if let Some(k) = (0..4).min_by_key(|&k| top[k].1) {
+                if d > top[k].1 {
+                    top[k] = (i, d);
+                }
+            }
+        }
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        let idle = win.saturating_sub(desk + other);
+        let pres = PRESENTS.load(Ordering::Relaxed);
+        let comp = us(0, COMPOSITE_TSC.load(Ordering::Relaxed));
+        for (i, v) in [desk, other, idle, pres, comp].iter().enumerate() {
+            CPU_HIST[slot][i].store(*v, Ordering::Relaxed);
+        }
+        let mut tops = alloc::string::String::new();
+        for (i, d) in top.iter().filter(|x| x.1 > 0) {
+            tops.push_str(&alloc::format!(" t{i} {}", d / 1000));
+        }
+        crate::serial_println!(
+            "[keylat-cpu] key {n}: delivery to screen {} ms: desktop loop {} ms, other tasks {} ms (top:{tops}), CPU idle {} ms; X frames presented {pres}; composite {comp} us",
+            win / 1000, desk / 1000, other / 1000, idle / 1000);
     }
     /// `keylat`: medians and maxima of the last keys.
     pub fn summary() -> alloc::vec::Vec<alloc::string::String> {
@@ -538,6 +764,66 @@ pub mod keylat {
             let mut v: alloc::vec::Vec<u64> = (0..n).map(|k| HIST[k][i].load(Ordering::Relaxed)).collect();
             v.sort_unstable();
             out.push(alloc::format!("[keylat]   {name}: median {} us, max {} us", v[n / 2], v[n - 1]));
+        }
+        let cn = ["desktop loop on the CPU", "other tasks on the CPU", "CPU idle", "X frames presented", "composite"];
+        let mut l = alloc::format!("[keylat-cpu] delivery to screen, medians over {n} keys:");
+        for (i, name) in cn.iter().enumerate() {
+            let mut v: alloc::vec::Vec<u64> = (0..n).map(|k| CPU_HIST[k][i].load(Ordering::Relaxed)).collect();
+            v.sort_unstable();
+            let m = v[n / 2];
+            if i == 3 {
+                l.push_str(&alloc::format!(" {name} {m};"));
+            } else if i == 4 {
+                l.push_str(&alloc::format!(" {name} {m} us"));
+            } else {
+                l.push_str(&alloc::format!(" {name} {} ms;", m / 1000));
+            }
+        }
+        out.push(l);
+        // The desktop loop's composite of the hosted window per paint (11f-A):
+        // it ran on the BSP with chrome's threads and was ~5-9 ms per paint
+        // while the window was 800x600 and a key changed one line of it.
+        {
+            let mut v: alloc::vec::Vec<u64> = (0..n).map(|k| CPU_HIST[k][4].load(Ordering::Relaxed)).collect();
+            v.sort_unstable();
+            let m = v[n / 2];
+            out.push(alloc::format!("[keylat] composite of the hosted window for a key: median {m} us -> {} (limit 1500 us)",
+                if m <= 1500 { "OK" } else { "FAILED" }));
+        }
+        if let Some(l) = ev_line(CUR.load(Ordering::Relaxed)) {
+            out.insert(0, l);
+        }
+        let ln = LAST_N.load(Ordering::Relaxed).min(N);
+        if ln > 0 {
+            let mut l = alloc::format!("[keylat-cpu] delivery to the last paint, medians over {ln} keys:");
+            for (i, name) in ["window", "desktop loop", "other tasks", "CPU idle"].iter().enumerate() {
+                let mut v: alloc::vec::Vec<u64> = (0..ln).map(|k| LAST_HIST[k][i].load(Ordering::Relaxed)).collect();
+                v.sort_unstable();
+                l.push_str(&alloc::format!(" {name} {} ms;", v[ln / 2] / 1000));
+            }
+            out.push(l);
+        }
+        out.extend(crate::sched::deskwatch::cpu_lines());
+        {
+            let b = |k: usize| (us(0, crate::sched::IDLE_BY[k].load(Ordering::Relaxed)) / 1000, crate::sched::IDLE_BY_N[k].load(Ordering::Relaxed));
+            let ((tm, tn), (im, inn)) = (b(0), b(1));
+            // The marker of the epoll/poll wake (11f-A): idle that only the tick
+            // ended while a key was on its way, per key. Before: 39-52 ms a key.
+            let keys = KEYNO.load(Ordering::Relaxed).max(1);
+            out.push(alloc::format!("[keylat] BSP idle while a key was on its way (delivery to first paint): {} ms; ended by the timer tick {tm} ms ({tn} halts, {:.1} ms a key -> {}, limit 5), by another interrupt {im} ms ({inn} halts)",
+                tm + im, tm as f64 / keys as f64, if tm <= 5 * keys { "OK" } else { "FAILED" }));
+            let mut l = alloc::string::String::from("[keylat] sleepers the tick woke meanwhile, by system call:");
+            for (k, name) in crate::sched::TICK_WAKE_NAMES.iter().enumerate() {
+                l.push_str(&alloc::format!(" {name} {}", crate::sched::TICK_WAKES[k].load(Ordering::Relaxed)));
+            }
+            out.push(l);
+            // Reported only: a wait whose ready descriptor has no wake key (a
+            // pipe, an inet socket) still finds it at its re-check; the key
+            // path itself is judged by the tick-ended idle above.
+            let late = crate::ring3::POLL_LATE.load(Ordering::Relaxed);
+            out.push(alloc::format!(
+                "[keylat] epoll/poll waits that found a descriptor ready only after sleeping: {late} in {keys} keys ({:.1} a key)",
+                late as f64 / keys as f64));
         }
         out.push(wake_line());
         out
@@ -555,8 +841,23 @@ pub mod keylat {
     pub fn reset() {
         HN.store(0, Ordering::Relaxed);
         STAGE.store(0, Ordering::Relaxed);
+        KEYNO.store(0, Ordering::Relaxed);
+        LAST_N.store(0, Ordering::Relaxed);
+        for c in 0..2 {
+            EV_DONE[c].store(1, Ordering::Relaxed);
+            EV_KEY[c].store(0, Ordering::Relaxed);
+        }
         for b in crate::sched::WAKE_HIST.iter() {
             b.store(0, Ordering::Relaxed);
+        }
+        crate::sched::deskwatch::cpu_reset();
+        for k in 0..5 {
+            crate::sched::TICK_WAKES[k].store(0, Ordering::Relaxed);
+        }
+        crate::ring3::POLL_LATE.store(0, Ordering::Relaxed);
+        for k in 0..2 {
+            crate::sched::IDLE_BY[k].store(0, Ordering::Relaxed);
+            crate::sched::IDLE_BY_N[k].store(0, Ordering::Relaxed);
         }
     }
 }
@@ -1567,6 +1868,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             if detail == 2 && width > 0 && height > 0 {
                 put_image(c, draw, dst_x, dst_y, width, height, data);
             }
+            keylat::rect(width, height);
+            damage_req(draw, dst_y, height);
             trace(format_args!("PutImage draw={draw:#x} fmt={detail} {width}x{height} @({dst_x},{dst_y})"));
             // Verify: sample the four quadrant centres in the rendered window.
             if let Some(win) = c.windows.iter().find(|w| w.id == draw) {
@@ -1703,6 +2006,8 @@ fn handle_request(c: &mut XConn, opcode: u8, detail: u8, req: &[u8]) {
             let h = ru16(c, req, 26) as i32;
             copy_area(c, src, dst, sx, sy, dx, dy, w, h);
             trace(format_args!("CopyArea src={src:#x} dst={dst:#x} {w}x{h} @({dx},{dy})"));
+            keylat::rect(w as usize, h as usize);
+            damage_req(dst, dy, h.max(0) as usize);
             present(c, dst);
         }
         // GetSelectionOwner(23): selection@4 -> the window SetSelectionOwner named,
@@ -2539,7 +2844,35 @@ fn present(c: &XConn, id: u32) {
 /// browser's place in the frame (a white frame with one line of text), clicks
 /// were sent to the tooltip, and a maximise resized the tooltip (BUG-097).
 /// `c` is the connection being processed (it is out of the table).
+// Damage of the retained window (11f-A): the rows that changed since the
+// desktop loop last composited it. A PutImage or CopyArea onto the main window
+// (no popup open) names its rows; anything else (a fill, a move, a popup, a
+// new buffer) makes it full. `take_damage` hands it to the desktop loop.
+static REQ_RECT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DMG_LO: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+static DMG_HI: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DMG_FULL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// The drawing request about to be presented touches rows y..y+h of `draw`.
+fn damage_req(draw: u32, y: i32, h: usize) {
+    let y0 = y.clamp(0, 0xffff) as u64;
+    let y1 = (y as i64 + h as i64).clamp(0, 0xffff) as u64;
+    REQ_RECT.store(((draw as u64) << 32) | (y0 << 16) | y1, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rows `lo..hi` of the retained window changed since the last call; None: all of it.
+pub fn take_damage() -> Option<(usize, usize)> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let lo = DMG_LO.swap(u32::MAX, Relaxed);
+    let hi = DMG_HI.swap(0, Relaxed);
+    if DMG_FULL.swap(false, Relaxed) || lo >= hi {
+        return None;
+    }
+    Some((lo as usize, hi as usize))
+}
+
 fn compose_windowed(c: &XConn) {
+    let req = REQ_RECT.swap(0, core::sync::atomic::Ordering::Relaxed);
     let t = XCONNS.lock();
     let all = c.windows.iter().chain(t.iter().flatten().flat_map(|x| x.windows.iter()))
         .filter(|w| w.mapped && w.w > 1 && w.h > 1 && w.buf.len() == w.w as usize * w.h as usize);
@@ -2548,13 +2881,28 @@ fn compose_windowed(c: &XConn) {
     };
     let (mw, mh) = (main.w as usize, main.h as usize);
     let mut r = RETAINED_WINDOW.lock();
+    let mut band = req != 0 && (req >> 32) as u32 == main.id && !all.clone().any(|w| w.id != main.id);
     match r.as_mut() {
         Some((w, h, buf)) if buf.len() == main.buf.len() => {
+            band &= *w == mw && *h == mh && RETAINED_ID.load(core::sync::atomic::Ordering::Relaxed) == main.id;
             *w = mw;
             *h = mh;
             buf.copy_from_slice(&main.buf);
         }
-        _ => *r = Some((mw, mh, main.buf.clone())),
+        _ => {
+            band = false;
+            *r = Some((mw, mh, main.buf.clone()))
+        }
+    }
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        let (lo, hi) = (((req >> 16) & 0xffff) as u32, (req & 0xffff) as u32);
+        if band && lo < hi {
+            DMG_LO.fetch_min(lo, Relaxed);
+            DMG_HI.fetch_max(hi, Relaxed);
+        } else if !band {
+            DMG_FULL.store(true, Relaxed);
+        }
     }
     if let Some((_, _, buf)) = r.as_mut() {
         for p in all.filter(|w| w.id != main.id) {

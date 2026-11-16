@@ -1,0 +1,10 @@
+# serialcost 8 ([serial-cost]), KVM, browser image without chrome, scmd.py (boot, serial command, stop)
+## before: 89d4cba (marker only), smp 4 and smp 2
+[serial-cost] 8107 B of console lines: drained in 254 ms, the BSP spent 254 ms on them (32199 us aa KiB; limit 1000 with APs), sent by APs 0 B -> FAILED
+[serial-cost] 8107 B of console lines: drained in 249 ms, the BSP spent 249 ms on them (31562 us aa KiB; limit 1000 with APs), sent by APs 0 B -> FAILED
+## after: a344592, smp 2 (FAILED is the fault of the test: its wait ran out in ~2 ms while the AP still sent; fixed in 4e681ba)
+[serial-cost] 8107 B of console lines: drained in 5 ms, the BSP spent 5 ms on them (671 us a KiB; limit 1000 with APs), sent by APs 102 B -> FAILED
+## final: 4e681ba (544d5a2 + the fixed wait of serialcost) (public image; the verdict of the earlier after-runs was wrong: the wait loop ran out in ~2 ms, see the commit), smp 4, 2, 1
+[serial-cost] 8107 B of console lines: drained in 618 ms, the BSP spent 0 ms on them (62 us a KiB; limit 1000 with APs), sent by APs 8129 B -> OK
+[serial-cost] 8107 B of console lines: drained in 608 ms, the BSP spent 0 ms on them (84 us a KiB; limit 1000 with APs), sent by APs 8129 B -> OK
+[serial-cost] 8107 B of console lines: drained in 574 ms, the BSP spent 325 ms on them (41066 us a KiB; limit 1000 with APs), sent  by APs 0 B -> SKIP (no application processor takes kernel work)

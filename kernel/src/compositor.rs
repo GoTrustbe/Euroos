@@ -249,6 +249,35 @@ pub fn draw_window(fb: &FrameBuffer, win: &Window) {
 /// Redraw ONLY the body (content) of a window — for cheap live updates
 /// (e.g. the System window per clock tick) without redrawing the drop shadow
 /// (which would otherwise stack). First clears the old text and then draws the content.
+/// The hosted X window's rows `y0..y1` (its own coordinates) onto its frame,
+/// nothing else: what a client's drawing request changed (11f-A; the whole
+/// body was composited for every frame, ~5-9 ms on the BSP for a key that
+/// changed one line). Returns the screen rectangle to present, or None if the
+/// window is not an X client or the rows are outside it.
+pub fn draw_xclient_rows(fb: &FrameBuffer, win: &Window, y0: usize, y1: usize) -> Option<(usize, usize, usize, usize)> {
+    if win.app != crate::suite_ui::SuiteApp::XClient {
+        return None;
+    }
+    let (bx, by, bw, bh) = window_body_rect(win);
+    let mut out = None;
+    fb.set_clip(win.x, win.y, win.w, win.h);
+    crate::xserver::with_front_window(|xw, xh, buf| {
+        let ox = bx + bw.saturating_sub(xw) / 2;
+        let oy = by + bh.saturating_sub(xh) / 2;
+        let cols = xw.min(bw);
+        let end = y1.min(xh).min(bh);
+        if y0 >= end || cols == 0 {
+            return;
+        }
+        for sy in y0..end {
+            fb.put_row(ox, oy + sy, &buf[sy * xw..sy * xw + cols]);
+        }
+        out = Some((ox, oy + y0, cols, end - y0));
+    });
+    fb.clear_clip();
+    out
+}
+
 pub fn draw_window_body(fb: &FrameBuffer, win: &Window) {
     // BUG-058: nothing an app draws leaves its window. The apps lay themselves
     // out from the window size with unchecked arithmetic in places; at the
@@ -286,13 +315,9 @@ fn draw_window_body_unclipped(fb: &FrameBuffer, win: &Window) {
             // Centre the X window within the body if it is smaller; clip if larger.
             let ox = bx + bw.saturating_sub(xw) / 2;
             let oy = by + bh.saturating_sub(xh) / 2;
+            let cols = xw.min(bw);
             for sy in 0..xh.min(bh) {
-                let row = &buf[sy * xw..sy * xw + xw];
-                for (sx, &v) in row.iter().enumerate() {
-                    if sx >= bw { break; }
-                    let c = Color::rgb(((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8);
-                    fb.put_pixel(ox + sx, oy + sy, c);
-                }
+                fb.put_row(ox, oy + sy, &buf[sy * xw..sy * xw + cols]);
             }
         });
         return;

@@ -1,0 +1,52 @@
+# boot-time.py, public images, KVM 2 vCPU 2 GiB, pin 4-5 (siblings idle), alternating the final 544d5a2 (f3) and e4b8ba4 (b0 = code of 732e5f5, val-runs/img/v2-pub.img); desktop = s from QEMU start to interactive loop started. Other teams ran TCG guests on other CPUs meanwhile.
+f3-1: kernel-entry 1.94s desktop 2.71s
+b0-1: kernel-entry 2.12s desktop 2.96s
+f3-2: kernel-entry 1.65s desktop 2.43s
+b0-2: kernel-entry 1.68s desktop 2.44s
+f3-3: kernel-entry 1.54s desktop 2.28s
+b0-3: kernel-entry 1.63s desktop 2.39s
+f3-4: kernel-entry 1.99s desktop 2.78s
+b0-4: kernel-entry 1.46s desktop 2.23s
+f3-5: kernel-entry 1.67s desktop 2.44s
+b0-5: kernel-entry 1.58s desktop 2.35s
+f3-6: kernel-entry 1.90s desktop 2.68s
+b0-6: kernel-entry 1.84s desktop 2.66s
+f3-7: kernel-entry 1.85s desktop 2.62s
+b0-7: kernel-entry 1.96s desktop 2.72s
+f3-8: kernel-entry 1.57s desktop 2.35s
+b0-8: kernel-entry 1.65s desktop 2.43s
+f3-9: kernel-entry 1.71s desktop 2.49s
+b0-9: kernel-entry 1.52s desktop 2.41s
+f3-10: kernel-entry 1.97s desktop 2.73s
+b0-10: kernel-entry 1.54s desktop 2.30s
+f3: median 2.56 s (min 2.28, max 2.78), n=10
+b0: median 2.42 s (min 2.23, max 2.96), n=10
+
+# the same on 049ed8f (boot-time.out)
+f: median 2.70 s (min 2.42, max 3.00), n=10
+b0: median 2.66 s (min 2.28, max 3.08), n=10
+
+# [fair] hogtest 5 10 8 and [serial-cost], public images, KVM 4 vCPU, no X client (scmd.py)
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 61 % (desktop task 55 %, its glibc processes 6 %, hogs 39 %, other tasks 0 %) round 1/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 66 % (desktop task 60 %, its glibc processes 7 %, hogs 34 %, other tasks 0 %) round 2/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 69 % (desktop task 62 %, its glibc processes 7 %, hogs 31 %, other tasks 0 %) round 3/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 66 % (desktop task 59 %, its glibc processes 7 %, hogs 34 %, other tasks 0 %) round 4/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 69 % (desktop task 62 %, its glibc processes 7 %, hogs 31 %, other tasks 0 %) round 5/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 68 % (desktop task 61 %, its glibc processes 7 %, hogs 32 %, other tasks 0 %) round 6/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 66 % (desktop task 60 %, its glibc processes 7 %, hogs 34 %, other tasks 0 %) round 7/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 70 % (desktop task 63 %, its glibc processes 7 %, hogs 30 %, other tasks 0 %) round 8/10 ->> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 65 % (desktop task 58 %, its glibc processes 7 %, hogs 35 %, other tasks 0 %) round 9/10 -> OK ✓
+f3: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 70 % (desktop task 63 %, its glibc processes 7 %, hogs 30 %, other tasks 0 %) round 10/10 -> OK ✓
+f3: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.3 s, worst 0.3 s (limit 12.6 s), lowest task 0 share 61 % -> OK ✓
+f3: [serial-cost] 8107 B of console lines: drained in 2 ms, the BSP spent 2 ms on them (360 us a KiB; limit 1000 with APs), sent by APs 48 B -> FAILED
+b0: [fair] hogtest 5 + churn proc 8: 0.5 s, task 0 share 50 % (desktop task 45 %, its glibc processes 5 %, hogs 30 %, other tasks 20 %)) round 1/10 -> FAILED
+b0: [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 24 %, other tasks 24 %) round 2/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 52 % (desktop task 47 %, its glibc processes 5 %, hogs 26 %, other tasks 22 %) round 3/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 54 % (desktop task 49 %, its glibc processes 5 %, hogs 26 %, other tasks 20 %) round 4/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.3 s,  task 0 share 55 % (desktop task 50 %, its glibc processes 5 %, hogs 27 %, other tasks 18 %) round 5/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 51 % (desktop task 46 %, its glibc processes 5 %, hogs 29 %, other tasks 20 %) round 6/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 59 % (desktop task 53 %, its glibc processes 6 %, hogs 21 %, other tasks 19 %) round 7/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.4 s, task 0 share 53 % (desktop task 47 %, its glibc processes 5 %, hogs 27 %, other tasks 20 %) round 8/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 55 % (desktop task 49 %, its glibc processes 5 %, hogs 27 %, other tasks 19 %) round 9/10 -> OK ✓
+b0: [fair] hogtest 5 + churn proc 8: 0.3 s, task 0 share 56 % (desktop task 50 %, its glibc processes 5 %, hogs 26 %, other tasks 19 %) round 10/10 -> OK ✓
+b0: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.5 s (limit 12.6 s), lowest task 0 shaare 50 % -> FAILED

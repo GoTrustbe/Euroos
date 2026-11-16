@@ -86,6 +86,130 @@ pub fn take_tx_stats() -> (u64, u64) {
     (TX_BUSY_SKIPS.load(Ordering::Relaxed), c * 10_000 / per)
 }
 
+/// `serialcost` ([serial-cost], 11f-A): what the console output costs the
+/// BSP, the one CPU every ring-3 thread runs on while `smpuser` is off. Queues
+/// `kb` KiB of lines, lets the queue drain (kicking it like the desktop loop
+/// does), and charges the run time of the desktop loop and of the sender task
+/// in that stretch. Under a hypervisor every transmitter load is an exit to the
+/// host's device model; measured ~40 us a byte on the BSP while a browser
+/// typed (docs/proof/11f-keylat). With application processors taking kernel
+/// work the BSP should pay next to nothing: limit 1 ms per KiB; SKIP without
+/// APs (one CPU: the cost is unavoidable there).
+pub fn cost_test(kb: usize) -> alloc::vec::Vec<alloc::string::String> {
+    let kb = kb.clamp(1, 64);
+    let tx = TX_TASK.load(Ordering::Relaxed);
+    let run = |t: usize| if t == usize::MAX { 0 } else { crate::sched::run_tsc_now(t) };
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    // Let what is queued now go first.
+    for _ in 0..200 {
+        if TX_PENDING.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        kick();
+        crate::sched::sleep_ticks(1);
+        crate::sched::yield_now();
+    }
+    let (r0, rt) = (run(0), run(tx));
+    let (ap0, t0) = (AP_SENT.load(Ordering::Relaxed), unsafe { core::arch::x86_64::_rdtsc() });
+    let line = "[serial-cost] filler 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789abcdefghijklmnopqrstuvwxyz";
+    let lines = kb * 1024 / (line.len() + 1);
+    for _ in 0..lines {
+        crate::serial_println!("{line}");
+    }
+    // Wait by the clock, halting between looks: the desktop task that runs
+    // this command is the CPU's fallback task, so a sleep-and-yield returned
+    // at once on an idle machine and 3 000 of them ran out in ~2 ms while an
+    // AP was still sending (the verdict then said FAILED).
+    let mut drained = true;
+    loop {
+        kick();
+        if TX_PENDING.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        if unsafe { core::arch::x86_64::_rdtsc() } - t0 > 3000 * per {
+            drained = false;
+            break;
+        }
+        crate::sched::desktop_idle_hlt();
+    }
+    let wall = (unsafe { core::arch::x86_64::_rdtsc() } - t0) * 10 / per;
+    let bsp = (run(0) - r0 + run(tx) - rt) * 10_000 / per; // us
+    let bytes = (lines * (line.len() + 1)) as u64;
+    let aps = crate::kwork::accepting() && !crate::kwork::online_aps().is_empty();
+    let per_kb = bsp * 1024 / bytes.max(1);
+    let verdict = if !aps {
+        "SKIP (no application processor takes kernel work)"
+    } else if per_kb <= 1000 && drained {
+        "OK"
+    } else {
+        "FAILED"
+    };
+    let l = alloc::format!(
+        "[serial-cost] {bytes} B of console lines: drained in {wall} ms, the BSP spent {} ms on them ({per_kb} us a KiB; limit 1000 with APs), sent by APs {} B -> {verdict}",
+        bsp / 1000, AP_SENT.load(Ordering::Relaxed) - ap0);
+    crate::serial_println!("{l}");
+    alloc::vec![l]
+}
+
+/// Bytes an application processor sent (see `ap_drain`).
+static AP_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// A drain job is queued or running on an AP; the BSP's sender stays away.
+static AP_DRAIN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// When the drain in flight was queued (TSC): the BSP's sender takes over if
+/// an AP has not finished it within ten ticks.
+static AP_DRAIN_SINCE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// The AP that sends (its core index + 1; 0 = not chosen yet).
+static AP_CPU: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Queue a drain of the console on an application processor, if one takes
+/// kernel work. True if a drain is (now) on its way.
+fn ap_drain_submit() -> bool {
+    if EMERGENCY.load(Ordering::Relaxed) || !crate::kwork::accepting() {
+        return false;
+    }
+    if AP_DRAIN.swap(true, Ordering::AcqRel) {
+        return true; // the one in flight sends this too
+    }
+    AP_DRAIN_SINCE.store(unsafe { core::arch::x86_64::_rdtsc() }, Ordering::Relaxed);
+    let mut cpu = AP_CPU.load(Ordering::Relaxed);
+    if cpu == 0 {
+        // The last online AP: the first ones are where kwork's parallel jobs start.
+        cpu = crate::kwork::online_aps().last().map(|c| c + 1).unwrap_or(0);
+        AP_CPU.store(cpu, Ordering::Relaxed);
+    }
+    if cpu == 0 || crate::kwork::submit(cpu - 1, alloc::boxed::Box::new(ap_drain)).is_err() {
+        AP_DRAIN.store(false, Ordering::Release);
+        return false;
+    }
+    true
+}
+
+/// The job: send the queue, one load at a time (interrupts off only for the
+/// load, as `drain_load` always does), waiting for the transmitter with a
+/// pause between status reads. Bounded to ~20 ms so other kernel work on that
+/// AP is not held up; what is left goes with the next kick.
+fn ap_drain() {
+    let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+    let start = unsafe { core::arch::x86_64::_rdtsc() };
+    loop {
+        match drain_load() {
+            0 => break,
+            TX_BUSY | TX_OTHER => {
+                for _ in 0..200 {
+                    core::hint::spin_loop();
+                }
+            }
+            n => {
+                AP_SENT.fetch_add(n as u64, Ordering::Relaxed);
+            }
+        }
+        if unsafe { core::arch::x86_64::_rdtsc() } - start > 2 * per {
+            break;
+        }
+    }
+    AP_DRAIN.store(false, Ordering::Release);
+}
+
 /// The longest time (ms) the queue was not empty since the last call.
 pub fn take_queue_delay_ms() -> u64 {
     let c = TX_BUSY_MAX.swap(0, Ordering::Relaxed);
@@ -121,10 +245,15 @@ pub fn deferred() -> (bool, u64, u64, usize) {
 /// should not wait for the sender to get a turn), then wake the sender for
 /// whatever is left.
 pub fn kick() {
+    // 11f-A: an application processor that takes kernel work sends the queue
+    // instead, and the BSP (every ring-3 thread's CPU) pays nothing for it.
+    if TX_PENDING.load(Ordering::Relaxed) > 0 && ap_drain_submit() {
+        return;
+    }
     let mut sent = 0usize;
     while sent < 256 && TX_PENDING.load(Ordering::Relaxed) > 0 {
         let n = drain_load();
-        if n == 0 || n == TX_BUSY {
+        if n == 0 || n == TX_BUSY || n == TX_OTHER {
             break;
         }
         sent += n;
@@ -166,6 +295,8 @@ pub fn resume() {
 
 /// `drain_load`: the transmitter has not taken the last load yet.
 const TX_BUSY: usize = usize::MAX;
+/// `drain_load`: another sender (another CPU) is at the port.
+const TX_OTHER: usize = usize::MAX - 1;
 
 /// Send one transmitter-load from the queue. Returns the bytes sent (0: the
 /// queue is empty, `TX_BUSY`: the transmitter is still busy). Interrupts are
@@ -188,7 +319,7 @@ fn drain_load() -> usize {
             return 0;
         }
         if TX_PORT.swap(true, Ordering::Acquire) {
-            return 1; // another sender is at the port
+            return TX_OTHER; // another sender is at the port
         }
         let t0 = unsafe { core::arch::x86_64::_rdtsc() };
         // SAFETY: a read of the line status register.
@@ -223,12 +354,24 @@ static TX_PORT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool:
 /// (and is woken earlier by `kick`), one tick when the transmitter is busy.
 extern "C" fn tx_task() -> ! {
     loop {
+        // An AP sends the queue (11f-A): look again in two ticks, the fallback
+        // for output nobody kicks.
+        let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
+        let late = AP_DRAIN.load(Ordering::Acquire)
+            && unsafe { core::arch::x86_64::_rdtsc() }.saturating_sub(AP_DRAIN_SINCE.load(Ordering::Relaxed)) > 10 * per;
+        // Output that came after the last kick goes to the AP as well: the
+        // sender woke for it on the BSP and paid 18-36 ms in a key's window.
+        if !late && (AP_DRAIN.load(Ordering::Acquire) || (TX_PENDING.load(Ordering::Relaxed) > 0 && ap_drain_submit())) {
+            crate::sched::sleep_ticks(2);
+            crate::sched::yield_now();
+            continue;
+        }
         match drain_load() {
             0 => {
                 crate::sched::sleep_ticks(2);
                 crate::sched::yield_now();
             }
-            TX_BUSY => {
+            TX_BUSY | TX_OTHER => {
                 crate::sched::sleep_ticks(1);
                 crate::sched::yield_now();
             }
