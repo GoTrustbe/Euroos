@@ -21,6 +21,42 @@ const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 /// A non-present PTE that holds a swap slot (see swapmgr): bit 9, slot in bits 12+.
 const SWAPPED_PTE: u64 = 1 << 9;
 
+/// ASLR (docs/design/ASLR.md, section 2.1): the zone above the kernel's
+/// identity map where the arena of a process can lie, PML4 slots 16..23
+/// (8..12 TiB). Nothing is placed there yet (step S4); the arena functions
+/// and the page-fault dispatch already handle it (step S2).
+pub const ARENA_ZONE_BASE: u64 = 8 << 40;
+pub const ARENA_ZONE_END: u64 = 12 << 40;
+
+/// Can an arena lie at `addr`: under PML4[0] (every arena today, at its
+/// physical address) or in the arena zone. The page-fault dispatch and the
+/// arena walks go by this instead of `addr >> 39 == 0` (ASLR S2).
+#[inline]
+pub fn in_arena_zone(addr: u64) -> bool {
+    addr >> 39 == 0 || (ARENA_ZONE_BASE..ARENA_ZONE_END).contains(&addr)
+}
+
+/// The PML4 slots an arena's tables can hang under: 0 and the arena zone.
+fn arena_pml4_slots() -> impl Iterator<Item = usize> {
+    core::iter::once(0usize).chain((ARENA_ZONE_BASE >> 39) as usize..(ARENA_ZONE_END >> 39) as usize)
+}
+
+/// The PDPT under which the arena address `virt` of `pml4` lies (PML4[0] or a
+/// slot of the arena zone), when there is one.
+///
+/// # Safety
+/// `pml4` is an identity-mapped table.
+unsafe fn arena_pdpt(pml4: u64, virt: u64) -> Option<u64> {
+    if !in_arena_zone(virt) {
+        return None;
+    }
+    let e4 = (pml4 as *const u64).add(((virt >> 39) & 0x1FF) as usize).read_volatile();
+    if e4 & PRESENT == 0 {
+        return None;
+    }
+    Some(e4 & ADDR_MASK)
+}
+
 /// The shared high PDPT (PML4[1] → 512 GiB..1 TiB), set up at boot. Every
 /// process PML4 shares the same PDPT so that guarded kernel stacks (A2) + high
 /// MMIO BARs are valid in ALL address spaces.
@@ -340,7 +376,8 @@ pub fn try_build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64)
 /// USER|HUGE with NO NX — W^X is deliberately relaxed for this compatibility
 /// sandbox (the arena is still isolated: only its blocks carry the USER bit).
 /// Map a user arena of `nblocks` 2 MiB huge blocks at `virt_arena` -> `phys_arena`
-/// into an address space whose PDPT is at `pdpt`, WHEREVER the range lies.
+/// into the address space `pml4`, WHEREVER the range lies: under PML4[0] or in
+/// the arena zone (ASLR S2).
 ///
 /// Every filler used to assume the arena fits the first 1 GiB window: one PD,
 /// indices 0..512, blocks past the boundary silently skipped. The tail of an
@@ -353,7 +390,7 @@ pub fn try_build_address_space_rwx(falloc: &mut FrameAllocator, arena_phys: u64)
 ///
 /// Returns false when a needed table frame could not be allocated.
 pub fn map_user_arena(
-    pdpt: u64,
+    pml4: u64,
     virt_arena: u64,
     phys_arena: u64,
     nblocks: u64,
@@ -361,24 +398,39 @@ pub fn map_user_arena(
 ) -> bool {
     // SAFETY: identity-mapped tables; single-threaded during address-space build.
     unsafe {
-        let pdptp = pdpt as *mut u64;
         for b in 0..nblocks {
             let virt = virt_arena + b * MIB2;
+            if !in_arena_zone(virt) {
+                return false;
+            }
             let i3 = ((virt >> 30) & 0x1FF) as usize;
             let i2 = ((virt >> 21) & 0x1FF) as usize;
+            // ASLR S2: above PML4[0] nothing but the arena is mapped, so a
+            // missing PDPT or PD there is an empty table, not the identity map.
+            let hi = virt >> 39 != 0;
+            let e4p = (pml4 as *mut u64).add(((virt >> 39) & 0x1FF) as usize);
+            if e4p.read_volatile() & PRESENT == 0 {
+                if !hi {
+                    return false; // PML4[0] is the kernel: always there
+                }
+                let Some(t) = get_pd() else { return false };
+                core::ptr::write_bytes(t as *mut u8, 0, 4096);
+                e4p.write_volatile(t | PRESENT | WRITABLE | USER);
+            }
+            let pdptp = (e4p.read_volatile() & ADDR_MASK) as *mut u64;
             let e3 = pdptp.add(i3).read_volatile();
             let pd = if e3 & PRESENT != 0 && e3 & HUGE == 0 {
-                e3 & 0x000f_ffff_ffff_f000
+                e3 & ADDR_MASK
             } else {
                 // A 1 GiB huge entry (or an empty slot): split into a PD of 2 MiB
-                // identity supervisor entries, then hang it USER-reachable - the
-                // USER bit on intermediate tables gates nothing by itself, the
-                // leaf entries decide.
+                // identity supervisor entries (empty above PML4[0]), then hang it
+                // USER-reachable - the USER bit on intermediate tables gates
+                // nothing by itself, the leaf entries decide.
                 let Some(pd) = get_pd() else { return false };
                 let pdp = pd as *mut u64;
                 for i in 0..512u64 {
-                    pdp.add(i as usize)
-                        .write_volatile(((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE);
+                    let e = if hi { 0 } else { ((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE };
+                    pdp.add(i as usize).write_volatile(e);
                 }
                 pdptp.add(i3).write_volatile(pd | PRESENT | WRITABLE | USER);
                 pd
@@ -412,11 +464,9 @@ fn rwx_big_inner(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64, str
     if nblocks <= 1 {
         return Ok(pml4);
     }
-    // SAFETY: identity-mapped tables we just built; single-threaded here.
-    let mapped = unsafe {
-        let pdpt = (*(pml4 as *const u64)) & 0x000f_ffff_ffff_f000;
+    let mapped = {
         let mut get_pd = || falloc.allocate().ok();
-        map_user_arena(pdpt, arena_phys, arena_phys, nblocks, &mut get_pd)
+        map_user_arena(pml4, arena_phys, arena_phys, nblocks, &mut get_pd)
     };
     if !mapped {
         if strict {
@@ -675,7 +725,7 @@ pub fn guard_page_unmapped() -> bool {
 /// Find the 4 KiB PT that maps the USER arena in `pml4` (None for a HUGE/old mapping).
 pub fn arena_pt(pml4: u64, virt_arena: u64) -> Option<u64> {
     unsafe {
-        let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
+        let pdpt = arena_pdpt(pml4, virt_arena)?;
         let (g, idx) = arena_slots(virt_arena);
         let e3 = (pdpt as *const u64).add(g).read_volatile();
         if e3 & PRESENT == 0 || e3 & HUGE != 0 {
@@ -1013,7 +1063,7 @@ pub fn fill_remap_tables_multiblock(pml4: u64, pdpt: u64, pd: u64,
             }
             f
         };
-        if !map_user_arena(pdpt, virt_arena, phys_arena, nblocks, &mut get_pd) {
+        if !map_user_arena(pml4, virt_arena, phys_arena, nblocks, &mut get_pd) {
             crate::serial_println!("[paging] multiblock map_user_arena: pool frame failed");
         }
     }
@@ -1061,18 +1111,40 @@ pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, nb
         }
         for b in 0..nblocks {
             let virt = virt_arena + b * MIB2;
+            if !in_arena_zone(virt) {
+                return false;
+            }
             let i3 = ((virt >> 30) & 0x1FF) as usize;
             let i2 = ((virt >> 21) & 0x1FF) as usize;
-            let e3 = pdptp.add(i3).read_volatile();
+            // ASLR S2: an arena above PML4[0] hangs under a PDPT of its own
+            // with nothing else in it; under PML4[0] the GiB keeps the
+            // identity map around the arena.
+            let hi = virt >> 39 != 0;
+            let lpdpt = if hi {
+                let e4p = pml4p.add(((virt >> 39) & 0x1FF) as usize);
+                let e4 = e4p.read_volatile();
+                if e4 & PRESENT != 0 {
+                    (e4 & ADDR_MASK) as *mut u64
+                } else {
+                    let Some(t) = crate::procpool::alloc() else { return false };
+                    core::ptr::write_bytes(t as *mut u8, 0, 4096);
+                    e4p.write_volatile(t | PRESENT | WRITABLE | USER);
+                    t as *mut u64
+                }
+            } else {
+                pdptp
+            };
+            let e3 = lpdpt.add(i3).read_volatile();
             let wpd = if e3 & PRESENT != 0 && e3 & HUGE == 0 {
                 e3 & ADDR_MASK
             } else {
                 let Some(npd) = crate::procpool::alloc() else { return false };
                 let np = npd as *mut u64;
                 for i in 0..512u64 {
-                    np.add(i as usize).write_volatile(((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE);
+                    let e = if hi { 0 } else { ((i3 as u64) * GIB + i * MIB2) | PRESENT | WRITABLE | HUGE };
+                    np.add(i as usize).write_volatile(e);
                 }
-                pdptp.add(i3).write_volatile(npd | PRESENT | WRITABLE | USER);
+                lpdpt.add(i3).write_volatile(npd | PRESENT | WRITABLE | USER);
                 npd
             };
             let Some(pt) = crate::procpool::alloc() else {
@@ -1091,14 +1163,8 @@ pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, nb
 /// The entry of the lazy arena page table for `virt` under `pml4`, when there
 /// is one.
 unsafe fn lazy_pte_ptr(pml4: u64, virt: u64) -> Option<*mut u64> {
-    if virt >> 39 != 0 {
-        return None; // the arena lies under PML4[0]
-    }
-    let e4 = (pml4 as *const u64).read_volatile();
-    if e4 & PRESENT == 0 {
-        return None;
-    }
-    let e3 = ((e4 & ADDR_MASK) as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
+    let pdpt = arena_pdpt(pml4, virt)?;
+    let e3 = (pdpt as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
     if e3 & PRESENT == 0 || e3 & HUGE != 0 {
         return None;
     }
@@ -1234,14 +1300,8 @@ pub fn flush_user_page(va: u64) {
 /// The arena page-table entry of `virt` under `pml4` (a lazy table of a
 /// child or a split table of the launched process) and its PD entry.
 unsafe fn arena_pte_ptr(pml4: u64, virt: u64) -> Option<(*mut u64, u64)> {
-    if virt >> 39 != 0 {
-        return None;
-    }
-    let e4 = (pml4 as *const u64).read_volatile();
-    if e4 & PRESENT == 0 {
-        return None;
-    }
-    let e3 = ((e4 & ADDR_MASK) as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
+    let pdpt = arena_pdpt(pml4, virt)?;
+    let e3 = (pdpt as *const u64).add(((virt >> 30) & 0x1FF) as usize).read_volatile();
     if e3 & PRESENT == 0 || e3 & HUGE != 0 {
         return None;
     }
@@ -1267,9 +1327,8 @@ pub fn arena_split(falloc: &mut FrameAllocator, pml4: u64, virt_arena: u64, nblo
     unsafe {
         for b in 0..nblocks {
             let base = virt_arena + b * MIB2;
-            let e4 = (pml4 as *const u64).read_volatile();
-            if e4 & PRESENT == 0 { break; }
-            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            let Some(pdpt) = arena_pdpt(pml4, base) else { continue };
+            let e3 = (pdpt as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
             if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
             let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((base >> 21) & 0x1FF) as usize);
             let e2 = e2p.read_volatile();
@@ -1310,9 +1369,8 @@ pub fn share_arena_cow(parent: u64, child: u64, virt_arena: u64, nblocks: u64, r
         // child (not running). The parent's pages are read through the
         // current address space; a fresh pool frame through the identity map.
         unsafe {
-            let e4 = (parent as *const u64).read_volatile();
-            if e4 & PRESENT == 0 { break; }
-            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            let Some(pdpt) = arena_pdpt(parent, base) else { continue };
+            let e3 = (pdpt as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
             if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
             let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((base >> 21) & 0x1FF) as usize);
             let e2 = e2p.read_volatile();
@@ -1549,9 +1607,8 @@ pub fn clone_arena_lazy(parent: u64, child: u64, virt_arena: u64, nblocks: u64, 
         // (a pool frame never lies in the arena range, which the launched
         // process holds).
         unsafe {
-            let e4 = (parent as *const u64).read_volatile();
-            if e4 & PRESENT == 0 { return Some((copied, skipped)); }
-            let e3 = ((e4 & ADDR_MASK) as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
+            let Some(pdpt) = arena_pdpt(parent, base) else { continue };
+            let e3 = (pdpt as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
             if e3 & PRESENT == 0 { continue; }
             // A 1 GiB identity entry is supervisor memory, not an arena.
             if e3 & HUGE != 0 { continue; }
@@ -1613,23 +1670,26 @@ pub fn lazy_arena_frames(pml4: u64) -> usize {
     let refs = cow_refs();
     // SAFETY: identity-mapped tables, read only.
     unsafe {
-        let e4 = (pml4 as *const u64).read_volatile();
-        if e4 & PRESENT == 0 { return 0; }
-        let pdpt = e4 & ADDR_MASK;
-        for i in 0..512usize {
-            let e3 = (pdpt as *const u64).add(i).read_volatile();
-            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
-            let pd = e3 & ADDR_MASK;
-            for j in 0..512usize {
-                let e2 = (pd as *const u64).add(j).read_volatile();
-                if e2 & PRESENT == 0 || e2 & HUGE != 0 || e2 & LAZY_PT == 0 { continue; }
-                let pt = (e2 & ADDR_MASK) as *const u64;
-                for k in 0..512usize {
-                    let e = pt.add(k).read_volatile();
-                    // A frame shared with other children counts for its
-                    // part; a frame of the launched process is its own.
-                    if e & PRESENT != 0 && e & OWNED != 0 {
-                        n += 1024 / (refs.extra(e & ADDR_MASK) as usize + 1);
+        // ASLR S2: PML4[0] and the slots of the arena zone.
+        for slot in arena_pml4_slots() {
+            let e4 = (pml4 as *const u64).add(slot).read_volatile();
+            if e4 & PRESENT == 0 { continue; }
+            let pdpt = e4 & ADDR_MASK;
+            for i in 0..512usize {
+                let e3 = (pdpt as *const u64).add(i).read_volatile();
+                if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+                let pd = e3 & ADDR_MASK;
+                for j in 0..512usize {
+                    let e2 = (pd as *const u64).add(j).read_volatile();
+                    if e2 & PRESENT == 0 || e2 & HUGE != 0 || e2 & LAZY_PT == 0 { continue; }
+                    let pt = (e2 & ADDR_MASK) as *const u64;
+                    for k in 0..512usize {
+                        let e = pt.add(k).read_volatile();
+                        // A frame shared with other children counts for its
+                        // part; a frame of the launched process is its own.
+                        if e & PRESENT != 0 && e & OWNED != 0 {
+                            n += 1024 / (refs.extra(e & ADDR_MASK) as usize + 1);
+                        }
                     }
                 }
             }
@@ -2064,43 +2124,51 @@ pub fn free_demand_region(pml4: u64, idx: usize) {
 pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {
     // SAFETY: pml4 is identity-mapped; we walk the table chain.
     unsafe {
-        let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
-        // Under PML4[0] a PDPT entry is either an identity 1 GiB HUGE page (not a
-        // frame of ours) or a page DIRECTORY of this process: the one
-        // build_address_space_rwx made at index 0, and the one(s) map_user_arena
-        // added at the index where the big arena physically lies (get_pd). Free
-        // every such PD and, under it, every PRESENT-without-HUGE entry (a 4 KiB
-        // page table). Freeing only pdpt[0] leaked exactly one PD frame per
-        // glibc run ([churn-proc], 2026-10-07).
-        let pdptp = pdpt as *const u64;
-        for i3 in 0..512usize {
-            let e3 = pdptp.add(i3).read_volatile();
-            if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+        // ASLR S2: the arena may hang under PML4[0] or under a slot of the
+        // arena zone; there every PDPT entry is a PD of this process.
+        for slot in arena_pml4_slots() {
+            let e4 = (pml4 as *const u64).add(slot).read_volatile();
+            if e4 & PRESENT == 0 {
                 continue;
             }
-            let pd = e3 & ADDR_MASK;
-            let pdp = pd as *const u64;
-            for i in 0..512usize {
-                let e = pdp.add(i).read_volatile();
-                if e & PRESENT != 0 && e & HUGE == 0 {
-                    if e & SPLIT_PT != 0 && crate::procpool::owns(e & ADDR_MASK) {
-                        // An arena block split at a fork (copy-on-write):
-                        // its table came from the process pool.
-                        crate::procpool::free(e & ADDR_MASK);
-                    } else {
-                        let _ = falloc.free(e & ADDR_MASK);
+            let pdpt = e4 & ADDR_MASK;
+            // Under PML4[0] a PDPT entry is either an identity 1 GiB HUGE page (not a
+            // frame of ours) or a page DIRECTORY of this process: the one
+            // build_address_space_rwx made at index 0, and the one(s) map_user_arena
+            // added at the index where the big arena physically lies (get_pd). Free
+            // every such PD and, under it, every PRESENT-without-HUGE entry (a 4 KiB
+            // page table). Freeing only pdpt[0] leaked exactly one PD frame per
+            // glibc run ([churn-proc], 2026-10-07).
+            let pdptp = pdpt as *const u64;
+            for i3 in 0..512usize {
+                let e3 = pdptp.add(i3).read_volatile();
+                if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+                    continue;
+                }
+                let pd = e3 & ADDR_MASK;
+                let pdp = pd as *const u64;
+                for i in 0..512usize {
+                    let e = pdp.add(i).read_volatile();
+                    if e & PRESENT != 0 && e & HUGE == 0 {
+                        if e & SPLIT_PT != 0 && crate::procpool::owns(e & ADDR_MASK) {
+                            // An arena block split at a fork (copy-on-write):
+                            // its table came from the process pool.
+                            crate::procpool::free(e & ADDR_MASK);
+                        } else {
+                            let _ = falloc.free(e & ADDR_MASK);
+                        }
                     }
                 }
+                let _ = falloc.free(pd);
             }
-            let _ = falloc.free(pd);
+            let _ = falloc.free(pdpt);
         }
-        let _ = falloc.free(pdpt);
         let _ = falloc.free(pml4);
     }
 }
 
-/// Free a fork child's own page tables under PML4[0] (pdpt, pd and every 4 KiB
-/// page table, all from `procpool::alloc` in fill_remap_tables_multiblock) back
+/// Free a fork child's own page tables under PML4[0] and the arena zone (pdpt,
+/// pd and every 4 KiB page table, all from `procpool::alloc` in fill_remap_tables_multiblock) back
 /// to the process pool. The leaf frames (the child's arena) are freed by the
 /// caller as a range; the identity 1 GiB / 2 MiB HUGE entries are not frames
 /// of ours. 3 table frames per fork child leaked without this ([churn-fork]).
@@ -2119,31 +2187,34 @@ pub fn free_fork_tables(pml4: u64) -> usize {
     let refs = cow_refs();
     // SAFETY: identity-mapped tables; read-only walk, frames only marked free.
     unsafe {
-        let e4 = (pml4 as *const u64).read_volatile();
-        if e4 & PRESENT == 0 { return 0; }
-        let pdpt = e4 & ADDR_MASK;
-        for i in 0..512usize {
-            let e3 = (pdpt as *const u64).add(i).read_volatile();
-            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
-            let pd = e3 & ADDR_MASK;
-            for j in 0..512usize {
-                let e2 = (pd as *const u64).add(j).read_volatile();
-                if e2 & PRESENT != 0 && e2 & HUGE == 0 {
-                    if e2 & LAZY_PT != 0 {
-                        // BUG-156: the pages of a lazy arena are frames of
-                        // the process itself; they go with their table.
-                        let pt = (e2 & ADDR_MASK) as *const u64;
-                        for k in 0..512usize {
-                            let e = pt.add(k).read_volatile();
-                            freed += arena_entry_release(e, &refs) as usize;
+        // ASLR S2: PML4[0] and the slots of the arena zone (all from the pool).
+        for slot in arena_pml4_slots() {
+            let e4 = (pml4 as *const u64).add(slot).read_volatile();
+            if e4 & PRESENT == 0 { continue; }
+            let pdpt = e4 & ADDR_MASK;
+            for i in 0..512usize {
+                let e3 = (pdpt as *const u64).add(i).read_volatile();
+                if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+                let pd = e3 & ADDR_MASK;
+                for j in 0..512usize {
+                    let e2 = (pd as *const u64).add(j).read_volatile();
+                    if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                        if e2 & LAZY_PT != 0 {
+                            // BUG-156: the pages of a lazy arena are frames of
+                            // the process itself; they go with their table.
+                            let pt = (e2 & ADDR_MASK) as *const u64;
+                            for k in 0..512usize {
+                                let e = pt.add(k).read_volatile();
+                                freed += arena_entry_release(e, &refs) as usize;
+                            }
                         }
+                        crate::procpool::free(e2 & ADDR_MASK); freed += 1;
                     }
-                    crate::procpool::free(e2 & ADDR_MASK); freed += 1;
                 }
+                crate::procpool::free(pd); freed += 1;
             }
-            crate::procpool::free(pd); freed += 1;
+            crate::procpool::free(pdpt); freed += 1;
         }
-        crate::procpool::free(pdpt); freed += 1;
         // no write_volatile(0): see above, we are running on this table
     }
     freed
@@ -2442,4 +2513,169 @@ pub fn robust_selftest() -> bool {
         if ok && refused == 19 && built == 5 { "OK ✓" } else { "FAILED ✗" }
     );
     ok && refused == 19 && built == 5
+}
+
+// -- ASLR S2: an arena above the kernel's identity map ([arena-hi]) -----------
+
+/// A scratch address space with a lazy arena of `nb` blocks at `base` (the
+/// tables of a fork child, from the process pool), or None (nothing kept).
+fn scratch_lazy_space(base: u64, nb: u64) -> Option<u64> {
+    let t = [crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()];
+    let [Some(pml4), Some(pdpt), Some(pd)] = t else {
+        for f in t.into_iter().flatten() {
+            crate::procpool::free(f);
+        }
+        return None;
+    };
+    if !fill_remap_tables_lazy(pml4, pdpt, pd, base, nb) {
+        free_fork_tables(pml4);
+        crate::procpool::free(pml4);
+        return None;
+    }
+    Some(pml4)
+}
+
+/// PML4[0] of a scratch space is the kernel's identity map and nothing else:
+/// 1 GiB pages, the first GiB in 2 MiB pages, no USER leaf.
+unsafe fn slot0_identity_only(pml4: u64) -> bool {
+    let pdpt = (pml4 as *const u64).read_volatile() & ADDR_MASK;
+    for i in 1..512u64 {
+        if (pdpt as *const u64).add(i as usize).read_volatile() != (i * GIB) | PRESENT | WRITABLE | HUGE {
+            return false;
+        }
+    }
+    let pd = (pdpt as *const u64).read_volatile() & ADDR_MASK;
+    for i in 0..512u64 {
+        if (pd as *const u64).add(i as usize).read_volatile() != (i * MIB2) | PRESENT | WRITABLE | HUGE {
+            return false;
+        }
+    }
+    true
+}
+
+/// ASLR step S2 ([arena-hi]): the arena functions and the page-fault dispatch
+/// with an arena that is not in PML4[0]. Two scratch address spaces get a
+/// lazy arena of 8 MiB at 8.5 TiB - 4 MiB (two blocks at the end of PML4 slot
+/// 16, two at the start of slot 17). With interrupts off the CPU runs on the
+/// first one and writes five pages (lazy faults), shares the arena
+/// copy-on-write with the second one, writes one shared page again (a
+/// copy-on-write fault), then runs on the second one and reads them back
+/// plus a page nobody touched. Contents, frames, the census and the
+/// teardown are checked: every frame goes back to the process pool.
+pub fn arena_hi_selftest() -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    const NB: u64 = 4;
+    let base = ARENA_ZONE_BASE + 512 * GIB - 2 * MIB2;
+    let pages = [base, base + MIB2 - 4096, base + 2 * MIB2 + 0x5000, base + 4 * MIB2 - 4096, base + 0x1000];
+    let untouched = base + 3 * MIB2 + 0x8000;
+    let pat = |k: usize| 0xA5A5_0000_0000_5EEDu64 | ((k as u64) << 32);
+    if crate::procpool::free_frames() < 256 {
+        crate::serial_println!("[arena-hi] the process pool has {} frames: SKIPPED", crate::procpool::free_frames());
+        return false;
+    }
+    let free0 = crate::procpool::free_frames();
+    let (lf0, cc0) = (crate::ring3::ARENA_LAZY_FAULTS.load(Relaxed), COW_COPIED.load(Relaxed));
+    let Some(a) = scratch_lazy_space(base, NB) else {
+        crate::serial_println!("[arena-hi] no frames for a scratch address space -> FAILED ✗");
+        return false;
+    };
+    let Some(b) = scratch_lazy_space(base, NB) else {
+        free_fork_tables(a);
+        crate::procpool::free(a);
+        crate::serial_println!("[arena-hi] no frames for a scratch address space -> FAILED ✗");
+        return false;
+    };
+    let mut why: Option<&str> = None;
+    // Before anything runs on them: every page is a lazy entry under its own
+    // slot, and PML4[0] is still only the kernel's identity map.
+    // SAFETY: identity-mapped tables just built, read only.
+    unsafe {
+        let lz = |s: u64| pages.iter().chain([&untouched]).all(|&p| arena_is_lazy(s, p));
+        let slot = |s: u64, i: usize| (s as *const u64).add(i).read_volatile() & PRESENT != 0;
+        if !lz(a) || !lz(b) {
+            why = Some("the arena pages are not lazy entries above PML4[0]");
+        } else if !slot0_identity_only(a) || !slot0_identity_only(b) {
+            why = Some("PML4[0] (the kernel identity map) was changed");
+        } else if !slot(a, 16) || !slot(a, 17) || slot(a, 2) {
+            why = Some("not exactly PML4[16] and PML4[17] were added");
+        } else if !cow_space_register(b) {
+            why = Some("no memory to register the second space");
+        }
+    }
+    let mut rd = [[0u64; 3]; 5];
+    let mut zero_b = u64::MAX;
+    let mut shared = None;
+    if why.is_none() {
+        let smap = crate::ring3::smap_active();
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            // SAFETY: both spaces map the kernel (PML4[0] identity, PML4[1]
+            // the shared high region) as every process space does, so this
+            // code, its stack and the fault handler keep running; interrupts
+            // are off, so no task switch sees the scratch CR3; the boot CR3
+            // is back before they are on again. STAC/CLAC: SMAP.
+            unsafe {
+                let boot: u64;
+                core::arch::asm!("mov {}, cr3", out(reg) boot, options(nostack, preserves_flags));
+                core::arch::asm!("mov cr3, {}", in(reg) a, options(nostack, preserves_flags));
+                if smap { core::arch::asm!("stac", options(nostack)); }
+                for (k, &p) in pages.iter().enumerate() {
+                    (p as *mut u64).write_volatile(pat(k));
+                    ((p + 4088) as *mut u64).write_volatile(!pat(k));
+                }
+                shared = share_arena_cow(a, b, base, NB, 0, &mut || {});
+                (pages[0] as *mut u64).write_volatile(pat(9));
+                for (k, &p) in pages.iter().enumerate() {
+                    rd[k][0] = (p as *const u64).read_volatile();
+                    rd[k][2] = ((p + 4088) as *const u64).read_volatile();
+                }
+                core::arch::asm!("mov cr3, {}", in(reg) b, options(nostack, preserves_flags));
+                for (k, &p) in pages.iter().enumerate() {
+                    rd[k][1] = (p as *const u64).read_volatile();
+                }
+                zero_b = (untouched as *const u64).read_volatile();
+                if smap { core::arch::asm!("clac", options(nostack)); }
+                core::arch::asm!("mov cr3, {}", in(reg) boot, options(nostack, preserves_flags));
+            }
+        });
+        let lazy = crate::ring3::ARENA_LAZY_FAULTS.load(Relaxed) - lf0;
+        let copied = COW_COPIED.load(Relaxed) - cc0;
+        let fr = |s: u64, p: u64| translate_in(s, p).unwrap_or(0) & ADDR_MASK;
+        let (ca, cb) = (lazy_arena_frames(a), lazy_arena_frames(b));
+        if shared != Some((5, 0, 0)) {
+            why = Some("share_arena_cow did not share the five pages");
+        } else if rd[0][0] != pat(9) || rd[0][1] != pat(0) {
+            why = Some("the copy-on-write write is wrong (A must see the new value, B the old one)");
+        } else if (1..5).any(|k| rd[k][0] != pat(k) || rd[k][1] != pat(k)) || (0..5).any(|k| rd[k][2] != !pat(k)) {
+            why = Some("contents differ");
+        } else if zero_b != 0 {
+            why = Some("an untouched page does not read as zeros");
+        } else if fr(a, pages[0]) == 0 || fr(a, pages[0]) == fr(b, pages[0])
+            || (1..5).any(|k| fr(a, pages[k]) == 0 || fr(a, pages[k]) != fr(b, pages[k]))
+        {
+            why = Some("frames: A must own page 0, A and B share pages 1-4");
+        } else if (0..5).any(|k| unsafe { ((fr(a, pages[k]) + 4088) as *const u64).read_volatile() } != !pat(k)) {
+            why = Some("the frame reached through the identity map does not hold the page");
+        } else if lazy < 6 || copied < 1 {
+            why = Some("the fault path was not taken (lazy faults < 6 or no copy-on-write copy)");
+        } else if (ca, cb) != (3, 4) {
+            why = Some("census: want A 3 and B 4 frames");
+        }
+    }
+    let t = free_fork_tables(b);
+    crate::procpool::free(b);
+    let t = t + free_fork_tables(a);
+    crate::procpool::free(a);
+    let free1 = crate::procpool::free_frames();
+    if why.is_none() && free1 != free0 {
+        why = Some("frames were not all given back");
+    }
+    match why {
+        None => crate::serial_println!(
+            "[arena-hi] lazy arena of 8 MiB at {base:#x} (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write {shared:?}, one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown {t} frames, pool {free0} -> {free1} -> OK ✓"
+        ),
+        Some(w) => crate::serial_println!(
+            "[arena-hi] lazy arena of 8 MiB at {base:#x} (PML4 slots 16-17): {w}; teardown {t} frames, pool {free0} -> {free1} -> FAILED ✗"
+        ),
+    }
+    why.is_none()
 }

@@ -731,9 +731,10 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // Copy-on-write (fork): a write to an arena page shared with another
     // process. The writer gets its copy, or, when the writer is the launched
     // process, the children that share the page get theirs. From ring 3 and
-    // from a system call that copies into its caller alike.
+    // from a system call that copies into its caller alike. An arena lies
+    // under PML4[0] or in the arena zone (ASLR S2: `paging::in_arena_zone`).
     if code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && code.contains(PageFaultErrorCode::CAUSED_BY_WRITE)
-        && addr >> 39 == 0
+        && crate::paging::in_arena_zone(addr)
     {
         let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
@@ -749,7 +750,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // gets a zeroed frame from the process pool, for ring 3 and for a system
     // call that copies into its caller alike. A fault from ring 3 leaves the
     // last 1 MiB of the pool to the kernel.
-    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr >> 39 == 0 {
+    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && crate::paging::in_arena_zone(addr) {
         let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
         match crate::paging::lazy_arena_fault(cr3, addr, reserve) {
