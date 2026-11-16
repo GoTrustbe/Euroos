@@ -116,14 +116,22 @@ pub fn cost_test(kb: usize) -> alloc::vec::Vec<alloc::string::String> {
     for _ in 0..lines {
         crate::serial_println!("{line}");
     }
-    let mut waited = 0;
-    while TX_PENDING.load(Ordering::Relaxed) > 0 && waited < 3000 {
+    // Wait by the clock, halting between looks: the desktop task that runs
+    // this command is the CPU's fallback task, so a sleep-and-yield returned
+    // at once on an idle machine and 3 000 of them ran out in ~2 ms while an
+    // AP was still sending (the verdict then said FAILED).
+    let mut drained = true;
+    loop {
         kick();
-        crate::sched::sleep_ticks(1);
-        crate::sched::yield_now();
-        waited += 1;
+        if TX_PENDING.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        if unsafe { core::arch::x86_64::_rdtsc() } - t0 > 3000 * per {
+            drained = false;
+            break;
+        }
+        crate::sched::desktop_idle_hlt();
     }
-    let drained = waited < 3000;
     let wall = (unsafe { core::arch::x86_64::_rdtsc() } - t0) * 10 / per;
     let bsp = (run(0) - r0 + run(tx) - rt) * 10_000 / per; // us
     let bytes = (lines * (line.len() + 1)) as u64;
