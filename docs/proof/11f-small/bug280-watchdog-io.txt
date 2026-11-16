@@ -1,0 +1,16 @@
+# BUG-280: deadman and a slow virtual disk. KVM boot, self-test image, virtio-blk root disk (1 GiB), q35, 2 vCPU
+
+## before (t1: the self-test, io_progress() still empty; commit 5184f4b)
+[wd-io] 4 block reads of the task that pets: reads ok=true, pets gained 0 (want 4) -> FAILED
+
+## after (t2: virtio-blk reports a completed request of the pet task; commit e7cd1e8)
+[wd-io] 4 block reads of the task that pets: reads ok=true, pets gained 4 (want 4) -> OK (a completed request is a sign of life) ✓
+[3g2-wire] deadman watchdog LIVE: main loop petting (pets=69), scheduler-tick checking, tripped=false → OK (hang would trip the timer-IRQ deadman) ✓
+
+## markers-compare e4b8ba4 self-test image (basev) against the fixed one (t2v), same KVM setup
+== basev.log  vs  t2v.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   wd-io: OKx1
