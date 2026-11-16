@@ -7648,6 +7648,14 @@ fn main() -> Status {
         serial::kick();
         sched::desktop_hosts_client(xserver::front_window_size().is_some());
         xserver::keylat::flush();
+        // 11f-A: input this pass queued for X clients wakes their epoll/poll waits.
+        {
+            let mut q = [0u64; 16];
+            let n = xserver::queued_fds(&mut q);
+            for &fd in &q[..n] {
+                ring3::poll_wake(net::PK_X | fd);
+            }
+        }
         sched::deskwatch::mark(5);
         if crate::sched::any_other_ready() {
             crate::sched::yield_now();

@@ -362,6 +362,23 @@ pub fn queued_len(fd: u64) -> usize {
 }
 
 /// Any queued output to read? (For a future poll/select.)
+/// The fds of the X connections with events or replies queued that the client
+/// has not read, into `out` (11f-A: the desktop loop then wakes the clients'
+/// epoll/poll waits). Returns how many.
+pub fn queued_fds(out: &mut [u64; 16]) -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let t = XCONNS.lock();
+        let mut n = 0;
+        for (i, c) in t.iter().enumerate() {
+            if n < out.len() && c.as_ref().is_some_and(|c| !c.outbuf.is_empty()) {
+                out[n] = XCONN_FD_BASE + i as u64;
+                n += 1;
+            }
+        }
+        n
+    })
+}
+
 pub fn readable(fd: u64) -> bool {
     XCONNS
         .lock()

@@ -684,6 +684,26 @@ pub fn unblock(idx: usize) {
     kick_after_wake();
 }
 
+/// Wake task `idx` only if it is Sleeping (a timed sleep), never from Blocked:
+/// the wake of an epoll_wait/poll waiter (11f-A). The waiter sleeps with
+/// `sleep_ticks`; between registering and sleeping it may block in something
+/// else (a demand fault on the user buffer, a disk read), and waking THAT wait
+/// would end it before its event (an `unblock_any` there broke chrome's
+/// navigation in two of three runs).
+/// `still(idx)` is checked under the scheduler lock: the waiter's registration
+/// is cleared before any other sleep of that task can begin.
+pub fn wake_sleeping(idx: usize, still: impl Fn(usize) -> bool) {
+    {
+        let mut s = SCHED.lock();
+        if idx < s.count && matches!(s.tasks[idx].state, State::Sleeping(_)) && still(idx) {
+            s.tasks[idx].state = State::Ready;
+            place_woken(&mut s, idx);
+            woken(&s, idx);
+        }
+    }
+    kick_after_wake();
+}
+
 /// Wake task `idx` from EITHER Blocked or Sleeping -> Ready. A timed futex waiter is
 /// parked as Sleeping(deadline) so it auto-wakes on timeout; an explicit FUTEX_WAKE
 /// must be able to wake it EARLY too, which plain `unblock` (Blocked-only) cannot.

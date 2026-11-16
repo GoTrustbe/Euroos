@@ -2942,6 +2942,95 @@ fn epoll_fd_writable(fd: u64) -> bool {
 /// slept (their 2-tick re-check), while a key was on its way.
 pub static POLL_LATE: AtomicU64 = AtomicU64::new(0);
 
+// ── Waking epoll_wait/poll waiters when a descriptor becomes ready (11f-A) ──
+//
+// A waiter in epoll_wait or poll slept a tick or two and re-checked its
+// descriptors; nothing woke it earlier. Every message between chrome's
+// threads and processes (mojo over unix sockets, eventfd wakeups, X events)
+// that reached a thread in one of those waits therefore waited up to 20 ms,
+// ~19 times per key ([keylat] late finds), and the BSP idled until the tick
+// in between. A waiter now registers the wake keys of its descriptors
+// (`net::poll_key`); an eventfd write, a unix send or close, and new X
+// events for a client wake it (`poll_wake`). Descriptors without a key keep
+// the re-check, which also stays as the fallback for a wake that came
+// between the readiness check and the sleep (`POLL_HIT`).
+const NPK: usize = 16;
+const NT: usize = crate::sched::MAX_TASKS;
+static PK_N: [core::sync::atomic::AtomicUsize; NT] = [const { core::sync::atomic::AtomicUsize::new(0) }; NT];
+static PK: [[AtomicU64; NPK]; NT] = [const { [const { AtomicU64::new(0) }; NPK] }; NT];
+static PK_HIT: [core::sync::atomic::AtomicBool; NT] = [const { core::sync::atomic::AtomicBool::new(false) }; NT];
+static PK_WAITERS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Waiters a ready descriptor woke before their re-check (`pollwake` counts).
+pub static POLL_WAKES: AtomicU64 = AtomicU64::new(0);
+
+/// Registers the current task's wake keys for the duration of one wait.
+struct PollKeys(usize);
+impl PollKeys {
+    fn new(fds: &[u64]) -> PollKeys {
+        let cur = crate::sched::current();
+        let mut n = 0;
+        if cur < NT {
+            for &fd in fds {
+                if let Some(k) = crate::net::poll_key(fd) {
+                    if n < NPK && !(0..n).any(|i| PK[cur][i].load(Ordering::Relaxed) == k) {
+                        PK[cur][n].store(k, Ordering::Relaxed);
+                        n += 1;
+                    }
+                }
+            }
+            PK_HIT[cur].store(false, Ordering::Relaxed);
+            // The previous registration of this task was dropped first: PK_N is 0.
+            if n > 0 {
+                PK_N[cur].store(n, Ordering::Release);
+                PK_WAITERS.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        PollKeys(cur)
+    }
+    /// Sleep up to `ticks` unless a wake key fired since `new`. True: an event woke us.
+    fn sleep(&self, ticks: u64) -> bool {
+        let cur = self.0;
+        crate::sched::sleep_ticks(ticks);
+        // A wake that came before we were Sleeping found us running: undo the sleep.
+        if cur < NT && PK_HIT[cur].load(Ordering::Acquire) {
+            crate::sched::wake_sleeping(cur, |_| true);
+        }
+        if syscall_yield_ok() {
+            yield_reacquire();
+        }
+        cur < NT && PK_HIT[cur].swap(false, Ordering::AcqRel)
+    }
+}
+impl Drop for PollKeys {
+    fn drop(&mut self) {
+        let cur = self.0;
+        if cur < NT && PK_N[cur].swap(0, Ordering::AcqRel) > 0 {
+            PK_WAITERS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// A descriptor with wake key `key` became ready: wake its epoll_wait/poll waiters.
+pub fn poll_wake(key: u64) {
+    poll_wake_where(|k| k == key);
+}
+
+fn poll_wake_where(hit: impl Fn(u64) -> bool) {
+    if PK_WAITERS.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    for t in 0..NT {
+        let n = PK_N[t].load(Ordering::Acquire).min(NPK);
+        if n == 0 {
+            continue;
+        }
+        if (0..n).any(|i| hit(PK[t][i].load(Ordering::Relaxed))) && !PK_HIT[t].swap(true, Ordering::AcqRel) {
+            POLL_WAKES.fetch_add(1, Ordering::Relaxed);
+            crate::sched::wake_sleeping(t, |t| PK_N[t].load(Ordering::Acquire) > 0);
+        }
+    }
+}
+
 fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     EPOLL_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     if !is_epoll_fd(epfd) {
@@ -2949,11 +3038,21 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
     }
     let idx = (epfd - EPOLL_FD_BASE) as usize;
     let mut tries = 0u32;
+    // This call's own deadline (it was one static shared by every waiter, so a
+    // short wait of one thread cut the long wait of another short).
+    let mut epoll_deadline = 0u64;
+    let mut keys: Option<PollKeys> = None;
     loop {
         let list = match &EPOLLS.lock()[idx] {
             Some(l) => l.clone(),
             None => return (-9i64) as u64,
         };
+        if timeout != 0 {
+            // Register before the readiness check: a wake after the check is not lost.
+            drop(keys.take());
+            let fds: alloc::vec::Vec<u64> = list.iter().map(|e| e.0 as u64).collect();
+            keys = Some(PollKeys::new(&fds));
+        }
         let mut n = 0u64;
         let mut first_fd = 0u64;
         for (fd, evmask, data) in list {
@@ -3046,21 +3145,31 @@ fn epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout: u64) -> u64 {
         // report 0 only when a FINITE timeout really elapsed.
         let timeout_ms = timeout as i32;
         if tries == 0 && timeout_ms > 0 {
-            EPOLL_DEADLINE.store(crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10), Ordering::Relaxed);
+            epoll_deadline = crate::interrupts::ticks() + (timeout_ms as u64).div_ceil(10);
         }
-        if timeout_ms > 0 && crate::interrupts::ticks() >= EPOLL_DEADLINE.load(Ordering::Relaxed) {
+        if timeout_ms > 0 && crate::interrupts::ticks() >= epoll_deadline {
             return 0; // the finite timeout really expired
         }
         if tries >= 400 {
             return 0; // backstop: a frozen clock must not hang the machine
         }
-        tries += 1;
         let before = crate::interrupts::ticks();
-        crate::sched::sleep_ticks(2);
-        if syscall_yield_ok() {
-            { yield_reacquire(); } // deschedule so whoever will wake us can run
+        // deschedule so whoever will wake us can run; a ready descriptor with a
+        // wake key ends the sleep early
+        let by_event = match keys.as_ref() {
+            Some(k) => k.sleep(2),
+            None => {
+                crate::sched::sleep_ticks(2);
+                if syscall_yield_ok() {
+                    yield_reacquire();
+                }
+                false
+            }
+        };
+        if !by_event {
+            tries += 1;
         }
-        if crate::interrupts::ticks() == before {
+        if !by_event && crate::interrupts::ticks() == before {
             crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
             // The vDSO page follows EVERY tick advance, forced ones included. Two
             // clocks that drift — deadlines against TICKS, chrome reading the page —
@@ -5503,7 +5612,6 @@ static EPOLL_WAIT_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::Ato
 /// Deadline of the epoll wait in progress (single-waiter approximation: each call
 /// rearms it at try 0, and interleaved waiters only shorten each other's waits —
 /// an early 0 is a spurious wakeup, which epoll callers must tolerate anyway).
-static EPOLL_DEADLINE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Enable the periodic thread-state/syscall-rate snapshots (deadlock diagnostics).
 pub static STALL_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// Log directory open/getdents results (chrome disk-cache init diagnostics).
@@ -17807,7 +17915,16 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             };
             let mut tries = 0u32;
             let mut ready;
+            // Wake keys of the set (11f-A), registered before each readiness check.
+            let mut keys: Option<PollKeys> = None;
             loop {
+            if timeout_ms != 0 {
+                drop(keys.take());
+                let fds: alloc::vec::Vec<u64> = (0..nfds)
+                    .filter_map(|i| read_user::<i32>(a1 + (i as u64) * 8).and_then(|v| fdtab::resolve(v as i64 as u64)))
+                    .collect();
+                keys = Some(PollKeys::new(&fds));
+            }
             ready = 0u64;
             for i in 0..nfds {
                 let ent = a1 + (i as u64) * 8;
@@ -17916,50 +18033,32 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 // "X connection to :0 broken" after exactly 64 tries).
                 break (-4i64) as u64;
             }
-            tries += 1;
-            // Sleep the REMAINING time in one go for a finite timeout. A loop of
-            // single-tick sleeps with a yield each time is a lot of scheduler
-            // churn, and next to busy tasks it can leave the sleeper starved (it
-            // hung a boot where self-test spinners were running).
-            // A syscall runs with interrupts off, so a wait loop in here can hold up
-            // the very timer it waits for when no other task is runnable: the clock
-            // freezes and the deadline never arrives (measured: ticks 1951 at try 1
-            // AND at try 40). So bound the wait by ITERATIONS too, and return 0 when
-            // it runs out. A poll that returns early is a spurious wakeup, which every
-            // caller must already handle; a poll that never returns is a hung machine.
             if tries >= 200 {
                 break if deadline.is_none() { (-4i64) as u64 } else { 0 };
             }
             let before = crate::interrupts::ticks();
-            match deadline {
-                Some(d) => {
-                    if d > before {
-                        // Sleep in 1-tick steps, NOT the whole remaining timeout at
-                        // once: a poll(fds, 1300ms) that naps 130 ticks in one go is
-                        // blind to data arriving on tick 1 — chrome's glib pump then
-                        // notices a click only when its full timeout expires, which
-                        // under TCG's ~60x stretch feels like input never landing.
-                        // The loop re-checks readiness after every tick.
+            // Sleep a tick at a time (a long nap is blind to data that arrives
+            // meanwhile); a ready descriptor with a wake key ends it early.
+            let sleep = |keys: &Option<PollKeys>| -> bool {
+                match keys.as_ref() {
+                    Some(k) => k.sleep(1),
+                    None => {
                         crate::sched::sleep_ticks(1);
                         if syscall_yield_ok() {
                             yield_reacquire();
                         }
+                        false
                     }
                 }
-                None => {
-                    crate::sched::sleep_ticks(1);
-                    if syscall_yield_ok() {
-                        yield_reacquire();
-                    }
-                }
+            };
+            let by_event = match deadline {
+                Some(d) => d > before && sleep(&keys),
+                None => sleep(&keys),
+            };
+            if !by_event {
+                tries += 1;
             }
-            // Keep TIME MOVING while we wait. A syscall runs with interrupts off, so
-            // if nothing else is runnable the timer cannot tick and the deadline we
-            // are waiting for would never arrive (measured: the clock sat at 1951
-            // through the whole wait). The launcher loop already fast-forwards an idle
-            // clock; do the same here, one tick at a time, so a wait ends when it
-            // should instead of ending because it gave up.
-            if crate::interrupts::ticks() == before {
+            if !by_event && crate::interrupts::ticks() == before {
                 crate::interrupts::TICKS.store(before + 1, Ordering::Relaxed);
             // The vDSO page follows EVERY tick advance, forced ones included. Two
             // clocks that drift — deadlines against TICKS, chrome reading the page —
