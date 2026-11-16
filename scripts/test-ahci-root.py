@@ -7,7 +7,7 @@ installer must NEVER clobber it. It doesn't — the boot medium is partitioned
 skip it. The install targets the SEPARATE blank AHCI disk.
 
 Phase A: boot the release image (its own disk on the built-in AHCI = disk 0)
-         plus a blank 512 MiB disk on a second AHCI controller (disk 1). The
+         plus a blank 1 GiB disk on a second AHCI controller (disk 1). The
          kernel installs onto the BLANK disk (1), leaving the boot medium (0)
          intact. Assert the install marker names disk 1 and the boot medium was
          not touched.
@@ -26,6 +26,12 @@ OVMF = "/usr/share/ovmf/OVMF.fd"
 WORK = tempfile.mkdtemp(prefix="ek-ahciroot-")
 TARGET = os.path.join(WORK, "ahciroot.img")
 BOOT_DEADLINE = 480
+# The self-test image carries its own install media (kernel x2, loader, signatures: 131 MiB
+# in 2026-11); the installer keeps it in the kernel heap, so a 512 MiB guest has 59 MiB of heap
+# free and the media is skipped ("installer unavailable"). The install also wants a target of
+# more than 512 MiB ("need 513 MiB"). Both were fixed numbers here before (BUG-282).
+GUEST_RAM = os.environ.get("EK_GUEST_RAM", "1024M")
+TARGET_SIZE = os.environ.get("EK_TARGET_SIZE", "1G")
 
 
 def serial(log):
@@ -60,11 +66,11 @@ def run(args, log, deadline=BOOT_DEADLINE):
 
 
 def main():
-    common = ["qemu-system-x86_64", "-machine", "q35", "-m", "512M",
+    common = ["qemu-system-x86_64", "-machine", "q35", "-m", GUEST_RAM,
               "-cpu", "qemu64,+smep,+smap", "-bios", OVMF,
               "-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0",
               "-display", "none", "-no-reboot"]
-    subprocess.run(["truncate", "-s", "512M", TARGET], check=True)
+    subprocess.run(["truncate", "-s", TARGET_SIZE, TARGET], check=True)
 
     # ── Phase A: release image (disk 0) + blank target on a 2nd AHCI ctrl (disk 1) ──
     logA = os.path.join(WORK, "install.log")
