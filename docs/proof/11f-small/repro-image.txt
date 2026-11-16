@@ -1,0 +1,42 @@
+# Item 3: image reproducibility (e4b8ba4 + scripts/build.sh change), scripts/build.sh release twice, 3 s apart, same worktree
+## before (old build.sh, two builds)
+60dea57fcd04c4547f4c628187f76e7248d227db9d6a2d3f5f5212ca516a6209  old1.img
+d585e850e25ddf292d7f7e26c25b3bf0c12a9142fab0db901c87f4bf21f096e1  old2.img
+bytes that differ: 32
+  offset 68 310 155
+  offset 69 2 24
+  offset 70 155 352
+  offset 71 337 350
+  offset 3140 310 155
+  offset 3141 2 24
+  offset 3142 155 352
+  offset 3143 337 350
+  offset 4146191 55 175
+  offset 4146199 55 175
+  offset 4146223 55 175
+  offset 4146231 55 175
+  offset 4146703 55 175
+  offset 4146711 55 175
+  offset 4146735 55 175
+  offset 4146743 55 175
+  offset 4146767 55 175
+  offset 4146775 55 175
+  offset 4147215 55 175
+  offset 4147223 55 175
+  offset 4147247 55 175
+  offset 4147255 55 175
+  offset 4147279 55 175
+  offset 4147287 55 175
+  offset 4147375 55 175
+  offset 4147383 55 175
+  offset 4147471 55 175
+  offset 4147479 55 175
+  offset 4147567 55 175
+  offset 4147575 55 175
+  offset 4147663 55 175
+  offset 4147671 55 175
+## after (new build.sh, two builds)
+dd8cab1d51c6fe0f9bec91d77e6305f92addcbd6e8ab26eb2c4197425c84ed39  new1.img
+dd8cab1d51c6fe0f9bec91d77e6305f92addcbd6e8ab26eb2c4197425c84ed39  new2.img
+bytes that differ: 0 (identical)
+files in the ESP identical to the old image: yes (diff -r of mcopy -s of ::/EFI)
