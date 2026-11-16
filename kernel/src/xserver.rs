@@ -759,6 +759,16 @@ pub mod keylat {
             }
         }
         out.push(l);
+        // The desktop loop's composite of the hosted window per paint (11f-A):
+        // it ran on the BSP with chrome's threads and was ~5-9 ms per paint
+        // while the window was 800x600 and a key changed one line of it.
+        {
+            let mut v: alloc::vec::Vec<u64> = (0..n).map(|k| CPU_HIST[k][4].load(Ordering::Relaxed)).collect();
+            v.sort_unstable();
+            let m = v[n / 2];
+            out.push(alloc::format!("[keylat] composite of the hosted window for a key: median {m} us -> {} (limit 1500 us)",
+                if m <= 1500 { "OK" } else { "FAILED" }));
+        }
         if let Some(l) = ev_line(CUR.load(Ordering::Relaxed)) {
             out.insert(0, l);
         }
