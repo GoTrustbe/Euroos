@@ -349,9 +349,11 @@ extern "C" fn tx_task() -> ! {
         // An AP sends the queue (11f-A): look again in two ticks, the fallback
         // for output nobody kicks.
         let per = crate::apic::TSC_PER_TICK.load(Ordering::Relaxed).max(1);
-        let late = unsafe { core::arch::x86_64::_rdtsc() }
-            .saturating_sub(AP_DRAIN_SINCE.load(Ordering::Relaxed)) > 10 * per;
-        if AP_DRAIN.load(Ordering::Acquire) && !late {
+        let late = AP_DRAIN.load(Ordering::Acquire)
+            && unsafe { core::arch::x86_64::_rdtsc() }.saturating_sub(AP_DRAIN_SINCE.load(Ordering::Relaxed)) > 10 * per;
+        // Output that came after the last kick goes to the AP as well: the
+        // sender woke for it on the BSP and paid 18-36 ms in a key's window.
+        if !late && (AP_DRAIN.load(Ordering::Acquire) || (TX_PENDING.load(Ordering::Relaxed) > 0 && ap_drain_submit())) {
             crate::sched::sleep_ticks(2);
             crate::sched::yield_now();
             continue;
