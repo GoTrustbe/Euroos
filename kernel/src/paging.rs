@@ -938,11 +938,78 @@ pub fn map_user_4k_falloc(falloc: &mut euromm::FrameAllocator, pml4: u64, virt: 
                 frame
             };
         }
+        // BUG-353: user READ-ONLY. The only caller is the vDSO, whose image
+        // and clock page are frames shared by every glibc process: writable,
+        // one process could change the code and the clock all others run.
         (table as *mut u64)
             .add(((virt >> 12) & 0x1FF) as usize)
-            .write_volatile(phys | PRESENT | WRITABLE | USER);
+            .write_volatile(phys | PRESENT | USER);
     }
     true
+}
+
+/// The PML4 slot of the vDSO (euromm::layout zone of the boot mode; set by
+/// `ring3::aslr_set_mode`). `free_fork_tables` frees the table chain a fork
+/// child has under it (`map_user_4k_pool`).
+pub static VDSO_SLOT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(3);
+
+/// BUG-350: map the 4 KiB page `phys` user read-only at `virt` in a fork
+/// child's `pml4`, page tables from the process pool (as every table of a
+/// fork child). For the vDSO; freed with the child by `free_fork_tables`.
+pub fn map_user_4k_pool(pml4: u64, virt: u64, phys: u64) -> bool {
+    // SAFETY: identity-mapped tables of an address space being built or
+    // owned by the caller; fresh pool frames are zeroed before use.
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let slot = (table as *mut u64).add(((virt >> shift) & 0x1FF) as usize);
+            let e = slot.read_volatile();
+            table = if e & PRESENT != 0 {
+                e & ADDR_MASK
+            } else {
+                let Some(frame) = crate::procpool::alloc() else { return false };
+                core::ptr::write_bytes(frame as *mut u8, 0, 4096);
+                slot.write_volatile(frame | PRESENT | WRITABLE | USER);
+                frame
+            };
+        }
+        (table as *mut u64).add(((virt >> 12) & 0x1FF) as usize).write_volatile(phys | PRESENT | USER);
+    }
+    true
+}
+
+/// Free the page TABLES (pdpt, pd, pt; never the leaf frames) under one
+/// PML4 slot to the process pool and clear the slot (`map_user_4k_pool`).
+pub fn free_pool_table_chain(pml4: u64, slot: usize) -> usize {
+    let mut freed = 0;
+    // SAFETY: identity-mapped tables of a space no task runs on, or of the
+    // caller's own space with the TLB flushed after.
+    unsafe {
+        let pml4p = (pml4 as *mut u64).add(slot & 0x1FF);
+        let e4 = pml4p.read_volatile();
+        if e4 & PRESENT == 0 {
+            return 0;
+        }
+        let pdpt = e4 & ADDR_MASK;
+        for i in 0..512usize {
+            let e3 = (pdpt as *const u64).add(i).read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            for j in 0..512usize {
+                let e2 = (pd as *const u64).add(j).read_volatile();
+                if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                    crate::procpool::free(e2 & ADDR_MASK);
+                    freed += 1;
+                }
+            }
+            crate::procpool::free(pd);
+            freed += 1;
+        }
+        crate::procpool::free(pdpt);
+        freed += 1;
+        pml4p.write_volatile(0);
+    }
+    freed
 }
 
 /// map_demand_4k, but READ-ONLY: used for pages backed by the shared disk page
@@ -2201,10 +2268,11 @@ pub fn free_address_space(falloc: &mut FrameAllocator, pml4: u64) {
 /// the boot in a fault loop, churn6). Nothing reuses the frames before the
 /// exit path switches away: single core, no allocation in between.
 pub fn free_fork_tables(pml4: u64) -> usize {
-    let mut freed = 0;
     // From here the launched process does not look for copy-on-write pages
     // of this child any more (`arena_cow_fault`).
     cow_space_unregister(pml4);
+    // BUG-350: the vDSO tables of a fork child (process pool).
+    let mut freed = free_pool_table_chain(pml4, VDSO_SLOT.load(core::sync::atomic::Ordering::Relaxed));
     let refs = cow_refs();
     // SAFETY: identity-mapped tables; read-only walk, frames only marked free.
     unsafe {

@@ -9872,6 +9872,22 @@ fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
     crate::paging::free_address_space(falloc, pml4);
 }
 
+/// BUG-350: the vDSO in a fork child (at the address of its parent) or after
+/// an exec in one (a new draw), with page tables from the process pool.
+fn vdso_map_pool(pml4: u64, base: u64) -> bool {
+    let t = VDSO_TIME_FRAME.load(Ordering::Relaxed);
+    let imgs = VDSO_IMAGE_FRAMES.lock();
+    if base == 0 || t == 0 || imgs.is_empty() {
+        return false;
+    }
+    for (i, &f) in imgs.iter().enumerate() {
+        if !crate::paging::map_user_4k_pool(pml4, base + (i as u64) * 4096, f) {
+            return false;
+        }
+    }
+    crate::paging::map_user_4k_pool(pml4, base + VDSO_DATA_VOFF, t)
+}
+
 fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64, base: u64) -> bool {
     let imgs = VDSO_IMAGE_FRAMES.lock();
     for (i, &f) in imgs.iter().enumerate() {
@@ -11241,13 +11257,15 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         irq_window();
         dz_free_except(child_pml4, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
+        // ASLR S1: the vDSO of the new image at a new draw (BUG-350: the
+        // child has one since its fork).
+        crate::paging::free_pool_table_chain(child_pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
         crate::paging::flush_tlb_all();
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
     // ASLR S1: an exec draws anew (design 2.4): exe base, mmap floor and the
-    // slides in the arena. The arena base stays until S5; an exec'd child has
-    // no vDSO (as before S1: AT_SYSINFO_EHDR 0).
+    // slides in the arena and the vDSO base. The arena base stays until S5.
     let (exe_span, exe_align) = disk_exe_geometry(diskidx);
     let lay = image_layout(exe_span, exe_align);
     let demand_floor = lay.mmap_floor;
@@ -11272,7 +11290,12 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let exe_base = lay.exe_base;
     EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
     EXE_END.store(lay.exe_end, Ordering::Relaxed);
-    VDSO_CUR.store(0, Ordering::Relaxed);
+    let vdso = {
+        use x86_64::registers::control::Cr3;
+        let cr3 = Cr3::read().0.start_address().as_u64();
+        if vdso_map_pool(cr3, lay.vdso) { lay.vdso } else { 0 }
+    };
+    VDSO_CUR.store(vdso, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return (-8i64) as u64,
@@ -11288,9 +11311,9 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base, 0) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base, vdso) };
     crate::serial_println!(
-        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso none (aslr={})",
+        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso {vdso:#x} (aslr={})",
         crate::sched::current(), aslr_mode().name()
     );
 
@@ -11466,6 +11489,14 @@ fn do_glibc_fork() -> u64 {
     }
     // The launched process looks in this address space for the children
     // that share a page it writes (copy-on-write); undone by free_fork_tables.
+    // BUG-350: the child runs the parent's code, which calls the vDSO at the
+    // parent's address (AT_SYSINFO_EHDR is in its copied memory). Without the
+    // mapping the first clock call of a fork child was an instruction fetch
+    // fault. Freed with the child's tables (free_fork_tables).
+    let vdso = VDSO_CUR.load(Ordering::Relaxed);
+    if vdso != 0 && !vdso_map_pool(pml4, vdso) {
+        crate::serial_println!("[fork] no frames for the vDSO tables of the child: it runs without one");
+    }
     if !crate::paging::cow_space_register(pml4) {
         let n = crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
@@ -11639,7 +11670,9 @@ const DEMAND_MIN_BYTES: u64 = 64 * 1024;
 // -- ASLR (docs/design/ASLR.md): the boot option aslr= and the demand zone -------
 
 /// The mode of the boot option `aslr=` (`euromm::layout::Mode::to_u8`; 0 = legacy).
-static ASLR_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static ASLR_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(ASLR_DEFAULT);
+/// The mode without a boot option (`euromm::layout::Mode::to_u8`): 0 = legacy.
+pub const ASLR_DEFAULT: u8 = 0;
 pub fn aslr_mode() -> euromm::layout::Mode {
     euromm::layout::Mode::from_u8(ASLR_MODE.load(Ordering::Relaxed))
 }
@@ -11649,6 +11682,7 @@ pub fn aslr_set_mode(m: euromm::layout::Mode) {
     let z = euromm::layout::zone(m);
     DEMAND_NEXT.store(z.demand_base, Ordering::Relaxed);
     DEMAND_FLOOR.store(z.demand_base, Ordering::Relaxed);
+    crate::paging::VDSO_SLOT.store(z.vdso_slot, Ordering::Relaxed);
 }
 
 /// Per process (swapped with `ChildMem` for a fork child): the window of the
@@ -11680,7 +11714,7 @@ pub struct Placed {
 /// The regions of an image with the arena at `arena` (`span` bytes) and the
 /// draw `lay`. A program from disk has its executable at the exe base, an
 /// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
-/// (a launch), not after an exec in a fork child (as before S1).
+/// (a launch, and an exec in a fork child since BUG-350).
 fn place(arena: u64, span: u64, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
     let (brk, mmap, stack) = glibc_arena_layout(arena, span, lay);
     Placed {
@@ -11706,7 +11740,7 @@ pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
     let parent = place(arena, SPAN, &image_layout(es, ea), true, true);
     let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
     for _ in 0..8 {
-        let c = place(arena, SPAN, &image_layout(es, ea), true, false);
+        let c = place(arena, SPAN, &image_layout(es, ea), true, true);
         let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
         for (k, (a, b)) in pairs.iter().enumerate() {
             if a == b || *b == 0 {

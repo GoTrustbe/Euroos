@@ -157,6 +157,8 @@ pub fn capture() {
         }
         break;
     }
+    // The zone of the aslr mode (default or chosen) before the first process.
+    crate::ring3::aslr_set_mode(crate::ring3::aslr_mode());
     crate::serial_println!(
         "[bootopt] {}: net.driver={}, storage.nvme={}",
         if FOUND.load(Ordering::Relaxed) { "\\EFI\\BOOT\\euroos-boot.conf read" } else { "no euroos-boot.conf (defaults)" },
