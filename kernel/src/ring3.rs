@@ -173,6 +173,15 @@ fn prot_none_set(start: u64, end: u64, none: bool) {
 /// Is [ptr,ptr+len) inside a file-backed (hence read-only) demand mapping? Such an
 /// address is readable but a write to it must EFAULT. `fi == usize::MAX` entries are
 /// zero-fill .bss (anonymous, writable) — excluded.
+///
+/// BUG-351: page by page, and the NEWEST mapping of a page decides (a later
+/// MAP_FIXED, the .bss overlay of a library, lies over the flat mapping of the
+/// whole library, which stays in the list). A page of a file mapping the
+/// process already holds writable, or shares copy-on-write after a fork (only
+/// a written page is shared that way), is its own memory and takes the write.
+/// Before, any overlap with any file mapping refused it: getrandom, read,
+/// clock_gettime... into libc's .data or .bss gave EFAULT, in every fork child
+/// at once (glibc's malloc asks getrandom for its tcache key there).
 fn demand_file_backed(ptr: u64, len: usize) -> bool {
     if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < demand_base() {
         return false; // fast path: not a demand-region pointer
@@ -185,10 +194,26 @@ fn demand_file_backed(ptr: u64, len: usize) -> bool {
     {
         return false;
     }
-    DEMAND_FILE_MAPS
-        .lock()
-        .iter()
-        .any(|&(b, l, fi, _, _)| fi != usize::MAX && ptr < b + l && end > b)
+    let maps = DEMAND_FILE_MAPS.lock();
+    if !maps.iter().any(|&(b, l, fi, _, _)| fi != usize::MAX && ptr < b + l && end > b) {
+        return false;
+    }
+    let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    let mut a = ptr;
+    while a < end {
+        let newest = maps.iter().rev().find(|&&(b, l, _, _, _)| a >= b && a < b + l);
+        if let Some(&(_, _, fi, _, _)) = newest {
+            if fi != usize::MAX {
+                let own = crate::paging::leaf_entry_in(pml4, a)
+                    .is_some_and(|e| e & (2 | crate::paging::COW) != 0);
+                if !own {
+                    return true; // a page of the file the process has not written
+                }
+            }
+        }
+        a = (a & !0xFFF) + 4096;
+    }
+    false
 }
 
 /// Does [ptr,ptr+len) touch any PROT_NONE (inaccessible) range?
@@ -2727,8 +2752,13 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     // are the numbers the program gets.
     match fdtab::install_pair(got[0] as u64, got[1] as u64) {
         Ok((rd, wr)) => {
-            let _ = write_user(user_fds, rd as i32);
-            let _ = write_user(user_fds + 4, wr as i32);
+            // BUG-351: a refused write is EFAULT (as on Linux), not success
+            // with two descriptor numbers the caller never sees.
+            if !write_user(user_fds, rd as i32) || !write_user(user_fds + 4, wr as i32) {
+                let _ = close_fd_now(rd as u64);
+                let _ = close_fd_now(wr as u64);
+                return EFAULT;
+            }
             0
         }
         Err(e) => {
@@ -9764,6 +9794,85 @@ static PAINT_WATCH_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// sources matters more than absolute truth: the 918 ms error in a 50 ms realtime
 /// wait was pure granularity mismatch (second-grain CMOS in the futex vs
 /// nanosecond-grain gettimeofday in glibc).
+/// clock_gettime: REALTIME (0) and TAI (11) the wall clock, every other clock
+/// the uptime, in nanoseconds.
+pub(crate) fn clock_ns(clk: u64) -> u64 {
+    if clk == 0 || clk == 11 {
+        wall_ns()
+    } else {
+        crate::interrupts::ticks() * 10_000_000 // 100 Hz tick
+    }
+}
+
+/// `[vdso-mono]`: how often the tick anchor of the clock page was below what
+/// the vDSO readers had seen, and by how much at most (ns).
+pub(crate) fn vdso_behind_stats() -> (u64, u64) {
+    (0, 0)
+}
+
+// Self-test access (forkvdsotest.rs: BUG-351, BUG-352, BUG-355).
+pub(crate) fn test_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    linux_dispatch(num, a1, a2, a3, a4, a5)
+}
+pub(crate) fn test_dz_walk(pml4: u64, f: &mut dyn FnMut(u64, u64)) {
+    let _ = dz_walk(pml4, f);
+}
+/// Why a user range is refused (diagnostics of the self-test).
+pub(crate) fn test_user_diag(ptr: u64, len: usize) -> alloc::string::String {
+    let end = ptr + len as u64;
+    let fm: alloc::vec::Vec<(u64, u64, usize)> = DEMAND_FILE_MAPS.lock().iter()
+        .filter(|&&(b, l, _, _, _)| ptr < b + l && end > b).map(|&(b, l, fi, _, _)| (b, l, fi)).collect();
+    alloc::format!("{ptr:#x}: arena-ok={} file-backed={} next={:#x} end={:#x} base={:#x} filemaps={:x?} cr0={:#x}",
+        in_user_arena(ptr, len), demand_file_backed(ptr, len), DEMAND_NEXT.load(Ordering::Relaxed),
+        demand_end(), demand_base(), fm, x86_64::registers::control::Cr0::read_raw())
+}
+/// The pid of the fork child the current task belongs to (0: none).
+pub(crate) fn test_fork_pid() -> u64 {
+    let Some(o) = fork_child_owner(crate::sched::current()) else { return 0 };
+    GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.1 == o).map(|k| k.0).unwrap_or(0)
+}
+/// Copy 4 KiB at `va` as the launched process sees it (its address space for
+/// the time of the copy, interrupts off).
+pub(crate) fn test_read_as_parent(va: u64, out: &mut [u8; 4096]) -> bool {
+    let parent = GLIBC_PML4.load(Ordering::Relaxed);
+    if parent == 0 {
+        return false;
+    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        use x86_64::registers::control::{Cr3, Cr3Flags};
+        use x86_64::structures::paging::PhysFrame;
+        let (mine, fl) = Cr3::read();
+        // SAFETY: the kernel is mapped alike in every address space; back at once.
+        unsafe {
+            Cr3::write(PhysFrame::containing_address(x86_64::PhysAddr::new(parent)), Cr3Flags::empty());
+            core::ptr::copy_nonoverlapping(va as *const u8, out.as_mut_ptr(), 4096);
+            Cr3::write(mine, fl);
+        }
+    });
+    true
+}
+pub(crate) fn test_arena() -> (u64, u64) {
+    (ARENA_BASE.load(Ordering::Relaxed), ARENA_SPAN_DYN.load(Ordering::Relaxed))
+}
+pub(crate) fn test_vdso_frame() -> u64 {
+    VDSO_TIME_FRAME.load(Ordering::Relaxed)
+}
+pub(crate) fn test_vdso_cur() -> u64 {
+    VDSO_CUR.load(Ordering::Relaxed)
+}
+/// The user return address of the system call in progress (the saved rcx of
+/// the register block `syscall_entry` pushed: 13 slots above r15).
+pub(crate) fn test_set_user_rip(rip: u64) {
+    // SAFETY: called inside a system call of the current task, before it can
+    // yield; SAVED_REGS points at its register block on its syscall stack.
+    unsafe {
+        let p = SAVED_REGS as *mut u64;
+        if !p.is_null() {
+            p.add(13).write(rip);
+        }
+    }
+}
+
 pub fn wall_ns() -> u64 {
     let base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
     if base == 0 {
@@ -15557,6 +15666,9 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         // so a blocking socket call may sleep (net.rs). Not a foreground
         // excursion: that one runs synchronously on task 0's borrowed stack.
         let _nb = NetBlockScope::enter(!FG_ACTIVE.load(Ordering::Relaxed));
+        if trace_child {
+            crate::forkvdsotest::on_child_syscall(num);
+        }
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
         if trace_child {
             // High budget: we want the renderer's WHOLE post-execve life
@@ -18236,6 +18348,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         return EFAULT;
                     }
                     crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
+                    crate::forkvdsotest::note_reap(cpid, status);
                     return cpid;
                 }
                 drop(ce);
@@ -19630,13 +19743,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // clock_gettime(clk, *timespec): CLOCK_REALTIME(0)/CLOCK_TAI(11) give the
             // REAL wall clock (RTC epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) the uptime.
             if a2 != 0 {
-                let (sec, nsec) = if a1 == 0 || a1 == 11 {
-                    let w = wall_ns();
-                    (w / 1_000_000_000, w % 1_000_000_000)
-                } else {
-                    let ticks = crate::interrupts::ticks();
-                    (ticks / 100, (ticks % 100) * 10_000_000) // 100 Hz PIT
-                };
+                let ns = clock_ns(a1);
+                let (sec, nsec) = (ns / 1_000_000_000, ns % 1_000_000_000);
                 if !write_user(a2, sec) || !write_user(a2 + 8, nsec) {
                     return EFAULT;
                 }

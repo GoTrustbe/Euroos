@@ -103,6 +103,7 @@ mod entropy;
 mod linuxrand;
 mod renametest;
 mod aslrtest;
+mod forkvdsotest;
 mod nts;
 mod verity;
 mod euroattr;
@@ -4363,6 +4364,8 @@ fn main() -> Status {
         renametest::disk_selftest(&mut allocator, &mut vfs);
         // BUG-088: how many address bits of a Linux program change per start ([aslr]).
         aslrtest::selftest(&mut allocator);
+        // BUG-351, BUG-352, BUG-355 ([fork-cow-write], [fork-fault-wait], [vdso-mono]).
+        forkvdsotest::selftest(&mut allocator);
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
