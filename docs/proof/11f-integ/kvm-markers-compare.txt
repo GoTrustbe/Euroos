@@ -1,0 +1,35 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -nic none; f on 8-9, b on 10-11
+f k-1g end=marker after 194s failed-lines=3 crash-lines=0
+f k-2g end=marker after 203s failed-lines=1 crash-lines=0
+f k-4g end=marker after 208s failed-lines=1 crash-lines=0
+f k-8g end=marker after 214s failed-lines=1 crash-lines=0
+b k-1g end=marker after 197s failed-lines=3 crash-lines=0
+b k-2g end=marker after 209s failed-lines=1 crash-lines=0
+b k-4g end=marker after 209s failed-lines=1 crash-lines=0
+b k-8g end=marker after 218s failed-lines=1 crash-lines=0
+## markers-compare b -> f, 1 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+## markers-compare b -> f, 2 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+## markers-compare b -> f, 4 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+## markers-compare b -> f, 8 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   xlock: OKx1
+## [xlock]
+      4 [xlock] pump_mouse, window_at and forget_clients, run with interrupts on: X locks taken with interrupts enabled = 0 (want 0) -> OK (a preemption cannot catch task 0 holding them) ✓

@@ -1,0 +1,3 @@
+# chrome-smoke --starts 20 --smp 2, browser image of 7253cb1, pin 2-3
+[chrome-smoke] starts: 20/20 PASS
+FROZEN lines: 0

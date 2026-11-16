@@ -1,0 +1,2 @@
+# chrome-smoke --only interact --smp 2, browser image of 7253cb1
+[chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/11fi/interact-f

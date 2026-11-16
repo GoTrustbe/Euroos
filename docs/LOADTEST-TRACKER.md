@@ -3001,3 +3001,27 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   All were there on `e4b8ba4` too; the background path now names its calls, so the numbers are right.
 - **Next:**     `[slowcall]` names the background ones; the same timing on the Linux path (rt_sigprocmask 54-56 ms is
   suspicious for a call that does no I/O), and what task 0 does with interrupts off for 250 ms after exit_group.
+
+### BUG-330 — panic/shutdown flush while an AP sends the console: up to one 16-byte load can come out of order ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (found by reading the merged code, not reproduced; nothing is lost)
+- **Found:**    2026-11-16 · 11f-integ, review of 11f-A's serial TX on an AP (`a344592`, `e33ac3f`) against the emergency path (BUG-270).
+- **Actual:**   `serial::emergency()` sets EMERGENCY (from then on `ap_drain_submit` refuses) and empties the whole queue under the
+  UART lock with `finish_queue(true)`. An `ap_drain` job that already took a load (<= 16 bytes) from the queue writes it to
+  the port outside the UART lock while holding only `TX_PORT`; `finish_queue` does not look at `TX_PORT`, so that load can
+  land after (or between) bytes of the emergency flush. Shutdown and panic still flush everything (q35 `power` leg PASS,
+  0 lines missing in markers-compare at 1/2/4/8 GiB).
+- **Next:**     let `emergency()` wait a bounded moment for `TX_PORT` before `finish_queue`; test: a self-test that holds `TX_PORT`
+  with a taken load and calls the flush.
+
+### BUG-331 — `forget_clients` held XCONNS and the selection tables with interrupts on (the BUG-320 class) ✅ FIXED
+- **Status:**   FIXED (`eb239c5` test, `7253cb1` fix, feature/11f-integ) · **Severity:** MEDIUM (a wedge of the same kind as BUG-320)
+- **Found:**    2026-11-16 · 11f-integ, review of the X server lock users in task 0 that 11f-small (BUG-320) did not cover.
+- **Actual:**   the desktop loop calls `forget_clients` when a hosted app starts (`main.rs`: GTK demo, browser, x11 apps); it took
+  `lock_home()` (XCONNS), PRESENTED, SELECTIONS, SEL_OWNERS, XFIXES_SELECT, READER_CONNS and RETAINED_WINDOW with interrupts on.
+  A client of the previous app still on its way out (`close`, `read` through the syscall path, IF=0) spins on the same lock
+  for good when task 0 is preempted holding it. The other task-0 users were checked: `pump_keyboard`, `deliver_*`,
+  `queued_fds`, `keymap_changed`, `hosted_resize`, `with_front_window`, `front_window_size` already hold them with IF=0,
+  `dump_input_state` runs under `IfOffGuard` (`cdiag`).
+- **Fix:**      the body of `forget_clients` runs in `without_interrupts`.
+- **Test:**     `[xlock]` also runs `forget_clients` (only when no connection is open) and counts X locks taken with IF on:
+  `= 1 (want 0) -> FAILED` (`eb239c5`, KVM 2 GiB) -> `= 0 -> OK` (`7253cb1`, KVM 1/2/4/8 GiB).

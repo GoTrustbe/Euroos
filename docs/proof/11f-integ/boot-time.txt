@@ -1,0 +1,17 @@
+# boot time, public images, KVM 2 vCPU 2 GiB, pin 18-19 (siblings 38-39 idle), nothing else on the host; b = e4b8ba4, f = 11f-integ (7253cb1); alternating order
+b1: kernel-entry 1.51s desktop 2.23s
+f1: kernel-entry 1.90s desktop 2.63s
+f2: kernel-entry 1.91s desktop 2.67s
+b2: kernel-entry 2.15s desktop 2.95s
+b3: kernel-entry 1.85s desktop 2.60s
+f3: kernel-entry 1.84s desktop 2.62s
+f4: kernel-entry 1.84s desktop 2.57s
+b4: kernel-entry 2.06s desktop 2.80s
+b5: kernel-entry 1.49s desktop 2.21s
+f5: kernel-entry 1.67s desktop 2.41s
+f6: kernel-entry 1.48s desktop 2.19s
+b6: kernel-entry 1.47s desktop 2.18s
+b7: kernel-entry 1.84s desktop 2.59s
+f7: kernel-entry 1.83s desktop 2.60s
+f8: kernel-entry 1.83s desktop 2.60s
+b8: kernel-entry 1.77s desktop 2.51s
