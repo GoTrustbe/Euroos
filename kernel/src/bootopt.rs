@@ -46,8 +46,8 @@
 //!   default, `x11`, sends X events only.
 //!
 //! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
-//!   programs (docs/design/ASLR.md, euromm::layout). `legacy` (the default
-//!   until step S1 decides otherwise) is the layout of before; `on` places
+//!   programs (docs/design/ASLR.md, euromm::layout). `on` is the default (ring3::ASLR_DEFAULT);
+//!   `legacy` is the layout of before (demand region in PML4 slot 2); `on` places
 //!   the demand region, the executable from disk, the mmap floor and the vDSO
 //!   at random addresses in their zones; `off` uses the zones of `on` with
 //!   every random part 0, so addresses repeat from run to run (debugging,

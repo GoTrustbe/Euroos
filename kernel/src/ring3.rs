@@ -11671,8 +11671,8 @@ const DEMAND_MIN_BYTES: u64 = 64 * 1024;
 
 /// The mode of the boot option `aslr=` (`euromm::layout::Mode::to_u8`; 0 = legacy).
 static ASLR_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(ASLR_DEFAULT);
-/// The mode without a boot option (`euromm::layout::Mode::to_u8`): 0 = legacy.
-pub const ASLR_DEFAULT: u8 = 0;
+/// The mode without a boot option (`euromm::layout::Mode::to_u8`): 1 = on.
+pub const ASLR_DEFAULT: u8 = 1;
 pub fn aslr_mode() -> euromm::layout::Mode {
     euromm::layout::Mode::from_u8(ASLR_MODE.load(Ordering::Relaxed))
 }
