@@ -44,7 +44,10 @@ pub fn disarm() {
 /// loop without a pet, and the deadman trips after its 15 s as before; so does
 /// any other task's disk traffic that does not belong to the loop (not counted).
 pub fn io_progress() {
-    // (deliberately empty until the self-test below has been seen to fail)
+    if MAIN_TASK.load(Ordering::Relaxed) == crate::sched::current_lockfree() {
+        IO_PETS.fetch_add(1, Ordering::Relaxed);
+        pet();
+    }
 }
 
 /// Completed block requests of the main task that counted (self-test / diagnostics).

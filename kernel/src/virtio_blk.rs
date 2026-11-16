@@ -326,6 +326,7 @@ unsafe fn kick_and_wait_inner(blk: &mut VirtioBlk) -> bool {
             if st != 0 && BLK_BAD_STATUS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 8 {
                 crate::serial_println!("[blk] {} at sector {sector} failed: device status {st}", req_name(kind));
             }
+            crate::watchdog::io_progress(); // BUG-280: a slow disk is not a hung loop
             return st == 0;
         }
         if core::arch::x86_64::_rdtsc().wrapping_sub(t0) > limit {
