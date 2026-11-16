@@ -836,14 +836,17 @@ fn note_presented(id: u32, w: u16, h: u16, dx: i64, dy: i64, sc: usize) {
 /// scale). Topmost (most recently presented) first. None if the pointer is over bare
 /// desktop.
 fn window_at(px: i32, py: i32) -> Option<(u32, i32, i32, i32)> {
-    let t = PRESENTED.lock();
-    note_lock_held();
-    t.iter()
-        .filter(|(_, dx, dy, sc, w, h, _)| {
-            px >= *dx && px < dx + w * sc && py >= *dy && py < dy + h * sc
-        })
-        .max_by_key(|r| r.6)
-        .map(|(id, dx, dy, sc, _, _, _)| (*id, *dx, *dy, *sc))
+    // Same rule as in pump_mouse (BUG-320): the lock is held with interrupts off.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let t = PRESENTED.lock();
+        note_lock_held();
+        t.iter()
+            .filter(|(_, dx, dy, sc, w, h, _)| {
+                px >= *dx && px < dx + w * sc && py >= *dy && py < dy + h * sc
+            })
+            .max_by_key(|r| r.6)
+            .map(|(id, dx, dy, sc, _, _, _)| (*id, *dx, *dy, *sc))
+    })
 }
 
 /// The window on top of the screen right now (the most recently presented one).
@@ -888,11 +891,14 @@ pub fn xlock_selftest() {
 
 pub fn pump_mouse() {
     // ButtonPressMask(0x4) or PointerMotionMask(0x40) selected by any mapped window?
-    let wants = {
+    // Interrupts off while XCONNS is held (BUG-320): task 0 is the desktop loop, and a
+    // timer tick that preempts it inside this scan leaves an X client that reads or
+    // processes a request with IF=0 spinning on the lock for good.
+    let wants = x86_64::instructions::interrupts::without_interrupts(|| {
         let t = XCONNS.lock();
         note_lock_held();
         t.iter().flatten().any(|c| c.windows.iter().any(|w| w.mapped && w.event_mask & 0x44 != 0))
-    };
+    });
     if !wants {
         // Nothing to deliver to — but the button queue still has to be emptied, or the
         // clicks a person made on the DESKTOP would be waiting in it and all arrive at
