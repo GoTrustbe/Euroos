@@ -1,0 +1,83 @@
+# BUG-230, before: self-test image of e4b8ba4, KVM 16 GiB, 4 vCPU (b230/base16g.log): [if0-window] lines
+[if0-window] 99 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #1 longest 99 ms
+[if0-window] 81 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #2 longest 99 ms
+[if0-window] 100 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #3 longest 100 ms
+[if0-window] 83 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #4 longest 100 ms
+[if0-window] 148 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #5 longest 148 ms
+[if0-window] 83 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #6 longest 148 ms
+[if0-window] 95 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #7 longest 148 ms
+[if0-window] 147 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #8 longest 148 ms
+[if0-window] 97 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #9 longest 148 ms
+[if0-window] 103 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #10 longest 148 ms
+[if0-window] 104 ms cause=syscall 28 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 28, resumed at rip=0x468015c6 cs=0x23) #11 longest 148 ms
+[if0-window] 221 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x70149def cs=0x8) #12 longest 221 ms
+[if0-window] 56 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 10 last syscall 0, resumed at rip=0x42201d3d cs=0x23) #13 longest 221 ms
+[if0-window] 81 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 231, resumed at rip=0x7014b3df cs=0x8) #14 longest 221 ms
+[if0-window] 129 ms cause=kernel (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 0 last syscall 60, resumed at rip=0x7014c11c cs=0x8) #15 longest 221 ms
+[if0-window] 57 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 7 last syscall 0, resumed at rip=0x400007 cs=0x23) #16 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #17 longest 221 ms
+[if0-window] 53 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #18 longest 221 ms
+[if0-window] 55 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 11 last syscall 0, resumed at rip=0x424010a3 cs=0x23) #19 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #20 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #21 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #22 longest 221 ms
+[if0-window] 65 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 9 last syscall 0, resumed at rip=0x42000084 cs=0x23) #23 longest 221 ms
+[if0-window] 50 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 8 last syscall 0, resumed at rip=0x600007 cs=0x23) #24 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #25 longest 221 ms
+[if0-window] 53 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #26 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #27 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #28 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #29 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #30 longest 221 ms
+[if0-window] 54 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #31 longest 221 ms
+[if0-window] 51 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #32 longest 221 ms
+[if0-window] 50 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 11 last syscall 0, resumed at rip=0x424010a3 cs=0x23) #33 longest 221 ms
+[if0-window] 52 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #34 longest 221 ms
+[if0-window] 56 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 7 last syscall 0, resumed at rip=0x400007 cs=0x23) #35 longest 221 ms
+[if0-window] 50 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 8 last syscall 0, resumed at rip=0x600007 cs=0x23) #36 longest 221 ms
+[if0-window] 55 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #37 longest 221 ms
+[if0-window] 50 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 8 last syscall 0, resumed at rip=0x600000 cs=0x23) #38 longest 221 ms
+[if0-window] 55 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #39 longest 221 ms
+[if0-window] 68 ms cause=syscall 1 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 6 last syscall 1, resumed at rip=0x1cc3b85dd cs=0x23) #40 longest 221 ms
+[if0-window] 59 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 11 last syscall 0, resumed at rip=0x424010a3 cs=0x23) #41 longest 221 ms
+[if0-window] 54 ms cause=syscall 0 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 7 last syscall 0, resumed at rip=0x400000 cs=0x23) #42 longest 221 ms
+[if0-window] 53 ms cause=syscall 14 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 17 last syscall 14, resumed at rip=0x1cc3c5c5d cs=0x23) #43 longest 221 ms
+
+# the same boot with only the timing of every background call added (d230): which call it was
+[slowcall] task 30 call 0x6107(0x472136f7, 0x1000, 0x481ffe38, 0x37b2a8b7fafe18, 0xffff) -> 0x0: 163 ms with interrupts off
+[if0-window] 175 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #1 longest 175 ms
+[slowcall] task 30 call 0x6107(0x4720375c, 0x1000, 0xff, 0x6e78da52572928, 0x2) -> 0x0: 80 ms with interrupts off
+[if0-window] 87 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #2 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472136f8, 0x1000, 0x4720375c, 0xffffffff, 0x472036f8) -> 0x0: 132 ms with interrupts off
+[if0-window] 135 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #3 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472036f8, 0x1000, 0x4720375c, 0x4720375c, 0xff) -> 0x0: 88 ms with interrupts off
+[if0-window] 94 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #4 longest 175 ms
+[slowcall] task 30 call 0x6107(0x47201296, 0x1000, 0x0, 0xff, 0x481ffe38) -> 0x0: 94 ms with interrupts off
+[if0-window] 106 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #5 longest 175 ms
+[slowcall] task 30 call 0x6107(0x4720375c, 0x1000, 0x47201000, 0x481fee38, 0x4dc35a8f0cc24) -> 0x0: 79 ms with interrupts off
+[if0-window] 84 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #6 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472136f7, 0x1000, 0x2, 0xffff, 0x47aba2a5961d8) -> 0x0: 123 ms with interrupts off
+[if0-window] 134 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #7 longest 175 ms
+[slowcall] task 30 call 0x6107(0x47201000, 0x1000, 0x0, 0x5b5f774c59d4a8, 0x8000000000000000) -> 0x0: 92 ms with interrupts off
+[if0-window] 104 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #8 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472136f7, 0x1000, 0x100000000, 0x472136f7, 0xffff) -> 0x0: 123 ms with interrupts off
+[if0-window] 131 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #9 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472136f8, 0x1000, 0x4720375c, 0x8000000000000000, 0x47201296) -> 0x0: 125 ms with interrupts off
+[if0-window] 138 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #10 longest 175 ms
+[slowcall] task 30 call 0x6107(0x472136f8, 0x1000, 0x8dfe7c6201960c, 0x5e94c3646dd1b0, 0x10000000000) -> 0x0: 125 ms with interrupts off
+[if0-window] 129 ms cause=syscall 24839 (steal 0 ms, disk wait with IF=0 0 ms (any 0 ms), faults +0 0 ms, task 30 last syscall 24839, resumed at rip=0x472015c6 cs=0x23) #11 longest 175 ms
+
+# test commit 1913094 (tA), KVM 4 GiB 2 vCPU
+[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed=true · ran-to-completion=true · exit="done (exit 171)" · longest call 0x6107 112 ms with interrupts off (limit 50) → FAILED
+
+# fix (tB = 5861686), KVM 4 GiB 2 vCPU and 16 GiB 4 vCPU
+/srv/euroos/11fb-runs/tst/tB-4g.log:[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed=true · ran-to-completion=true · exit="done (exit 171)" · longest call 0x6107 6 ms with interrupts off (limit 50) → OK (every call answered with a value or an error; no fault, no panic) ✓
+/srv/euroos/11fb-runs/tst/tB-16g.log:[eurofuzz] Euro API fuzzer: 20000 random Euro calls with hostile arguments (caps console,window,file): installed=true · ran-to-completion=true · exit="done (exit 171)" · longest call 0x6107 7 ms with interrupts off (limit 50) → OK (every call answered with a value or an error; no fault, no panic) ✓
+slowcall lines: 4 GiB 0, 16 GiB 0
+[if0-window] lines with syscall 28 or 24839 (0x6107): base16g 11, tB-16g 0
+
+# what remains in tB-16g (not this bug): [if0-window] by cause
+      3 kernel
+      8 syscall 0
+      9 syscall 1
+     13 syscall 14

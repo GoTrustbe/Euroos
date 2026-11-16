@@ -929,10 +929,14 @@ fn main() -> Status {
                 }
                 procpool::install_regions(&regions);
                 // Copy-on-write fork: one holder count per frame of RAM, in
-                // the kernel heap. Not from the frame allocator: 128 frames
-                // taken there at 1 GiB moved every later allocation (the
-                // arenas of the boot self-tests) and /bin/msock stopped
-                // answering in [bgnet-cap] (BUG-243).
+                // the kernel heap (2 bytes a frame: 4 MiB at 8 GiB). BUG-243:
+                // in frames of their own they moved the boot layout and
+                // /bin/msock did not run in [bgnet-cap]; the cause was the
+                // scheduler of that time (a new task started at the vruntime
+                // of the desktop task, far ahead of five busy self-test
+                // tasks, and was not picked within the 30 s), not this
+                // memory. Frames would do as well since S1; the heap keeps
+                // the boot layout the releases were measured with.
                 {
                     let entries = allocator.total_frames();
                     match alloc::alloc::Layout::from_size_align(entries * 2, 4096) {

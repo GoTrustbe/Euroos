@@ -1,0 +1,15 @@
+# KVM self-test boots, 2 vCPU, intel-hda (kboot-hda.sh): base = e4b8ba4, new = 5861686 (tB), f2 = 1a6edd9 (final)
+base-1G end=marker after 220s failed-lines=3 crash-lines=0
+base-4G end=marker after 235s failed-lines=1 crash-lines=0
+base-2G end=marker after 244s failed-lines=1 crash-lines=0
+base-8G end=marker after 259s failed-lines=1 crash-lines=0
+new-1G end=marker after 204s failed-lines=3 crash-lines=0
+new-4G end=marker after 217s failed-lines=1 crash-lines=0
+new-2G end=marker after 230s failed-lines=1 crash-lines=0
+new-8G end=marker after 242s failed-lines=1 crash-lines=0
+lanes done
+f2-1G end=marker after 206s failed-lines=3 crash-lines=0
+f2-2G end=marker after 207s failed-lines=1 crash-lines=0
+f2-8G end=marker after 212s failed-lines=1 crash-lines=0
+f2-4G end=marker after 216s failed-lines=1 crash-lines=0
+lanes2 done

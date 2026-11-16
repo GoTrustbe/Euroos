@@ -1,0 +1,64 @@
+# BUG-243: TCG, 1 GiB, 1 vCPU, intel-iommu, storage.nvme=user (st1) and combined (cb1); holder counts in frames (the dc0b337 placement) in every image
+== m3-st1
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED
+== m3-cb1
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED
+== d3-st1
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[dbg243] pid 196624 task 22 state Some("Ready") arena 0xc200000 virt 0xc200000 pml4 0x206000 kstack 0x202000 brk 0xc280000 last=0(a1=0x0)->0x0
+[dbg243] arena vs fresh load: 3 of 10 pages differ (exec pages 6, entry 0xc401261): ["p7+0xf60(28B)", "p8+0xe2a(5B)", "p9+0x2(6B)"]
+[nmi-tasks] 28 slots, current=0 (mirror 0), SCHED free, ticks=9037, min_vr=1529472, t0 wants=true idle=false last-turn-tick=9037, sched-skips=0
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=3337152 sys=185 cpu=0 last=231(a1=0x0)->0x0 RUNNING
+[nmi-tasks] t7 Ready pid=0 cr3=0x1ba000 vr=1530816 sys=0 cpu=1139 last=0(a1=0x0)->0x0 resumes rip=0x400000 cs=0x23 IF=1
+[nmi-tasks] t8 Ready pid=0 cr3=0x1c1000 vr=1530816 sys=0 cpu=1139 last=0(a1=0x0)->0x0 resumes rip=0x600000 cs=0x23 IF=1
+[nmi-tasks] t9 Ready pid=0 cr3=0x1c8000 vr=1529472 sys=0 cpu=1138 last=0(a1=0x0)->0x0 resumes rip=0xb80006a cs=0x23 IF=1
+[nmi-tasks] t10 Ready pid=0 cr3=0x1d0000 vr=1529472 sys=0 cpu=1138 last=0(a1=0x0)->0x0 resumes rip=0xba0109a cs=0x23 IF=1
+[nmi-tasks] t11 Ready pid=0 cr3=0x1d8000 vr=1529472 sys=0 cpu=1138 last=0(a1=0x0)->0x0 resumes rip=0xbc0109a cs=0x23 IF=1
+[nmi-tasks] t22 Ready pid=0 cr3=0x206000 vr=1993152 sys=0 cpu=10 last=0(a1=0x0)->0x0 resumes rip=0xc201261 cs=0x23 IF=1
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED
+== d4-st1
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[dbg243] pid 196624 task 22 state Some("Ready") arena 0xc200000 virt 0xc200000 pml4 0x206000 kstack 0x202000 brk 0xc280000 last=0(a1=0x0)->0x0
+[dbg243] arena vs fresh load: 3 of 10 pages differ (exec pages 6, entry 0xc401261): ["p7+0xf60(28B)", "p8+0xe2a(5B)", "p9+0x2(6B)"]
+[dbg243] task 22: 0 page faults, last addr 0x0 code 0x0 rip 0x0 handled-by 0 (1 cow, 2 lazy, 3 demand)
+[nmi-tasks] 28 slots, current=0 (mirror 0), SCHED free, ticks=8230, min_vr=1346688, t0 wants=true idle=false last-turn-tick=8230, sched-skips=0
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=2842560 sys=185 cpu=0 last=231(a1=0x0)->0x0 RUNNING
+[nmi-tasks] t7 Ready pid=0 cr3=0x1ba000 vr=1348032 sys=0 cpu=1003 last=0(a1=0x0)->0x0 resumes rip=0x400000 cs=0x23 IF=1
+[nmi-tasks] t8 Ready pid=0 cr3=0x1c1000 vr=1348032 sys=0 cpu=1003 last=0(a1=0x0)->0x0 resumes rip=0x600000 cs=0x23 IF=1
+[nmi-tasks] t9 Ready pid=0 cr3=0x1c8000 vr=1348032 sys=0 cpu=1003 last=0(a1=0x0)->0x0 resumes rip=0xb80006a cs=0x23 IF=1
+[nmi-tasks] t10 Ready pid=0 cr3=0x1d0000 vr=1346688 sys=0 cpu=1002 last=0(a1=0x0)->0x0 resumes rip=0xba0109a cs=0x23 IF=1
+[nmi-tasks] t11 Ready pid=0 cr3=0x1d8000 vr=1346688 sys=0 cpu=1002 last=0(a1=0x0)->0x0 resumes rip=0xbc0109a cs=0x23 IF=1
+[nmi-tasks] t22 Ready pid=0 cr3=0x206000 vr=1497216 sys=0 cpu=14 last=0(a1=0x0)->0x0 resumes rip=0xc201261 cs=0x23 IF=1
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED
+== d4-cb1
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[dbg243] pid 196624 task 22 state Some("Ready") arena 0xc200000 virt 0xc200000 pml4 0x206000 kstack 0x202000 brk 0xc280000 last=0(a1=0x0)->0x0
+[dbg243] arena vs fresh load: 3 of 10 pages differ (exec pages 6, entry 0xc401261): ["p7+0xf60(28B)", "p8+0xe2a(5B)", "p9+0x2(6B)"]
+[dbg243] task 22: 0 page faults, last addr 0x0 code 0x0 rip 0x0 handled-by 0 (1 cow, 2 lazy, 3 demand)
+[nmi-tasks] 28 slots, current=0 (mirror 0), SCHED free, ticks=8199, min_vr=1333248, t0 wants=true idle=false last-turn-tick=8199, sched-skips=0
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=2810304 sys=185 cpu=0 last=231(a1=0x0)->0x0 RUNNING
+[nmi-tasks] t7 Ready pid=0 cr3=0x1ba000 vr=1334592 sys=0 cpu=993 last=0(a1=0x0)->0x0 resumes rip=0x400000 cs=0x23 IF=1
+[nmi-tasks] t8 Ready pid=0 cr3=0x1c1000 vr=1334592 sys=0 cpu=993 last=0(a1=0x0)->0x0 resumes rip=0x600000 cs=0x23 IF=1
+[nmi-tasks] t9 Ready pid=0 cr3=0x1c8000 vr=1334592 sys=0 cpu=993 last=0(a1=0x0)->0x0 resumes rip=0xb80006a cs=0x23 IF=1
+[nmi-tasks] t10 Ready pid=0 cr3=0x1d0000 vr=1334592 sys=0 cpu=993 last=0(a1=0x0)->0x0 resumes rip=0xba0109a cs=0x23 IF=1
+[nmi-tasks] t11 Ready pid=0 cr3=0x1d8000 vr=1334592 sys=0 cpu=993 last=0(a1=0x0)->0x0 resumes rip=0xbc0109a cs=0x23 IF=1
+[nmi-tasks] t22 Ready pid=0 cr3=0x206000 vr=1463616 sys=0 cpu=14 last=0(a1=0x0)->0x0 resumes rip=0xc201261 cs=0x23 IF=1
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED
+== b6-st1
+[euro] bg-musl (pid 196624) -> task 26, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+== b6-cb1
+[euro] bg-musl (pid 196624) -> task 26, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+== e4b8ba4 with the frames placement: st1
+[cow] holder counts for 1022 MiB of RAM: 511 KiB
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+== e4b8ba4 with the frames placement: cb1
+[cow] holder counts for 1022 MiB of RAM: 511 KiB
+[euro] bg-musl (pid 196624) -> task 22, own address space PML4 0x206000, arena 0xc200000
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 1 time(s), done (exit 1), output "msock: HTTP GET via POSIX sockets on EuroOS |   target: example.com (172.66.147.243):80 |   socket() failed" → OK (no capability, no socket) ✓
+== the original failing boot (mem3-runs/tcg/f2, d29ff3d)
+[bgnet-cap] /bin/msock as a background process WITHOUT CAP_NET: socket() refused 0 time(s), still running, output "" → FAILED

@@ -1,0 +1,5 @@
+# BUG-157: s4 sessions (4 GiB, 2 vCPU, chrome-mem-soak --mem 4096M --no-video --free-video-seconds 0 --hours 0.25), browser image of 5861686
+s4a: [chrome-mem-soak] PASS: 2 rounds in 1190 s | NMI probes 0, did-not-answer 0, FROZEN 0
+s4b: [chrome-mem-soak] FAIL (1 step(s)): 2 rounds in 1235 s | NMI probes 0, did-not-answer 0, FROZEN 0
+site openstreetmap
+commonest 85%, still changing
