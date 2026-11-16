@@ -837,7 +837,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             let rsp = frame.stack_pointer.as_u64();
             serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
             // Scan the stack upward for return addresses into user code (chrome's libs
-            // live in the demand region 0x100_0000_0000.. ; the arena is lower). These
+            // live in the demand region (ring3::in_demand_zone); the arena is lower). These
             // name the call chain that reached the null/wild jump — map each against the
             // [mmaplib] ranges to identify the crashing library.
             let mut printed = 0;
@@ -845,7 +845,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
                 let a = rsp.wrapping_add(i * 8);
                 if let Some(v) = read_user_qword(a) {
                     // Plausible code pointer: in the demand region (libs/code) or arena.
-                    if (v >= 0x100_0000_0000 && v < 0x140_0000_0000) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                    if crate::ring3::in_demand_zone(v) || (v >= 0x0100_0000 && v < 0x1000_0000) {
                         serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
                         printed += 1;
                         if printed >= 12 { break; }

@@ -878,6 +878,27 @@ pub fn user_range_writable_in(pml4: u64, ptr: u64, len: usize) -> bool {
     true
 }
 
+/// The leaf entry that maps `virt` in `pml4` (a 4 KiB, 2 MiB or 1 GiB
+/// page), or None. Read-only walk.
+pub fn leaf_entry_in(pml4: u64, virt: u64) -> Option<u64> {
+    // SAFETY: identity-mapped table chain, read only.
+    unsafe {
+        let mut table = pml4;
+        for shift in [39u64, 30, 21] {
+            let e = (table as *const u64).add(((virt >> shift) & 0x1FF) as usize).read_volatile();
+            if e & PRESENT == 0 {
+                return None;
+            }
+            if shift != 39 && e & HUGE != 0 {
+                return Some(e);
+            }
+            table = e & ADDR_MASK;
+        }
+        let e = (table as *const u64).add(((virt >> 12) & 0x1FF) as usize).read_volatile();
+        (e & PRESENT != 0).then_some(e)
+    }
+}
+
 pub fn translate_in(pml4: u64, virt: u64) -> Option<u64> {
     unsafe {
         let mut table = pml4;

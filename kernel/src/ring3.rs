@@ -174,7 +174,7 @@ fn prot_none_set(start: u64, end: u64, none: bool) {
 /// address is readable but a write to it must EFAULT. `fi == usize::MAX` entries are
 /// zero-fill .bss (anonymous, writable) — excluded.
 fn demand_file_backed(ptr: u64, len: usize) -> bool {
-    if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < DEMAND_BASE {
+    if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < demand_base() {
         return false; // fast path: not a demand-region pointer
     }
     let end = ptr.saturating_add(len as u64);
@@ -214,14 +214,14 @@ pub(crate) fn in_user_arena(ptr: u64, len: usize) -> bool {
     // above the arena (own PML4 slot); accepting it lets copy_to/from_user validate
     // demand-region pointers. Un-committed pages fault in on kernel touch (ring-0
     // demand fault), so it is safe to hand the kernel these addresses.
-    if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= DEMAND_BASE {
+    if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= demand_base() {
         // Bound by THIS process's bump pointer, not just by the region: an
         // address beyond it was never handed out here (it belongs to another
         // process). The demand fault handler rejects exactly that, so a kernel
         // dereference would page-fault at ring 0 and halt the machine instead
         // of returning EFAULT to the caller. Found on real hardware under KVM.
         return match ptr.checked_add(len as u64) {
-            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE
+            Some(end) => end <= demand_end()
                 && end <= DEMAND_NEXT.load(Ordering::Relaxed),
             None => false,
         };
@@ -5452,7 +5452,6 @@ fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5
 /// Address-space layout randomisation for a fresh image: page-granular slides
 /// for the brk base, the mmap bump base and the stack top inside the arena, and
 /// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
-struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
 /// BUG-136: brk start, mmap window start and stack top of a glibc arena of
 /// `span` bytes at `arena`, every region inside it (euromm::arena, host-tested).
 /// The launchers fall back to 64 MiB arenas on fragmented RAM; with the fixed
@@ -5461,9 +5460,8 @@ struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
 /// then a crash; one of them wedged the scheduler lock). An arena too small for
 /// any layout gets empty brk and mmap regions (every allocation ENOMEM), which
 /// the launchers never hand out (their floor is 64 MiB).
-fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
-    let sl = aslr_slides();
-    let s = euromm::arena::Slides { brk: sl.brk, mmap: sl.mmap, stack: sl.stack };
+fn glibc_arena_layout(arena: u64, span: u64, lay: &euromm::layout::Layout) -> (u64, u64, u64) {
+    let s = euromm::arena::Slides { brk: lay.brk, mmap: lay.mmap, stack: lay.stack };
     match euromm::arena::glibc_layout(arena, span, s) {
         Some(l) => (l.brk_start, l.mmap_start, l.stack_top),
         None => {
@@ -5474,18 +5472,6 @@ fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
     }
 }
 
-fn aslr_slides() -> Slides {
-    use euromm::layout::{draw, Mode, EXE_WINDOW, LEGACY_DEMAND_BASE};
-    // BUG-088: one draw of 32 bytes per image, cut by euromm::layout (host-tested).
-    // S0: every mode keeps the layout of before (the zone of `aslr=on` comes
-    // with S1); `aslr=off` makes every slide 0, so addresses repeat per run.
-    let r = crate::entropy::draw_wait::<{ euromm::layout::DRAW_BYTES }>();
-    if aslr_mode() == Mode::Off {
-        return Slides { brk: 0, mmap: 0, stack: 0, demand: 0 };
-    }
-    let l = draw(&r, Mode::Legacy, 0, 0);
-    Slides { brk: l.brk, mmap: l.mmap, stack: l.stack, demand: l.mmap_floor - (LEGACY_DEMAND_BASE + EXE_WINDOW) }
-}
 
 /// Apply `p` to the whole process of task `cur`: its main task and every thread
 /// that shares its address space (the main group, or one fork child's group).
@@ -9697,7 +9683,6 @@ static GVDSO_ELF: &[u8] = include_bytes!("../../userland/glibc/gvdso");
 pub fn gvdso_bytes() -> &'static [u8] { GVDSO_ELF }
 /// Where the vDSO lands in every glibc address space. Above the demand region's
 /// growth so DEMAND_NEXT can never collide with it.
-const VDSO_BASE: u64 = 0x1F0_0000_0000;
 /// VA-page offset of the clock data page: ONE page past the single-load image
 /// (vdso.lds keeps the whole image under a page; the code reads the page via
 /// `__ehdr_start + 4096`, PC-relative, no relocation).
@@ -9879,7 +9864,7 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
 /// the arena chain + pml4. Every teardown path uses this; freeing only the
 /// arena chain leaked 4 frames per glibc run ([churn-proc], 2026-10-07).
 fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
-    let n = crate::paging::free_user_table_chain(falloc, pml4, (VDSO_BASE >> 39) as usize);
+    let n = crate::paging::free_user_table_chain(falloc, pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
     static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     if DIAG.fetch_add(1, Ordering::Relaxed) < 3 {
         crate::serial_println!("[glibc] teardown: vDSO table chain freed ({n} frames), then the arena chain");
@@ -9887,14 +9872,14 @@ fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
     crate::paging::free_address_space(falloc, pml4);
 }
 
-fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64) -> bool {
+fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64, base: u64) -> bool {
     let imgs = VDSO_IMAGE_FRAMES.lock();
     for (i, &f) in imgs.iter().enumerate() {
-        if !crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + (i as u64) * 4096, f) {
+        if !crate::paging::map_user_4k_falloc(falloc, pml4, base + (i as u64) * 4096, f) {
             return false;
         }
     }
-    crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + VDSO_DATA_VOFF,
+    crate::paging::map_user_4k_falloc(falloc, pml4, base + VDSO_DATA_VOFF,
                                       VDSO_TIME_FRAME.load(Ordering::Relaxed))
 }
 
@@ -10828,6 +10813,11 @@ static GLIBC_CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc:
 struct ChildMem {
     task: usize,
     demand_next: u64,
+    // ASLR S1: per process; an exec in the child redraws them.
+    demand_floor: u64,
+    exe_base: u64,
+    exe_end: u64,
+    vdso: u64,
     arena_base: u64,
     arena_span: u64,
     brk_cur: u64,
@@ -10848,6 +10838,10 @@ fn child_mem_snapshot(task: usize) {
     let cm = ChildMem {
         task,
         demand_next: DEMAND_NEXT.load(Ordering::Relaxed),
+        demand_floor: DEMAND_FLOOR.load(Ordering::Relaxed),
+        exe_base: EXE_BASE.load(Ordering::Relaxed),
+        exe_end: EXE_END.load(Ordering::Relaxed),
+        vdso: VDSO_CUR.load(Ordering::Relaxed),
         arena_base: ARENA_BASE.load(Ordering::Relaxed),
         arena_span: ARENA_SPAN_DYN.load(Ordering::Relaxed),
         brk_cur: BRK_CUR.load(Ordering::Relaxed),
@@ -10969,6 +10963,10 @@ fn child_mem_swap(task: usize) -> bool {
         }};
     }
     swp!(DEMAND_NEXT, cm.demand_next);
+    swp!(DEMAND_FLOOR, cm.demand_floor);
+    swp!(EXE_BASE, cm.exe_base);
+    swp!(EXE_END, cm.exe_end);
+    swp!(VDSO_CUR, cm.vdso);
     swp!(ARENA_BASE, cm.arena_base);
     swp!(ARENA_SPAN_DYN, cm.arena_span);
     swp!(BRK_CUR, cm.brk_cur);
@@ -11215,7 +11213,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // Fresh image: wipe the arena, and DROP the child's inherited demand pages.
     // The child forked a COPY of the parent's already-relocated exe/heap pages;
     // ld.so must instead read the original, unrelocated image from disk, or it
-    // sees relocated phdr p_vaddrs (base + DEMAND_BASE = a slot-4 fault). Freeing
+    // sees relocated phdr p_vaddrs (base + demand_base() = a slot-4 fault). Freeing
     // the child's PML4 demand slot makes every exe page re-fault fresh.
     // In pieces with a window for the timer (BUG-128): this task is the only
     // one in its address space, nobody sees the arena half wiped.
@@ -11247,7 +11245,12 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    // ASLR S1: an exec draws anew (design 2.4): exe base, mmap floor and the
+    // slides in the arena. The arena base stays until S5; an exec'd child has
+    // no vDSO (as before S1: AT_SYSINFO_EHDR 0).
+    let (exe_span, exe_align) = disk_exe_geometry(diskidx);
+    let lay = image_layout(exe_span, exe_align);
+    let demand_floor = lay.mmap_floor;
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
@@ -11256,7 +11259,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     SHARED_MAPS.lock().clear();
 
     let ldso_base = arena + 0x0080_0000;
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
@@ -11266,7 +11269,10 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
-    let exe_base = DEMAND_BASE;
+    let exe_base = lay.exe_base;
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
+    VDSO_CUR.store(0, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return (-8i64) as u64,
@@ -11282,7 +11288,11 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base, 0) };
+    crate::serial_println!(
+        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso none (aslr={})",
+        crate::sched::current(), aslr_mode().name()
+    );
 
     crate::serial_println!(
         "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x} (arena wipe {} ms, demand pages dropped {} ms, new image {} ms)",
@@ -11597,8 +11607,21 @@ pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::ato
 // commit only touched physical. Opt-in (DEMAND_ENABLED) so it CANNOT affect the
 // default identity-arena path: with the flag off, handle_demand_fault is a no-op
 // and mmap routing is unchanged. This is the Chromium-scale-memory foundation.
-const DEMAND_PML4_IDX: usize = 2; // virtual [1 TiB, 1.5 TiB)
-const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
+// ASLR S1: with `aslr=on`/`off` the region is the zone 32..96 TiB (PML4 64..191)
+// of euromm::layout; with `aslr=legacy` the one slot of before (1 TiB, 480 GiB).
+fn demand_base() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_base
+}
+fn demand_size() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_size
+}
+fn demand_end() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_end()
+}
+/// Is `a` inside the demand region of this boot (diagnostics: plausible code pointers)?
+pub fn in_demand_zone(a: u64) -> bool {
+    a >= demand_base() && a < demand_end()
+}
 // 256 GiB of reservable virtual space (within PML4 slot 2's 512 GiB). chrome's
 // PartitionAlloc reserves several GigaCage pools (observed 4 + 32 + 16 GiB), each
 // aligned to its own size, so ~130 GiB with alignment padding — 64 GiB was too
@@ -11608,7 +11631,6 @@ const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
 // pools: observed a 135 GiB + a 69 GiB + several GiB-scale reservations), which
 // exhausted a 256 GiB region and returned ENOMEM mid-init. Virtual-only: physical
 // frames + page tables commit per touched page, so a bigger reservation is free.
-const DEMAND_SIZE: u64 = 480 * (1 << 30);
 // Route anon mmaps >= 64 KiB here (BUG-131: under 16 MiB they came from the
 // arena window, which never gives back, and V8's 512 KiB zone segments ran it
 // dry in a YouTube renderer).
@@ -11624,12 +11646,105 @@ pub fn aslr_mode() -> euromm::layout::Mode {
 /// bootopt `aslr=`: set once, before the first process starts.
 pub fn aslr_set_mode(m: euromm::layout::Mode) {
     ASLR_MODE.store(m.to_u8(), Ordering::Relaxed);
+    let z = euromm::layout::zone(m);
+    DEMAND_NEXT.store(z.demand_base, Ordering::Relaxed);
+    DEMAND_FLOOR.store(z.demand_base, Ordering::Relaxed);
 }
 
-/// The PML4 slots of the demand region. S0: the one slot of before in every
-/// mode; the zone of `aslr=on` (PML4 64..191) comes with step S1.
+/// Per process (swapped with `ChildMem` for a fork child): the window of the
+/// executable from disk and the vDSO base (0 = none).
+static EXE_BASE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
+static EXE_END: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE + euromm::layout::EXE_WINDOW);
+static VDSO_CUR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// One draw for one image (a launch or an exec), cut by euromm::layout
+/// (BUG-088, ASLR S1): exe base (programs from disk), mmap floor, vDSO and the
+/// slides inside the arena, for the mode of this boot.
+fn image_layout(exe_span: u64, exe_align: u64) -> euromm::layout::Layout {
+    let r = crate::entropy::draw_wait::<{ euromm::layout::DRAW_BYTES }>();
+    euromm::layout::draw(&r, aslr_mode(), exe_span, exe_align)
+}
+
+/// Where an image puts its regions: what a launcher and `do_child_execve`
+/// use, and what `[aslr-exec]` compares.
+#[derive(Clone, Copy, Debug)]
+pub struct Placed {
+    pub exe: u64,
+    pub ldso: u64,
+    pub floor: u64,
+    pub vdso: u64,
+    pub brk: u64,
+    pub mmap: u64,
+    pub stack: u64,
+}
+/// The regions of an image with the arena at `arena` (`span` bytes) and the
+/// draw `lay`. A program from disk has its executable at the exe base, an
+/// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
+/// (a launch), not after an exec in a fork child (as before S1).
+fn place(arena: u64, span: u64, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
+    let (brk, mmap, stack) = glibc_arena_layout(arena, span, lay);
+    Placed {
+        exe: if from_disk { lay.exe_base } else { arena },
+        ldso: arena + 0x0080_0000,
+        floor: lay.mmap_floor,
+        vdso: if vdso { lay.vdso } else { 0 },
+        brk,
+        mmap,
+        stack,
+    }
+}
+
+/// `[aslr-exec]`, kernel side (the probe cannot exec itself: only the
+/// persistent program from disk re-executes): the placement a launch of a
+/// program from disk makes, then eight execs in a fork child of it, each with
+/// the draw `do_child_execve` makes. Per region: how many of the eight execs
+/// kept the address of the parent.
+pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
+    const SPAN: u64 = 128 << 20;
+    let arena = 0x4000_0000; // only a number: nothing is mapped
+    let (es, ea) = (200 << 20, 4096);
+    let parent = place(arena, SPAN, &image_layout(es, ea), true, true);
+    let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
+    for _ in 0..8 {
+        let c = place(arena, SPAN, &image_layout(es, ea), true, false);
+        let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
+        for (k, (a, b)) in pairs.iter().enumerate() {
+            if a == b || *b == 0 {
+                kept[k].1 += 1;
+            }
+        }
+    }
+    kept
+}
+
+/// The span (lowest PT_LOAD at 0 to the end of the highest) and the largest
+/// p_align of the executable `diskidx` of a pack, from its ELF header.
+fn disk_exe_geometry(diskidx: usize) -> (u64, u64) {
+    let mut hdr = alloc::vec![0u8; 8192];
+    if !pack_read(diskidx, 0, &mut hdr) || &hdr[0..4] != b"\x7fELF" {
+        return (0, 4096);
+    }
+    let e_phoff = rd_u64(&hdr, 32) as usize;
+    let e_phentsize = rd_u16(&hdr, 54) as usize;
+    let e_phnum = rd_u16(&hdr, 56) as usize;
+    let (mut span, mut align) = (0u64, 4096u64);
+    for i in 0..e_phnum {
+        let ph = e_phoff + i * e_phentsize;
+        if ph + 56 > hdr.len() {
+            break;
+        }
+        if rd_u32(&hdr, ph) == 1 {
+            span = span.max(rd_u64(&hdr, ph + 16).saturating_add(rd_u64(&hdr, ph + 40)));
+            align = align.max(rd_u64(&hdr, ph + 48));
+        }
+    }
+    (span, align)
+}
+
+/// The PML4 slots of the demand region (`aslr=legacy`: slot 2; else 64..191).
+/// The walks skip a slot without a table in one read.
 fn demand_slots() -> core::ops::Range<usize> {
-    DEMAND_PML4_IDX..DEMAND_PML4_IDX + 1
+    euromm::layout::zone(aslr_mode()).demand_slots()
 }
 /// `paging::scan_demand_ro` over every slot of the demand region.
 fn dz_scan_ro(pml4: u64, age: bool, f: &mut dyn FnMut(u64, bool) -> bool) -> usize {
@@ -11669,6 +11784,10 @@ fn dz_clone(parent: u64, child: u64, between: &mut dyn FnMut(), private: &dyn Fn
 /// region is one slot and the check does not apply.
 pub fn demand_slots_selftest(falloc: &mut FrameAllocator) -> bool {
     use euromm::layout::{zone, Mode};
+    if aslr_mode() == Mode::Legacy {
+        crate::serial_println!("[demand-slots] aslr=legacy: the demand region is one PML4 slot (2), nothing to check ⬜");
+        return true;
+    }
     let z = zone(Mode::On);
     let last = (z.demand_slots().end as u64 - 1) << 39;
     let pages = [z.demand_base + 0x1000, z.demand_base + 0x3F_F000, last + 0x40_0000_0000 + 0x2000, z.demand_end() - 0x1000];
@@ -11752,11 +11871,11 @@ pub fn demand_slots_selftest(falloc: &mut FrameAllocator) -> bool {
     why.is_none()
 }
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
 /// The lowest demand address that can be committed this run (DEMAND_NEXT at
-/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from DEMAND_BASE
+/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from demand_base()
 /// (192 MiB of the region below the exe window is never mapped).
-pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
@@ -11793,7 +11912,7 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     }
     let start = addr & !0xFFF;
     let end = addr.saturating_add(len).saturating_add(0xFFF) & !0xFFF;
-    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+    if end <= start || start < demand_base() || end > demand_end() {
         return 0;
     }
     ensure_globals_for_current();
@@ -11875,7 +11994,7 @@ fn demand_give_back(start: u64, end: u64) {
 /// or alias: those frames belong to the file), leave shared and page-cache frames
 /// to their owners. A later touch faults in zeros (or the file's bytes again).
 fn demand_drop_range(start: u64, end: u64) -> (usize, usize) {
-    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+    if end <= start || start < demand_base() || end > demand_end() {
         return (0, 0);
     }
     ensure_globals_for_current();
@@ -12002,7 +12121,7 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     // Copy-on-write (fork): a write to a page shared with another process.
     // Needs no demand state and no lock but the pool's, so it comes first: a
     // system call that copies into its caller may hold any other lock.
-    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+    if write && present && addr >= demand_base() && addr < demand_end() {
         let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         match crate::paging::demand_cow_fault(pml4, addr) {
             Some(true) => return true,
@@ -12027,7 +12146,7 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     // read-only mapping of a shared disk-cache frame — give the writer its own
     // copy and retry. (Every other present+write fault is a real violation and
     // falls through to the terminate path.)
-    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+    if write && present && addr >= demand_base() && addr < demand_end() {
         let pml4 = {
             use x86_64::registers::control::Cr3;
             Cr3::read().0.start_address().as_u64()
@@ -12206,11 +12325,11 @@ pub fn oom_in_syscall(idx: usize, addr: u64, rip: u64) {
 /// Is `addr` in the demand region, i.e. was a fault there one the pool could
 /// not serve (and not a wild kernel pointer)?
 pub fn in_demand_region(addr: u64) -> bool {
-    DEMAND_ENABLED.load(Ordering::Relaxed) && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE
+    DEMAND_ENABLED.load(Ordering::Relaxed) && addr >= demand_base() && addr < demand_end()
 }
 
 fn handle_demand_fault_inner(addr: u64) -> bool {
-    let in_region = addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE;
+    let in_region = addr >= demand_base() && addr < demand_end();
     if !DEMAND_ENABLED.load(Ordering::Relaxed) {
         if in_region && !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
             crate::serial_println!("[demand] REJECT addr={addr:#x}: DEMAND_ENABLED=false");
@@ -12635,7 +12754,8 @@ pub fn spawn_glibc_persistent(
     let ldso_base = arena + 0x0080_0000;
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    let lay = image_layout(0, 0);
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -12656,7 +12776,7 @@ pub fn spawn_glibc_persistent(
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
     let vdso_ok = false;
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, 0) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
@@ -13270,8 +13390,14 @@ fn glibc_disk_launch(
     reset_fd_table();
     cdp_pipes_create(); // fd 3/4 for --remote-debugging-pipe, after the wipe above
 
-    // The exe is placed at the START of the demand region; ld.so libs reserve above it.
-    let exe_base = DEMAND_BASE;
+    // ASLR S1: one draw for this image (euromm::layout): the exe base (aligned
+    // to the largest p_align of the program), the mmap floor, the vDSO and the
+    // slides in the arena. With aslr=legacy: the start of the demand region.
+    let (exe_span, exe_align) = disk_exe_geometry(diskidx);
+    let lay = image_layout(exe_span, exe_align);
+    let exe_base = lay.exe_base;
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return Err("(bad disk exe ELF)"),
@@ -13313,7 +13439,7 @@ fn glibc_disk_launch(
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
@@ -13329,10 +13455,8 @@ fn glibc_disk_launch(
         }
     };
     let vdso_ok = vdso_prepare(falloc);
-    if vdso_ok {
-        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
-    }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
+    VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
@@ -13355,7 +13479,7 @@ fn glibc_disk_launch(
             return Err("(out of memory: page tables)");
         }
     };
-    if vdso_ok && !vdso_map_into(falloc, pml4) {
+    if vdso_ok && !vdso_map_into(falloc, pml4, lay.vdso) {
         // As in run_glibc: no frames for the vDSO's tables is a refusal (BUG-053).
         glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
         return Err("(out of memory: vDSO mapping)");
@@ -13365,7 +13489,11 @@ fn glibc_disk_launch(
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    let demand_floor = lay.mmap_floor;
+    crate::serial_println!(
+        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={})",
+        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), aslr_mode().name()
+    );
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
@@ -14575,10 +14703,19 @@ pub fn exit_flag_selftest(falloc: &mut FrameAllocator) {
 /// them, and keeps (address, physical address) in `PHYS_SEEN`.
 pub static PHYS_PROBE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 pub static PHYS_SEEN: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// `[vdso-ro]`: the leaf entries of the two vDSO pages of that process (0 = not mapped).
+pub static PHYS_VDSO_PTES: Mutex<[u64; 2]> = Mutex::new([0; 2]);
 fn phys_probe_note(pml4: u64, out: &str) {
     let mut seen = PHYS_SEEN.lock();
     seen.clear();
+    *PHYS_VDSO_PTES.lock() = [0; 2];
     let Some(l) = out.lines().find(|l| l.starts_with("gaslr: ")) else { return };
+    if let Some(v) = l.split(' ').find_map(|f| f.strip_prefix("vdso=0x")).and_then(|h| u64::from_str_radix(h, 16).ok()) {
+        if v != 0 {
+            let e = |a: u64| crate::paging::leaf_entry_in(pml4, a).unwrap_or(0);
+            *PHYS_VDSO_PTES.lock() = [e(v), e(v + VDSO_DATA_VOFF)];
+        }
+    }
     for f in l.split(' ') {
         if let Some((_, h)) = f.split_once("=0x") {
             if let Ok(va) = u64::from_str_radix(h, 16) {
@@ -14682,7 +14819,10 @@ pub fn run_glibc(
     let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    let lay = image_layout(0, 0);
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
+    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
 
     ARENA_BASE.store(arena, Ordering::Relaxed);
     ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
@@ -14709,10 +14849,8 @@ pub fn run_glibc(
     };
 
     let vdso_ok = vdso_prepare(falloc);
-    if vdso_ok {
-        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
-    }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base) };
+    VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
@@ -14733,7 +14871,7 @@ pub fn run_glibc(
             return (String::from("(out of memory: page tables)"), u64::MAX);
         }
     };
-    if vdso_ok && !vdso_map_into(falloc, pml4) {
+    if vdso_ok && !vdso_map_into(falloc, pml4, lay.vdso) {
         // The auxv on the stack already promises a vDSO: a process started without
         // the mapping jumps into nothing. No frames for its tables: refuse (BUG-053).
         glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
@@ -14746,7 +14884,7 @@ pub fn run_glibc(
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    let demand_floor = lay.mmap_floor;
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
@@ -14915,9 +15053,6 @@ pub fn run_glibc(
 /// Build the SysV x86-64 initial stack for a real glibc program: argc, argv[],
 /// envp[], and a FULL auxv (AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/FLAGS/ENTRY/UID/GID/
 /// PLATFORM/HWCAP/CLKTCK/SECURE/RANDOM/EXECFN) that glibc's ld.so requires.
-/// AT_SYSINFO_EHDR for the NEXT setup_user_stack_glibc call (0 = none). Set by the
-/// launch path right after it maps the vDSO into the new address space.
-static VDSO_EHDR_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// The initial stack of a glibc process (argv, envp, auxv) below `stack_top`,
 /// a virtual address of the process; the bytes are written at `stack_kern`, the
@@ -14931,6 +15066,7 @@ unsafe fn setup_user_stack_glibc(
     envp: &[&[u8]],
     info: &LoadInfo,
     interp_base: u64,
+    vdso: u64,
 ) -> u64 {
     // ASLR S3: every pointer is a virtual address of the process (from
     // `stack_top`); every byte is written where the kernel reaches it now.
@@ -14972,7 +15108,6 @@ unsafe fn setup_user_stack_glibc(
     let execfn = *argptrs.first().unwrap_or(&0);
     p &= !0xF;
 
-    let vdso = VDSO_EHDR_NEXT.swap(0, Ordering::Relaxed);
     let aux: [(u64, u64); 19] = [
         (33, vdso),           // AT_SYSINFO_EHDR (0 = no vDSO: glibc uses the syscalls)
         (3, info.phdr),       // AT_PHDR
@@ -15749,8 +15884,8 @@ fn demand_addr_origin(addr: u64) -> String {
                 addr - base + foff as u64);
         }
     }
-    if addr >= DEMAND_BASE {
-        alloc::format!("anon (demand+{:#x})", addr - DEMAND_BASE)
+    if addr >= demand_base() {
+        alloc::format!("anon (demand+{:#x})", addr - demand_base())
     } else {
         alloc::format!("arena+{:#x}", addr.wrapping_sub(ARENA_BASE.load(Ordering::Relaxed)))
     }
@@ -16061,7 +16196,7 @@ fn mm_fail(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, r: u64) {
         thread_name(cur), fork_child_owner(cur).unwrap_or(0), r as i64,
         win_end.saturating_sub(win) / 1024, win_end.saturating_sub(ARENA_BASE.load(Ordering::Relaxed)) >> 20,
         brk_end.saturating_sub(brk) / 1024,
-        DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(DEMAND_BASE) >> 30, DEMAND_SIZE >> 30,
+        DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(demand_base()) >> 30, demand_size() >> 30,
         crate::procpool::demand_free_frames() / 256, crate::procpool::free_frames() / 256,
         hu >> 20, hf >> 20);
     let (free_total, free_n) = { let f = DEMAND_FREE.lock(); (f.total(), f.ranges().len()) };
@@ -16388,7 +16523,7 @@ fn mem_census_once() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
         let Some((file, shared, none, reserved)) = proc_mem_ranges(owner) else { continue };
         let mut m = ProcMem { pid, task, name: thread_name(task), arena, reserved, ..Default::default() };
         m.noaccess = none.ranges().iter()
-            .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
+            .filter(|&&(s, _)| s >= demand_base() && s < demand_end()).map(|&(s, e)| e - s).sum();
         census_walk(&mut m, pml4, &file, &shared, &none);
         procs.push(m);
     }
@@ -16981,8 +17116,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     crate::serial_println!("[exitgrp] task {cur} ({}) exit_group({a1}) rip={:#x} rsp={:#x}",
                         if is_main { "MAIN" } else { "worker" },
                         unsafe { USER_RIP }, unsafe { USER_RSP });
-                    let lo = DEMAND_BASE;
-                    let hi = DEMAND_BASE + 0x0C00_0000; // ~192 MiB: the exe image window
+                    let lo = EXE_BASE.load(Ordering::Relaxed);
+                    let hi = EXE_END.load(Ordering::Relaxed); // the exe image window
                     let rsp = unsafe { USER_RSP };
                     let mut shown = 0;
                     for i in 0..256u64 {
@@ -17248,7 +17383,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                                 Cr3::read().0.start_address().as_u64()
                             };
                             let start = DEMAND_NEXT.fetch_add(pages * 4096, Ordering::Relaxed);
-                            if start + pages * 4096 > DEMAND_BASE + DEMAND_SIZE {
+                            if start + pages * 4096 > demand_end() {
                                 return (-12i64) as u64; // -ENOMEM
                             }
                             for i in 0..pages {
@@ -17284,7 +17419,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         let fsz = ram_len(fi);
                         let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
                         let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                        if start + region > DEMAND_BASE + DEMAND_SIZE {
+                        if start + region > demand_end() {
                             DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                             return (-12i64) as u64; // -ENOMEM
                         }
@@ -17326,7 +17461,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         // file (a freshly ftruncated file reads as the zeros it should).
                         let b = if DEMAND_ENABLED.load(Ordering::Relaxed) && region > (1 << 20) {
                             let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                            if start + region > DEMAND_BASE + DEMAND_SIZE {
+                            if start + region > demand_end() {
                                 DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                                 return (-12i64) as u64; // -ENOMEM
                             }
@@ -17414,10 +17549,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
                 start = (start + (align - 1)) & !(align - 1);
                 let new_next = start + len;
-                if new_next > DEMAND_BASE + DEMAND_SIZE {
+                if new_next > demand_end() {
                     if len >= (1 << 30) {
-                        crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> ENOMEM (demand region {} GiB exhausted, next={:#x})",
-                            len >> 20, align, DEMAND_SIZE >> 30, DEMAND_NEXT.load(Ordering::Relaxed));
+                        crate::serial_println!("[demand-res] mmap anon RESERVE {} MiB align={:#x} -> ENOMEM (demand region {} GiB exhausted, next={:#x})",
+                            len >> 20, align, demand_size() >> 30, DEMAND_NEXT.load(Ordering::Relaxed));
                     }
                     return (-12i64) as u64; // -ENOMEM: out of demand virtual space
                 }
@@ -17429,7 +17564,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     prot_none_set(start, new_next, true);
                 }
                 if len >= (1 << 30) {
-                    crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
+                    crate::serial_println!("[demand-res] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
                 }
                 return start; // untouched -> committed lazily by handle_demand_fault
             }
@@ -17441,7 +17576,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // (or as zero for bss) on first touch — see handle_demand_fault.
             if DEMAND_ENABLED.load(Ordering::Relaxed) && DEMAND_FILE_ENABLED.load(Ordering::Relaxed) {
                 const PROT_RWX: u64 = 0x7; // PROT_READ|WRITE|EXEC
-                let in_demand = |x: u64| x >= DEMAND_BASE && x < DEMAND_BASE + DEMAND_SIZE;
+                let in_demand = |x: u64| x >= demand_base() && x < demand_end();
 
                 // (A) A MAP_FIXED overlay landing inside a reserved demand span: the
                 // loader placing a segment (file-backed) or .bss (anon) at base+vaddr.
@@ -17505,7 +17640,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     };
                     drop(fds);
                     let start = DEMAND_NEXT.fetch_add(len, Ordering::Relaxed);
-                    if start + len > DEMAND_BASE + DEMAND_SIZE {
+                    if start + len > demand_end() {
                         DEMAND_NEXT.fetch_sub(len, Ordering::Relaxed);
                         return (-12i64) as u64; // -ENOMEM
                     }
@@ -17617,7 +17752,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // otherwise leaks its way through the demand pool over a long session.
             let start = a1 & !0xFFF;
             let end = start.saturating_add((a2 + 0xFFF) & !0xFFF);
-            if start >= DEMAND_BASE && end <= DEMAND_BASE + DEMAND_SIZE && end > start {
+            if start >= demand_base() && end <= demand_end() && end > start {
                 let (unmapped, freed) = demand_drop_range(start, end);
                 prot_none_set(start, end, false);
                 demand_give_back(start, end);
@@ -17674,10 +17809,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
 
             // In-place growth when this mapping is the last thing handed out from its
             // bump. That is the ordinary realloc pattern and costs no copy at all.
-            if old >= DEMAND_BASE {
+            if old >= demand_base() {
                 let next = DEMAND_NEXT.load(Ordering::Relaxed);
                 if old + old_len == next
-                    && next + grow <= DEMAND_BASE + DEMAND_SIZE
+                    && next + grow <= demand_end()
                     && DEMAND_NEXT
                         .compare_exchange(next, next + grow, Ordering::Relaxed, Ordering::Relaxed)
                         .is_ok()
@@ -17720,7 +17855,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let off = old - abase;
                 let region = ((off + new_len + 0xFFF) & !0xFFF).max(4096);
                 let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                if start + region > DEMAND_BASE + DEMAND_SIZE {
+                if start + region > demand_end() {
                     DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                     return (-12i64) as u64; // -ENOMEM
                 }
@@ -17750,7 +17885,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // demand region, a small one to the arena window.
             let dst = if DEMAND_ENABLED.load(Ordering::Relaxed) && new_len >= DEMAND_MIN_BYTES {
                 let start = DEMAND_NEXT.fetch_add(new_len, Ordering::Relaxed);
-                if start + new_len > DEMAND_BASE + DEMAND_SIZE {
+                if start + new_len > demand_end() {
                     DEMAND_NEXT.fetch_sub(new_len, Ordering::Relaxed);
                     return (-12i64) as u64; // -ENOMEM
                 }
@@ -20320,10 +20455,8 @@ fn elf_bias_case(exe: &[u8], ldso: &[u8], k: [u64; 3], v: [u64; 3], stk: u64) ->
     let (sk, sv) = (k[2], v[2]);
     let argv: [&[u8]; 2] = [b"/bin/seq", b"--elf-bias"];
     let envp: [&[u8]; 1] = [b"ELF_BIAS=1"];
-    let vdso = VDSO_EHDR_NEXT.swap(0, Ordering::Relaxed);
     // SAFETY: sk is the top of `stk` bytes of the scratch buffer.
-    let sp = unsafe { setup_user_stack_glibc(sv, sk, &argv, &envp, &info, v[1]) };
-    VDSO_EHDR_NEXT.store(vdso, Ordering::Relaxed);
+    let sp = unsafe { setup_user_stack_glibc(sv, sk, &argv, &envp, &info, v[1], 0) };
     let inv = |a: u64| a >= sv - stk && a < sv;
     if !inv(sp) || sp & 0xF != 0 {
         return Err("the stack pointer is not in the virtual stack");

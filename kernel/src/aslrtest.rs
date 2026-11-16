@@ -96,6 +96,7 @@ pub fn selftest(falloc: &mut FrameAllocator) {
     }
     ring3::PHYS_PROBE.store(false, Ordering::Relaxed);
     let phys: Vec<(u64, u64)> = core::mem::take(&mut *ring3::PHYS_SEEN.lock());
+    let vdso_ptes = *ring3::PHYS_VDSO_PTES.lock();
     // Fork and exec: a few starts each.
     let mut forks: Vec<([u64; 8], [u64; 8])> = Vec::new();
     let mut fork_dead = false;
@@ -120,6 +121,7 @@ pub fn selftest(falloc: &mut FrameAllocator) {
 
     report_aslr(mode, &seen);
     report_phys(&seen, &phys);
+    report_vdso_ro(&vdso_ptes);
     report_ind(mode, &seen);
     report_fork(&forks, fork_dead);
     report_exec(mode, &exec_out);
@@ -242,9 +244,36 @@ fn report_fork(forks: &[([u64; 8], [u64; 8])], dead: bool) {
 /// `[aslr-exec]`: the probe execs itself in a fork child.
 fn report_exec(_mode: Mode, out: &str) {
     if let Some(l) = out.lines().find(|l| l.starts_with("gaslr-exec: refused")) {
+        // The kernel re-executes only the persistent program from disk
+        // (do_child_execve), so the probe cannot exec itself. Kernel side
+        // instead: the placement a launch from disk makes against eight execs
+        // in a fork child, with the draw do_child_execve makes.
+        let kept = ring3::aslr_exec_check();
+        let mut not_yet: Vec<&str> = Vec::new();
+        let mut line = String::new();
+        for &(k, n) in kept.iter() {
+            line.push_str(&alloc::format!(" {k} {n}/8"));
+            if n >= 4 {
+                not_yet.push(match k {
+                    "ldso" => "ld.so (the arena base stays until S5)",
+                    "vdso" => "vDSO (an exec'd child has none)",
+                    "exe" => "exe",
+                    "floor" => "mmap floor",
+                    other => other,
+                });
+            }
+        }
+        let verdict = if _mode == Mode::Off {
+            String::from("off (boot option aslr=off: no draw on purpose) ⬜")
+        } else if not_yet.is_empty() {
+            String::from("OK ✓")
+        } else {
+            alloc::format!("FAILED (not yet: {})", not_yet.join(", "))
+        };
         crate::serial_println!(
-            "[aslr-exec] the exec of the probe in a fork child was refused ({}): this kernel re-executes only the persistent program from disk (do_child_execve); not measured by the probe, not yet ⬜",
-            l.trim_start_matches("gaslr-exec: refused ").trim()
+            "[aslr-exec] the probe exec was refused ({}: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr={}), kept the address of the parent:{line} → {verdict}",
+            l.trim_start_matches("gaslr-exec: refused ").trim(),
+            _mode.name()
         );
         return;
     }
@@ -258,5 +287,23 @@ fn report_exec(_mode: Mode, out: &str) {
             }
         }
         _ => crate::serial_println!("[aslr-exec] the exec start gave no pair: {:?} ⬜", out.trim()),
+    }
+}
+
+/// `[vdso-ro]` (BUG-353): the vDSO image and its clock page are one set of
+/// frames shared by every glibc process; a process must not be able to write
+/// them. Their leaf entries in the first start must be present, user, not writable.
+fn report_vdso_ro(ptes: &[u64; 2]) {
+    const W: u64 = 1 << 1;
+    const U: u64 = 1 << 2;
+    if ptes.iter().any(|&e| e & 1 == 0) {
+        crate::serial_println!("[vdso-ro] the vDSO pages of the first start were not found in its page tables: not measured ⬜");
+        return;
+    }
+    let w: Vec<&str> = [("image", ptes[0]), ("clock page", ptes[1])].iter().filter(|&&(_, e)| e & W != 0).map(|&(n, _)| n).collect();
+    if w.is_empty() && ptes.iter().all(|&e| e & U != 0) {
+        crate::serial_println!("[vdso-ro] the vDSO image and clock page (shared by every glibc process) are mapped user read-only → OK ✓");
+    } else {
+        crate::serial_println!("[vdso-ro] writable for the process: {} (the frames are shared by every glibc process: BUG-353) → FAILED", w.join(", "));
     }
 }
