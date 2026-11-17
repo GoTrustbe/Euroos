@@ -90,10 +90,12 @@ attacker who finds a bug in a program cannot know in advance where its code and 
 | `off` | The same layout as `on`, but always at the same addresses. For people who compare two logs of the same run. Not for daily use. |
 | `legacy` | The layout of EuroOS 2026.11.16 and earlier: fewer random bits and the browser program always at the same address. A way back if a program misbehaves with `on`; it will be removed later. |
 
-The browser's main program, its libraries and its large areas get about 30 random bits with `on` (Linux
-gives 28). The heap of small allocations, the stack and the dynamic loader of a program do not move as far
-yet: that is the next step of the work (design: `docs/design/ASLR.md`). An unknown value is ignored and the
-kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
+With `on`, every part of a program gets about 30 random bits (Linux gives 28): the browser's main program, its
+libraries and large areas, and also the program's own block (the dynamic loader, the small heap, small
+allocations and the stack; see `aslr.arena` below). Each new process the browser starts gets new addresses for
+all of them. The parts inside the program's own block still move together: who learns one address there can work
+out the others. Giving them separate places is a later, optional step (design: `docs/design/ASLR.md`, step S6).
+An unknown value is ignored and the kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
 
 ### Where the program's own memory lies: `aslr.arena`
 
@@ -103,8 +105,9 @@ which address the program sees that block.
 
 | Value | What it does |
 |---|---|
-| `fixed` (default) | The block is seen at one fixed address far above the kernel (8 TiB), whatever memory it uses. A program can no longer learn where its memory physically lies from its own addresses. Not random yet: that is the next step (design: `docs/design/ASLR.md`). |
-| `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.16 and earlier. A way back if a program misbehaves with `fixed`. |
+| `random` (default) | The block is seen at a random place between 8 and 12 TiB, new for every start and for every new process the browser starts. Inside it, the program itself and the dynamic loader get a random page offset too. With `aslr=off` the place is always 8 TiB. |
+| `fixed` | The block is always seen at 8 TiB, whatever memory it uses. A program cannot learn where its memory physically lies, but the addresses repeat. A way back if a program misbehaves with `random`. |
+| `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.16 and earlier. The way back if a program misbehaves with `random` and with `fixed`. |
 
 With `aslr=legacy` the block always stays at `identity`. The log line `[bootopt] aslr.arena=...` shows the
 placement in use.
@@ -122,7 +125,7 @@ placement in use.
 | `virtio.transport` | `modern`, `legacy` | `modern` | How virtio devices are driven. |
 | `serial.chatter` | `on`, `off` | `off` | Detailed diagnostic lines on the serial console. |
 | `aslr` | `on`, `off`, `legacy` | `on` | Random addresses for the memory of Linux programs (see above). |
-| `aslr.arena` | `fixed`, `identity` | `fixed` | Where a Linux program sees its own memory block (see above). |
+| `aslr.arena` | `random`, `fixed`, `identity` | `random` | Where a Linux program sees its own memory block (see above). |
 | `debug.schedwatch` | `on`, `off` | `off` | A debugging aid for kernel developers. |
 
 ## Video and sound in the browser

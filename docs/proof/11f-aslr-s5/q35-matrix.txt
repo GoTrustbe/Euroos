@@ -1,0 +1,51 @@
+# q35 metal matrix, KVM, EK_RESTRICT=1, S5 st image, CPUs 12-13, legs one after the other; tpm/tpmcrb not run (no swtpm on the R630)
+[matrix] image=/srv/euroos/aslr5-runs/q35-on/st.raw legs=base,nvme,ahci,e1000e,hda,usb,usbhub,usbaudio,usbnet,hwprobe,scan,nvmeroot,ahciroot,power,printer work=/tmp/ek-matrix-ze_1t24y
+[matrix] leg: base
+  [base] PASS ✓
+[matrix] leg: nvme
+  [nvme] PASS ✓
+[matrix] leg: ahci
+  [ahci] PASS ✓
+[matrix] leg: e1000e
+  [e1000e] PASS ✓
+[matrix] leg: hda
+  [hda] PASS ✓
+[matrix] leg: usb
+  [usb] PASS ✓
+[matrix] leg: usbhub
+  [usbhub] PASS ✓
+[matrix] leg: usbaudio
+  [usbaudio] PASS ✓
+[matrix] leg: usbnet
+  [usbnet] PASS ✓
+[matrix] leg: hwprobe
+  [hwprobe] PASS ✓
+[matrix] leg: scan
+  [scan] PASS ✓
+[matrix] leg: nvmeroot
+  [nvmeroot] PASS ✓ — installed to NVMe and booted standalone with root on NVMe
+  [nvmeroot] PASS ✓
+[matrix] leg: ahciroot
+  [ahciroot] PASS ✓ — installed to a blank SATA disk (boot medium untouched) and booted standalone with root on it
+  [ahciroot] PASS ✓
+[matrix] leg: power
+  [power] PASS ✓
+[matrix] leg: printer
+  [printer] PASS ✓
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbaudio PASS
+  usbnet   PASS
+  hwprobe  PASS
+  scan     PASS
+  nvmeroot PASS
+  ahciroot PASS
+  power    PASS
+  printer  PASS
+[matrix] ALL LEGS PASS ✓

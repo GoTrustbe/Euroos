@@ -1,0 +1,133 @@
+# TCG matrix, 10 legs, q35, -cpu qemu64,+smep,+smap, NIC restrict=on, S5 = e9b488d vs base = 417f6b9 (aslr=on, default). tcgq.sh + tcgboot.sh (drivers/)
+## S5
+user-smp4-iommu done 02:58:20 after 481s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 03:00:05 after 586s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 03:06:26 after 486s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 03:07:42 after 457s desktop=1 wd=0 nmi=0
+kernel-smp4 done 03:15:03 after 517s desktop=1 wd=0 nmi=0
+kernel-smp1 done 03:16:33 after 531s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 03:22:14 after 431s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 03:23:14 after 401s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 03:30:10 after 476s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 03:30:20 after 426s desktop=1 wd=0 nmi=0
+## base
+user-smp1-iommu done 03:37:37 after 426s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 03:38:22 after 471s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 03:44:33 after 416s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 03:45:59 after 457s desktop=1 wd=0 nmi=0
+kernel-smp1 done 03:51:34 after 421s desktop=1 wd=0 nmi=0
+kernel-smp4 done 03:53:40 after 461s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 03:58:05 after 391s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 04:00:36 after 416s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 04:04:51 after 406s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 04:07:57 after 441s desktop=1 wd=0 nmi=0
+## on: crash / FAILED lines per leg
+combined-smp1-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=3
+combined-smp4-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=8 iommu-fault-records=3
+kernel-smp1: crash=0 wd=0 nmi=0 failed-lines=3 iommu-fault-records=0
+kernel-smp4: crash=0 wd=0 nmi=0 failed-lines=2 iommu-fault-records=0
+storage-smp1-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=2
+storage-smp4-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=8 iommu-fault-records=2
+user-smp1-iommu: crash=0 wd=0 nmi=0 failed-lines=7 iommu-fault-records=1
+user-smp1-noiommu: crash=0 wd=0 nmi=0 failed-lines=7 iommu-fault-records=0
+user-smp4-iommu: crash=0 wd=0 nmi=0 failed-lines=6 iommu-fault-records=1
+user-smp4-noiommu: crash=0 wd=0 nmi=0 failed-lines=7 iommu-fault-records=0
+## base: crash / FAILED lines per leg
+combined-smp1-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=11 iommu-fault-records=3
+combined-smp4-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=10 iommu-fault-records=3
+kernel-smp1: crash=0 wd=0 nmi=0 failed-lines=5 iommu-fault-records=0
+kernel-smp4: crash=0 wd=0 nmi=0 failed-lines=5 iommu-fault-records=0
+storage-smp1-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=11 iommu-fault-records=2
+storage-smp4-iommu-1g: crash=0 wd=0 nmi=0 failed-lines=11 iommu-fault-records=2
+user-smp1-iommu: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=1
+user-smp1-noiommu: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=0
+user-smp4-iommu: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=1
+user-smp4-noiommu: crash=0 wd=0 nmi=0 failed-lines=9 iommu-fault-records=0
+## markers-compare base -> S5 per leg
+## user-smp4-iommu base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## user-smp4-noiommu base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## kernel-smp4 base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## storage-smp4-iommu-1g base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 3
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## combined-smp4-iommu-1g base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## user-smp1-iommu base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## user-smp1-noiommu base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## kernel-smp1 base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## storage-smp1-iommu-1g base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## combined-smp1-iommu-1g base -> S5
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## IOMMU fault records in S5 (only the deliberate ones of the malicious-driver self-tests)
+[udrv-dma] malicious e1000d: RX slot 4 aimed at kernel canary 0x1fa000, TX from kernel page 0x1fb000 (driver saw tx done) · IOMMU fault records: TX read 1, RX write 1 (total 2) · canary changed=false 
+[mr-dma] malicious megaraidd: DCMD data buffer aimed at kernel canary 0x194000 (completed, status 0x0) -> IOMMU fault records 1, canary intact=true; frame address = kernel page 0x195000 -> fault recor
+[udrv-blk-dma] malicious nvmed: READ of LBA 0 aimed at kernel canary 0x217000 · driver report=true (device error=false, status 0x0) · IOMMU fault records 1 · canary changed=false · disk still works=tr

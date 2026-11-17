@@ -1,0 +1,24 @@
+# Merge check of 417f6b9 (S4 ce6ca19 + bugs-35x 9c4d420), before S5. KVM 2 GiB, 2 vCPU, HD-Audio, -nic none
+m-2g end=marker after 200s failed-lines=3 crash-lines=0
+ce6-2g end=marker after 199s failed-lines=3 crash-lines=0
+9c4-2g end=marker after 201s failed-lines=4 crash-lines=0
+## markers-compare ce6ca19 -> merge
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 3
+   fork-cow-write: OKx1
+   fork-fault-wait: OKx1
+   vdso-mono: OKx1
+## markers-compare 9c4d420 -> merge
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## new self-tests of the merge
+[fork-cow-write] fork child: 26 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found), each got its own copy, parent's bytes unchanged → OK ✓
+[fork-fault-wait] fork child pid 1341 faulted in ring 3: the parent's waitpid got status 0xb (killed by SIGSEGV), run 0 s → OK ✓
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (11632513 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6588 times (max 10951 us), clock ah
+## one Chromium start with the merge (public image + ui.tour=off update.check=off), smp 2, CPUs 6-7
+[chrome-smoke] starts: 1/1 PASS

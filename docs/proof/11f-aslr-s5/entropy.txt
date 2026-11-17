@@ -1,0 +1,22 @@
+## after (s5-st, e9b488d, 20 KVM boots 2 GiB 2 vCPU, to [aslr-exec])
+boots 20; [aslr] verdicts: OK 20
+region   over boots      per boot min..max  distinct firsts
+exe              30                 30..30   20/20
+ldso             30                 30..30   20/20
+libc             30                 30..30   20/20
+stack            29                 29..29   20/20
+brk              29                 29..29   20/20
+mmap             30                 30..30   20/20
+mmapbig          30                 30..30   20/20
+vdso             27                 27..27   20/20
+## before (m-st, 417f6b9)
+boots 20; [aslr] verdicts: FAILED 20
+region   over boots      per boot min..max  distinct firsts
+exe               0                  0..0    1/20
+ldso              0                  0..0    1/20
+libc             30                 30..30   20/20
+stack             8                  8..8    19/20
+brk               8                  8..8    20/20
+mmap              9                  9..10   20/20
+mmapbig          30                 30..30   20/20
+vdso             27                 27..27   20/20

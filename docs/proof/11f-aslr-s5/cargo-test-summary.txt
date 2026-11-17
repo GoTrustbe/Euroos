@@ -1,0 +1,4 @@
+# cargo test (default-members), .16, -j 6
+e9b488d (S5): 188 suites, 1390 passed, 0 failed, 1 ignored
+417f6b9 (merge, before S5): 188 suites, 1387 passed, 0 failed, 1 ignored
+new: test layout::tests::arena_off_and_legacy ... ok;test layout::tests::on_arena_entropy ... ok;test layout::tests::on_arena_in_its_zone ... ok;

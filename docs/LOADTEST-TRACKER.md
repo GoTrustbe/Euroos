@@ -1727,8 +1727,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (needs a server) was not run.
 - **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
+### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s5`, `e9b488d`; design steps S0..S5) · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
 - **Found:**    2026-11-12 · by reading `aslr_slides` while moving its source to the CSPRNG (BUG-080).
 - **Actual:**   `brk` 4 bits (64 KiB steps), the mmap base 5 bits (64 KiB steps), the stack top 8 bits (4 KiB
   steps), the demand pool 10 bits (2 MiB steps). The bits are now unpredictable (they came from RDRAND or
@@ -1772,6 +1772,18 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   child), BUG-352 (a fork child ended by a fault is reported to wait4) and BUG-355 (the vDSO clock stepped back up to
   10 ms; exec'd children have a vDSO again) fixed, self-tests `[fork-cow-write]`, `[fork-fault-wait]`, `[vdso-mono]`.
   Found: BUG-370 to BUG-372. Proof `docs/proof/11f-bugs-35x/`.
+- **2026-11-17 (`feature/11f-aslr-s5`, S5, `e9b488d`; bugs-35x merged in `417f6b9`):** the arena base is drawn per launch
+  and per exec (21 bits, 2 MiB steps in 8..12 TiB), the embedded executable and ld.so get a 9-bit page slide in it, an exec
+  in a fork child moves its arena to the base of its new draw (design 2.4). Boot option `aslr.arena=random|fixed|identity`,
+  `random` the default. `[aslr]` FAILED -> **OK in 20 of 20 boots**: PIE 0 -> 30, ld.so 0 -> 30, stack 8 -> 29, brk 8 -> 29,
+  small mmap 9 -> 30 bits (mmap 1 MiB/libc 30 and vDSO 27 as before); Chromium: ld.so, brk and stack 0/8/8 -> 30/29/29 at
+  the launch and in every exec'd child, none of 199 exec'd children kept an address of the browser. `[aslr-exec]` FAILED
+  -> OK, new `[arena-move]` OK. `aslr=off` (0 bits) and `aslr=legacy` (layout of before) unchanged. `[aslr-ind]` stays
+  FAILED: the regions inside the arena share one base (design step S6, optional hardening). Full regression with `on`
+  (core also with `off` and `legacy`): 0 markers worse, 0 ring-0 faults, watchdogs or panics; Chromium soaks 1 h: one of
+  three 123/123, two lost one openstreetmap step (map tiles not drawn yet, no child crash; base soak beside it 123/123),
+  see the proof. These are the exit criteria of S5 in the design, so the bug is closed; S6 is tracked in the design, not
+  here. Found: BUG-380. Proof `docs/proof/11f-aslr-s5/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3144,6 +3156,17 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   page (only PROT_NONE and, since BUG-351, read-only mprotects of file ranges), so a page of a private writable file
   mapping (a library's .data) that the process has not written yet still refuses a system call's write (Linux would
   copy the page). Once the process wrote it, or after a fork, it is accepted.
+
+### BUG-380 — the vDSO clock steps back by microseconds under TCG and on a loaded host ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (a few to tens of microseconds; BUG-355 removed the 10 ms steps)
+- **Found:**    2026-11-17 · `[vdso-mono]` in the regression of ASLR S5 (`proof/11f-aslr-s5/`), the same in the base
+  `417f6b9` (S4 + the BUG-355 fix): FAILED in 9 of 10 TCG legs of the base and 6 of 10 of S5, with one vCPU as well
+  (steps back mono up to 24 us, boot up to 28 us, realtime up to 21 us, 1 or 2 times per 2 s run; "system call outside its
+  two vDSO reads" up to 38 us), and once in 32 KVM boots while the R630 ran every lane at once (legacy 1 GiB: mono 3 us,
+  boot 4 us). The same boot on a quiet host: OK 3 of 3 (and the base 3 of 3). Not BUG-371 (that is under 1 us and the
+  rdtsc ordering); the size points at the slew of the tick anchor (BUG-355: the anchor may run ahead of the tick count and
+  is pulled back at 1/8 or 3/4 of the rate) meeting a vCPU that was not running for a while. Not looked into further: not
+  caused by S5 (the code paths are those of `9c4d420`), out of scope of this branch.
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)

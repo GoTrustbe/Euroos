@@ -1,0 +1,31 @@
+# Chromium (chrome-pack2.img, nss-pack-vid.img), browser image = public image + ui.tour=off update.check=off (+ aslr=off / aslr=legacy), smp 2, KVM, user-net without hostfwd. on = e9b488d default, base = 417f6b9.
+# health per run: [abort] lines, ring-0 faults/panics/watchdog, FROZEN, [oom], exec lines
+## starts20-on: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=199
+## starts20-off: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=190
+## starts20-leg: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=186
+## starts20-base: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=183
+## sites-on: [chrome-smoke] FAIL (2 step(s)) - 34/36 steps ok, report and screenshots in /dev/shm/a5/si | aborts=0 ring0=0 FROZEN=0 oom=0 execs=43
+## sites-on-2: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/a5/sites-on-2 | aborts=0 ring0=0 FROZEN=0 oom=0 execs=43
+## sites-base: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/a5/sites-base | aborts=0 ring0=0 FROZEN=0 oom=0 execs=43
+## interact-on: [chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/a5/interact-on | aborts=0 ring0=0 FROZEN=0 oom=0 execs=14
+## soak-on: [chrome-mem-soak] FAIL (1 step(s)): 5 rounds in 4001 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=69
+## soak-on-q: [chrome-mem-soak] FAIL (1 step(s)): 5 rounds in 3973 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=68
+## soak-on-3: [chrome-mem-soak] PASS: 5 rounds in 3919 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=67
+## soak-base: [chrome-mem-soak] PASS: 5 rounds in 3930 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=67
+# run conditions: starts20-*, sites-on, interact-on, soak-on: stage 1 (every lane at once); soak-on-q: with the quiet legacy reruns and sites A/B; sites-on-2 + sites-base and soak-on-3 + soak-base: A/B pairs, at most four guests on the host
+## failed steps
+[gui-smoke] FAIL site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.5 s, load finished 9.4 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 2804 ms; fds: 13 processes, 756 descriptors, 647 objects, 408/4096 file objects; RAM files: 109 files, 1 MiB of bytes, 0 MiB of holes; 
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.2 s, load finished 2.8 s later; content 2286 colours, commonest 36%; desktop loop: slowest console answer 1859 ms; fds: 12 processes, 686 descriptors, 584 objects, 376/4096 file objects; RAM files: 109 files, 1 MiB of byte
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.6 s, load finished 2.5 s later; content 274 colours, commonest 85%, still changing; desktop loop: slowest console answer 180 ms; fds: 11 processes, 623 descriptors, 539 objects, 351/4096 file objects; RAM files: 109 files,
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 3.8 s, load finished 1.7 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 211 ms; fds: 11 processes, 623 descriptors, 539 objects, 351/4096 file objects; RAM files: 109 files,
+## consent banners (YouTube reject all; the other sites show none)
+      7 [gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; fu
+## local VP9+Opus with sound, one clip a round in each soak (picture: consecutive screendumps differ; sound: 5 s windows above the noise floor)
+soak-on: picture       5 28 of 28 consecutive  sound       5 12 of 12 five 
+soak-on-q: picture       5 28 of 28 consecutive  sound       5 12 of 12 five 
+soak-on-3: picture       5 28 of 28 consecutive  sound       5 12 of 12 five 
+soak-base: picture       5 28 of 28 consecutive  sound       5 12 of 12 five 
+## local clips: no H.264 in the clip directory (open codecs only)
+opus.webm
+vp9.webm
+vp9v.webm

@@ -2,7 +2,8 @@
 
 Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); S0 and S1
 implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); S4 implemented behind the boot option
-`aslr.arena=fixed|identity`, `fixed` the default (branch `feature/11f-aslr-s4`, section 9); the other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
+`aslr.arena=fixed|identity`, `fixed` the default (branch `feature/11f-aslr-s4`, section 9); S5 implemented,
+`aslr.arena=random` the default, BUG-088 closed (branch `feature/11f-aslr-s5`, section 10); S6..S8 are design only. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -549,3 +550,74 @@ in every boot. `[aslr]` itself is unchanged (PIE and ld.so 0 bits: the base is f
 `arena_virt_for` and in `do_child_execve` (order of 2.4: `lazy_arena_discard` at the old base, free the chain, build at the
 new one); page slides for exe and ld.so; `place()` already takes the arena base. Then `fixed` becomes `on` and `identity`
 remains only for `aslr=legacy`.
+
+## 10. Verified in S5
+
+Branch `feature/11f-aslr-s5` (from `feature/11f-aslr-s4` `ce6ca19`, with `feature/11f-bugs-35x` `9c4d420` merged in
+`417f6b9`). Proof: `docs/proof/11f-aslr-s5/`.
+
+| commit | step |
+|---|---|
+| `417f6b9` | merge of BUG-351/352/355 (conflict only in the tracker); checked before S5 began (proof README) |
+| `35d7bab` | tests first: host tests of the arena draw, self-test `[arena-move]` (both fail) |
+| `e9b488d` | S5: arena base and page slides drawn per launch and per exec, `aslr.arena=random` the default |
+
+**What changed.** `euromm::layout::draw` cuts three more fields from the same 32 bytes, from bits the S1 draws left
+unused: `arena` (21 bits of 2 MiB steps over the 4 TiB zone, word 1 bits 42..62), `exe_slide` and `ldso_slide` (9 bits of
+pages each, word 2 bits 42..59). `arena_base(lay, span)` puts the arena at 8 TiB + offset and moves it down just far enough
+to end inside the zone. `off` and `legacy` draw none of them (`off` = the S4 layout at 8 TiB). In the kernel,
+`ring3::arena_place` gives the base and the two slides for the mode of `aslr.arena=random|fixed|identity` (`random` is the
+default; `fixed` is the S4 layout, `identity` the one before S4). The three launchers draw first and place the arena,
+the embedded executable (`ArenaPlace::exe`: the slide only as far as the program still ends below ld.so) and ld.so
+(+8 MiB + slide). `place()` and `[aslr-exec]` use the same functions.
+
+**Exec in a fork child (2.4).** `do_child_execve` discards the pages at the old base (`lazy_arena_discard`, as before),
+then, after the new draw, `paging::lazy_arena_rebase` gives the old table chain back to the process pool (page tables, and
+a page directory or PDPT that is empty after that, with its entry cleared) and builds empty lazy tables at the new base;
+`ARENA_BASE` of the child (in `ChildMem`) follows, ld.so, brk, small mmaps and the stack are placed in the new arena.
+One TLB flush after the move. Only a lazy arena in the zone moves (every Chromium child); a contiguous or identity arena
+keeps its base. A failed rebuild returns ENOMEM (the image is wiped by then, as with the other late failures of exec).
+
+**Entropy measured** (`[aslr]`: 64 starts of the embedded probe `gaslrx` per boot, 20 KVM boots of each image; Chromium:
+the `[aslr-layout]` lines of 20 starts per image, the launched browser and every exec'd child). "Over boots" = the bits
+that vary in the first address of each boot; "per boot" = the `[aslr]` figure of every one of the 20 boots.
+
+| region | before (`417f6b9`, S4) over boots / per boot | after (`e9b488d`) over boots / per boot | Linux x86-64 |
+|---|---|---|---|
+| embedded program (PIE base) | 0 / 0 | 30 / 30 | 28 |
+| ld.so (embedded launch) | 0 / 0 | 30 / 30 | 28 |
+| stack | 8 / 8 | 29 / 29 | 22 |
+| brk heap | 8 / 8 | 29 / 29 | 13 relative to the exe |
+| small mmap (4 KiB, in the arena) | 9 / 9..10 | 30 / 30 | 28 |
+| mmap 1 MiB, libc (mmap floor) | 30 / 30 | 30 / 30 | 28 |
+| vDSO | 27 / 27 | 27 / 27 | (with mmap) |
+| Chromium: exe from disk (launch and exec) | 30 | 30 | 28 |
+| Chromium: ld.so, brk, stack (launch / exec) | 0, 8, 8 / 0, 8, 9 | 30, 29, 29 / 30, 29, 29 | |
+| Chromium: arena base (launch / exec) | fixed | 21 / 21 | |
+
+`[aslr]` OK in 20 of 20 boots (before: FAILED in 20 of 20). Of 199 exec'd Chromium children none kept an address of
+the launched browser in any region (exe, ld.so, arena, brk, stack, floor, vDSO). `aslr=off`: 0 bits everywhere (20
+starts, 190 execs). `aslr=legacy`: the layout of before S1 (exe, ld.so, vDSO 0, floor 20, brk and stack 8).
+
+**Corrections and findings:**
+
+- The design's order for exec (discard at the old base, free the chain, build at the new one) holds as written; the move
+  needs no copy-on-write work of its own, because the discard already released every shared frame by the old address.
+  `[arena-move]` checks that the parent's frames hold no child after the move, also when old and new range overlap.
+- 2.2 lists the stack at 29 bits; the `[aslr]` statistic can count 30 for "base + span - slide" (the subtraction
+  borrows into the base bits). It measured 29 in every boot; the host test asks >= 29.
+- An embedded executable can only slide as far as it still ends below ld.so (+8 MiB); every embedded program is far
+  smaller than 6 MiB, so all of them get the full 9 bits. A launcher computes it per program (`ArenaPlace::exe`).
+- `aslr.arena=fixed` is kept as a value (the S4 layout, at 8 TiB) next to `identity`: a way back that keeps the arena out
+  of the identity map. The design (4) foresaw only `on/off/legacy`.
+- `[aslr-ind]` stays FAILED by design: stack - mmap 10, exe - stack 10, exe - mmap 15 bits (the regions of the arena still
+  share one base); that is step S6.
+- Found, not fixed (not caused by S5): the vDSO clock still steps back by up to tens of microseconds under TCG and on a
+  heavily loaded KVM host, also with one vCPU (`[vdso-mono]`, BUG-380).
+
+**What S6 needs.** The arena functions take one base; S6 gives image (exe + ld.so), heap (brk + small mmaps) and stack
+their own virtual segments over the same RAM (design 3.1): `arena_place` becomes three draws, `in_user_arena`,
+`lazy_arena_rebase`, `fill_remap_tables_lazy`, `share_arena_cow`, `clone_arena_lazy` and `lazy_arena_discard` take a
+segment list, `ChildMem` carries it, and `[aslr-ind]` is the test (>= 20 bits per distance). The bits for three bases
+need two more offsets of 21 bits: S5 leaves 50 bits of the 32-byte draw unused (word 0 bits 44..63, word 1 bit 63,
+word 2 bits 60..63, word 3 bits 39..63), so either they are cut from those or `DRAW_BYTES` grows.
