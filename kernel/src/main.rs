@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod allocator;
+mod irqlock;
 mod audit;
 mod compositor;
 mod lockscreen;

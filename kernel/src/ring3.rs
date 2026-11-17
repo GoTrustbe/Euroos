@@ -196,7 +196,8 @@ unsafe fn recover_mmap_offset() -> u64 {
 /// -> the program CHECK-crashed (fontations/Rust stack-guard probe). We now record
 /// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
 /// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
-static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static PROT_NONE_RANGES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "PROT_NONE_RANGES");
 /// Audio diagnostics: the renderer's AudioOutputDevice thread and the browser's
 /// AudioThread (resolved by name at each heartbeat); their next syscalls are logged
 /// as [audio-sys] so the two ends of the audio sync socketpair become visible.
@@ -11070,7 +11071,8 @@ static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec
 /// child_main_task). They must swap the SAME ChildMem as their child process,
 /// or a thread runs on the child's PML4 but the parent's demand-state and
 /// faults. Populated when a fork child (or one of its threads) clones.
-static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static CHILD_THREADS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_THREADS");
 
 /// The fork-child main task that owns `task`'s address space, if any.
 fn fork_child_owner(task: usize) -> Option<usize> {
@@ -11092,8 +11094,8 @@ fn current_is_fork_child() -> bool {
     fork_child_owner(crate::sched::current()).is_some()
 }
 
-static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
-    Mutex::new(alloc::vec::Vec::new());
+static GLIBC_FORK_CHILDREN: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "GLIBC_FORK_CHILDREN");
 
 /// Exited glibc fork children waiting to be reaped: (child pid, wait status).
 /// The launched main process is the only waiter, so no parent key is needed.
@@ -11139,7 +11141,10 @@ struct ChildMem {
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
     free: euromm::FreeRanges,
 }
-static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
+// BUG-390: CHILD_MEM, the five lists `child_mem_swap` swaps, GLIBC_FORK_CHILDREN and
+// CHILD_THREADS are `IrqLock`s: held with interrupts off by every taker (see irqlock.rs).
+static CHILD_MEM: crate::irqlock::IrqLock<alloc::vec::Vec<ChildMem>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_MEM");
 
 /// Snapshot the CURRENT globals into a fresh ChildMem for a just-forked task.
 /// The child inherits the parent's mappings, so it starts as a copy.
@@ -12669,17 +12674,20 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  valid bytes from mapping start — beyond this the mapping reads as zero). `valid`
 //  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
-static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static DEMAND_FILE_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "DEMAND_FILE_MAPS");
 /// Address ranges of this process's demand region that munmap gave back
 /// (BUG-131): an anonymous mmap takes its addresses from here before the bump
 /// pointer moves. Swapped per process with the rest of the demand state.
-static DEMAND_FREE: Mutex<euromm::FreeRanges> = Mutex::new(euromm::FreeRanges::new());
+static DEMAND_FREE: crate::irqlock::IrqLock<euromm::FreeRanges> =
+    crate::irqlock::IrqLock::new(euromm::FreeRanges::new(), "DEMAND_FREE");
 static DEMAND_REUSED: AtomicU64 = AtomicU64::new(0);
 /// Live MAP_SHARED regions: (file index, arena base, region length). One entry per
 /// shared in-RAM file (memfd/tmpfs) for the duration of a process — every mapping of
 /// that file resolves to this one region, which is what "shared memory" means. Arena
 /// addresses are per-process, so this is cleared when a process starts.
-static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_MAPS");
 /// Physical frames backing a shared file, one per page, allocated on first touch
 /// (0 = not yet). This is what makes sharing REAL: every mapping of the file gets
 /// its own address range, and each range faults onto THESE frames, so a write
@@ -12688,7 +12696,8 @@ static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(all
 /// keyed BY ADDRESS and CHECK-fails when two of them collide.
 static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, euromm::ramfile::PageFile)>> = Mutex::new(alloc::vec::Vec::new());
 /// Address ranges handed out for shared mappings: (base, length, file index).
-static SHARED_ALIASES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_ALIASES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_ALIASES");
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
