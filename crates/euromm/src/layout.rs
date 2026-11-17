@@ -28,6 +28,13 @@ pub const TIB: u64 = 1 << 40;
 pub const USER_TOP: u64 = 1 << 47;
 /// The arena zone of step S2 (`paging::ARENA_ZONE_*`): 8..12 TiB.
 pub const ARENA_ZONE: Range<u64> = 8 * TIB..12 * TIB;
+/// ASLR S5: the arena base is a 2 MiB step of the zone (21 bits).
+pub const ARENA_STEP: u64 = 2 * MIB;
+/// Where ld.so lies in the arena (before its page slide), as before S5.
+pub const LDSO_OFF: u64 = 8 * MIB;
+/// ASLR S5: the page slides of the embedded executable and of ld.so inside the
+/// arena are below this (9 bits of pages).
+pub const SLIDE_WINDOW: u64 = 2 * MIB;
 
 /// `legacy`: the demand region of before (PML4 slot 2).
 pub const LEGACY_DEMAND_BASE: u64 = 2 << 39;
@@ -139,6 +146,21 @@ pub struct Layout {
     pub brk: u64,
     pub mmap: u64,
     pub stack: u64,
+    /// ASLR S5: the offset of the arena in its zone (a multiple of
+    /// `ARENA_STEP`, below the zone size; `arena_base` fits it to the span)
+    /// and the page slides of the embedded executable and of ld.so.
+    pub arena: u64,
+    pub exe_slide: u64,
+    pub ldso_slide: u64,
+}
+
+/// ASLR S5: the virtual base of an arena of `span` bytes for the draw `l`:
+/// 8 TiB plus the drawn offset, moved down as far as needed for the arena to
+/// end inside the zone (the offsets of the last `span` of the zone fall onto
+/// one base; with 128 MiB that is 64 of the 2^21 values).
+pub fn arena_base(l: &Layout, span: u64) -> u64 {
+    let _ = (l, span);
+    ARENA_ZONE.start
 }
 
 fn word(r: &[u8; DRAW_BYTES], i: usize) -> u64 {
@@ -171,6 +193,9 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             brk,
             mmap,
             stack,
+            arena: 0,
+            exe_slide: 0,
+            ldso_slide: 0,
         },
         Mode::Off => Layout {
             exe_base: EXE_BASE,
@@ -180,6 +205,9 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             brk: 0,
             mmap: 0,
             stack: 0,
+            arena: 0,
+            exe_slide: 0,
+            ldso_slide: 0,
         },
         Mode::On => {
             let align = exe_align.clamp(PAGE, GIB).next_power_of_two();
@@ -188,7 +216,7 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             // 2^27 pages; the last one has no room for the clock page after it:
             // it takes the one below (one value of 2^27 twice as likely).
             let v = (word(r, 3) & (VDSO_DRAW - 1) & !(PAGE - 1)).min(VDSO_DRAW - VDSO_PAGES * PAGE);
-            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack }
+            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena: 0, exe_slide: 0, ldso_slide: 0 }
         }
     }
 }
@@ -329,5 +357,62 @@ mod tests {
         // Independent draws: the distance between the floor and the exe varies as much.
         assert!(pick(&|l| l.mmap_floor.wrapping_sub(l.exe_base), PAGE) >= 30);
         assert!(pick(&|l| l.vdso.wrapping_sub(l.mmap_floor), PAGE) >= 27);
+    }
+
+    /// ASLR S5: the arena base and the two page slides stay in their windows
+    /// for every span a launcher or an exec uses (64 MiB .. 1 GiB) and beyond.
+    #[test]
+    fn on_arena_in_its_zone() {
+        for span in [64 * MIB, 96 * MIB, 128 * MIB, GIB, 3 * GIB, 4 * TIB, 5 * TIB] {
+            for r in inputs() {
+                let l = draw(&r, Mode::On, 200 * MIB, PAGE);
+                let a = arena_base(&l, span);
+                assert_eq!(a % ARENA_STEP, 0);
+                assert!(a >= ARENA_ZONE.start);
+                assert!(a + span.min(ARENA_ZONE.end - ARENA_ZONE.start) <= ARENA_ZONE.end, "arena runs out of its zone");
+                assert!(l.arena % ARENA_STEP == 0 && l.arena < ARENA_ZONE.end - ARENA_ZONE.start);
+                assert!(l.exe_slide % PAGE == 0 && l.exe_slide < SLIDE_WINDOW);
+                assert!(l.ldso_slide % PAGE == 0 && l.ldso_slide < SLIDE_WINDOW);
+                // ld.so (under 1 MiB, euromm::arena) with its slide ends below
+                // the brk window of the smallest arena (64 MiB: +16 MiB).
+                assert!(LDSO_OFF + l.ldso_slide + MIB <= 16 * MIB);
+            }
+        }
+    }
+
+    /// ASLR S5 (design 2.2): arena base 21 bits, the embedded executable and
+    /// ld.so 30 (base plus a 9-bit page slide), stack 29; independent of the
+    /// draws of S1.
+    #[test]
+    fn on_arena_entropy() {
+        let all = inputs();
+        let pick = |f: &dyn Fn(&Layout) -> u64| -> u32 {
+            let xs: Vec<u64> = all.iter().map(|r| f(&draw(r, Mode::On, 200 * MIB, PAGE))).collect();
+            varying(&xs)
+        };
+        let span = 128 * MIB;
+        assert_eq!(pick(&|l| arena_base(l, span)), 21);
+        assert_eq!(pick(&|l| l.exe_slide), 9);
+        assert_eq!(pick(&|l| l.ldso_slide), 9);
+        assert_eq!(pick(&|l| arena_base(l, span) + l.exe_slide), 30);
+        assert_eq!(pick(&|l| arena_base(l, span) + LDSO_OFF + l.ldso_slide), 30);
+        assert_eq!(pick(&|l| arena_base(l, span) + span - MIB - l.stack), 29);
+        // Not tied to the draws of S1 or to each other.
+        assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.exe_base)) >= 30);
+        assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.mmap_floor)) >= 30);
+        assert!(pick(&|l| l.ldso_slide.wrapping_sub(l.exe_slide)) >= 9);
+    }
+
+    /// `off`: the arena at 8 TiB, no slide (the layout of S4); `legacy`: no
+    /// slide (its arena is the identity one, the base is not used).
+    #[test]
+    fn arena_off_and_legacy() {
+        for r in inputs() {
+            let o = draw(&r, Mode::Off, 200 * MIB, PAGE);
+            assert_eq!(arena_base(&o, 128 * MIB), ARENA_ZONE.start);
+            assert_eq!((o.arena, o.exe_slide, o.ldso_slide), (0, 0, 0));
+            let g = draw(&r, Mode::Legacy, 200 * MIB, PAGE);
+            assert_eq!((g.arena, g.exe_slide, g.ldso_slide), (0, 0, 0));
+        }
     }
 }

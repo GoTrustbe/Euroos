@@ -4351,6 +4351,8 @@ fn main() -> Status {
         // ASLR S2 and S3 (docs/design/ASLR.md): an arena above the identity map ([arena-hi]),
         // the ELF loader with a virtual base and a kernel-side address ([elf-bias]).
         paging::arena_hi_selftest();
+        // ASLR S5: an exec in a fork child moves its arena ([arena-move]).
+        paging::arena_move_selftest();
         ring3::elf_bias_selftest();
         // ASLR S1: the demand region over many PML4 slots ([demand-slots]).
         ring3::demand_slots_selftest(&mut allocator);

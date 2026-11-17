@@ -2813,3 +2813,149 @@ pub fn arena_hi_selftest() -> bool {
     }
     why.is_none()
 }
+
+// -- ASLR S5: the arena of a fork child moves at exec ([arena-move]) ----------
+
+/// ASLR S5 (design 2.4): an exec in a fork child gives its arena a new base.
+/// The caller has given the pages at `old` back (`lazy_arena_discard`, which
+/// releases the copy-on-write references the parent looks up by address);
+/// here the table chain at `old` goes back to the process pool and empty lazy
+/// tables for `nblocks` blocks are built at `new`. Both bases lie in the arena
+/// zone above PML4[0]. False (nothing of the new chain kept) when a table frame
+/// could not be had; the caller runs on `pml4` and flushes the TLB after.
+pub fn lazy_arena_rebase(pml4: u64, old: u64, new: u64, nblocks: u64) -> bool {
+    let _ = (pml4, old, new, nblocks);
+    false
+}
+
+/// ASLR step S5 ([arena-move]): the exec of a fork child that moves its arena.
+/// Two scratch address spaces (parent A, child B) with a lazy arena of 8 MiB at
+/// 8.5 TiB - 4 MiB (PML4 slots 16 and 17). A writes four pages and shares them
+/// copy-on-write with B; B reads one and writes another (a copy of its own);
+/// then B execs: its pages are discarded at the old base and the arena moves to
+/// slot 22 (`lazy_arena_rebase`), where B writes and reads again and finds an
+/// untouched page zero. A then writes the page it shared: no child holds it
+/// any more. B moves once more, by one block (old and new range overlap).
+/// Checked: nothing of B left at the old base (slots 16 and 17 empty), its
+/// arena whole at the new one, the contents of both, the counts of the frames
+/// of A, the census, and every frame back in the process pool after teardown.
+pub fn arena_move_selftest() -> bool {
+    const NB: u64 = 4;
+    let x = ARENA_ZONE_BASE + 512 * GIB - 2 * MIB2;
+    let y = ARENA_ZONE_BASE + 3 * 1024 * GIB + 3 * MIB2;
+    let z = y + MIB2;
+    let off = [0u64, MIB2 - 4096, 2 * MIB2 + 0x5000, 4 * MIB2 - 4096];
+    let pat = |k: usize| 0x5A5A_0000_0000_B00Fu64 | ((k as u64) << 32);
+    if crate::procpool::free_frames() < 256 {
+        crate::serial_println!("[arena-move] the process pool has {} frames: SKIPPED", crate::procpool::free_frames());
+        return false;
+    }
+    let free0 = crate::procpool::free_frames();
+    let Some(a) = scratch_lazy_space(x, NB) else {
+        crate::serial_println!("[arena-move] no frames for a scratch address space -> FAILED ✗");
+        return false;
+    };
+    let Some(b) = scratch_lazy_space(x, NB) else {
+        free_fork_tables(a);
+        crate::procpool::free(a);
+        crate::serial_println!("[arena-move] no frames for a scratch address space -> FAILED ✗");
+        return false;
+    };
+    let mut why: Option<&str> = None;
+    if !cow_space_register(b) {
+        why = Some("no memory to register the child space");
+    }
+    let (mut shared, mut moved) = (None, [false; 2]);
+    let (mut pre, mut zero_y) = (0u64, u64::MAX);
+    let (mut rd_b, mut rd_a, mut rd_z) = ([0u64; 4], [0u64; 4], 0u64);
+    if why.is_none() {
+        let smap = crate::ring3::smap_active();
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            // SAFETY: as in arena_hi_selftest: both spaces map the kernel
+            // like every process space; interrupts are off, the boot CR3 is
+            // back before they are on again; STAC/CLAC for SMAP.
+            unsafe {
+                let boot: u64;
+                core::arch::asm!("mov {}, cr3", out(reg) boot, options(nostack, preserves_flags));
+                let load = |c: u64| core::arch::asm!("mov cr3, {}", in(reg) c, options(nostack, preserves_flags));
+                load(a);
+                if smap { core::arch::asm!("stac", options(nostack)); }
+                for (k, &o) in off.iter().enumerate() {
+                    ((x + o) as *mut u64).write_volatile(pat(k));
+                }
+                shared = share_arena_cow(a, b, x, NB, 0, &mut || {});
+                load(b);
+                pre = ((x + off[1]) as *const u64).read_volatile();
+                ((x + off[2]) as *mut u64).write_volatile(u64::MAX);
+                // The exec: pages at the old base go, the arena moves.
+                lazy_arena_discard(b, x, NB);
+                moved[0] = lazy_arena_rebase(b, x, y, NB);
+                load(b);
+                if moved[0] {
+                    for (k, &o) in off.iter().enumerate() {
+                        ((y + o) as *mut u64).write_volatile(pat(k + 4));
+                        rd_b[k] = ((y + o) as *const u64).read_volatile();
+                    }
+                    zero_y = ((y + 3 * MIB2 + 0x8000) as *const u64).read_volatile();
+                }
+                load(a);
+                ((x + off[1]) as *mut u64).write_volatile(pat(8));
+                for (k, &o) in off.iter().enumerate() {
+                    rd_a[k] = ((x + o) as *const u64).read_volatile();
+                }
+                load(b);
+                if moved[0] {
+                    lazy_arena_discard(b, y, NB);
+                    moved[1] = lazy_arena_rebase(b, y, z, NB);
+                    load(b);
+                    if moved[1] {
+                        ((z + off[0]) as *mut u64).write_volatile(pat(12));
+                        rd_z = ((z + off[0]) as *const u64).read_volatile();
+                    }
+                }
+                if smap { core::arch::asm!("clac", options(nostack)); }
+                load(boot);
+            }
+        });
+        let refs = cow_refs();
+        let slot = |s: u64, i: usize| unsafe { (s as *const u64).add(i).read_volatile() } & PRESENT != 0;
+        let blocks = |s: u64, base: u64| (0..NB).all(|i| arena_is_lazy(s, base + i * MIB2));
+        let a_frames: [u64; 4] = core::array::from_fn(|k| translate_in(a, x + off[k]).unwrap_or(0) & ADDR_MASK);
+        if shared != Some((4, 0, 0)) {
+            why = Some("share_arena_cow did not share the four pages");
+        } else if pre != pat(1) {
+            why = Some("the child did not read the shared page before its exec");
+        } else if !moved[0] || !moved[1] {
+            why = Some("lazy_arena_rebase refused the move");
+        } else if (0..NB).any(|i| arena_is_lazy(b, x + i * MIB2)) || slot(b, 16) || slot(b, 17) {
+            why = Some("the child kept tables at its old base (PML4 16/17)");
+        } else if !blocks(b, z) || arena_is_lazy(b, y) || !slot(b, 22) {
+            why = Some("the arena of the child is not whole at its new base");
+        } else if (0..4).any(|k| rd_b[k] != pat(k + 4)) || zero_y != 0 || rd_z != pat(12) {
+            why = Some("the child reads wrong contents at its new base");
+        } else if rd_a[1] != pat(8) || [0usize, 2, 3].iter().any(|&k| rd_a[k] != pat(k)) {
+            why = Some("the contents of the parent changed");
+        } else if a_frames.iter().any(|&f| f == 0 || refs.extra(f) != 0) {
+            why = Some("a frame of the parent still counts a holder after the exec of the child");
+        } else if (lazy_arena_frames(a), lazy_arena_frames(b)) != (4, 1) {
+            why = Some("census: want parent 4 and child 1 frames");
+        }
+    }
+    let t = free_fork_tables(b);
+    crate::procpool::free(b);
+    let t = t + free_fork_tables(a);
+    crate::procpool::free(a);
+    let free1 = crate::procpool::free_frames();
+    if why.is_none() && free1 != free0 {
+        why = Some("frames were not all given back");
+    }
+    match why {
+        None => crate::serial_println!(
+            "[arena-move] fork child of a lazy arena at {x:#x} (PML4 16-17) execs: pages discarded, tables moved to {y:#x} (PML4 22) and once more by 2 MiB (overlapping); old base empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 1; teardown {t} frames, pool {free0} -> {free1} -> OK ✓"
+        ),
+        Some(w) => crate::serial_println!(
+            "[arena-move] fork child of a lazy arena at {x:#x} execs and moves to {y:#x}: {w}; teardown {t} frames, pool {free0} -> {free1} -> FAILED ✗"
+        ),
+    }
+    why.is_none()
+}
