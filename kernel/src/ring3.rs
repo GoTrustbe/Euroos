@@ -9776,6 +9776,15 @@ static VDSO_IMAGE_FRAMES: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::V
 /// Refresh the vDSO clock page. Called from the timer tick: seq goes odd, the
 /// monotonic and real clocks are written, seq goes even — readers retry on odd.
 pub fn vdso_tick() {
+    // BUG-380: one writer at a time. The timer tick calls this with interrupts
+    // off; the callers in task context (forced tick advances, tickless idle)
+    // could be interrupted by the tick halfway through an update, and the tick
+    // would then publish a page the outer writer overwrites with its older
+    // anchor. Kernel code runs on the BSP only, so interrupts off suffices.
+    x86_64::instructions::interrupts::without_interrupts(vdso_tick_one);
+}
+
+fn vdso_tick_one() {
     let _w = VdsoWriter::enter();
     let frame = VDSO_TIME_FRAME.load(Ordering::Relaxed);
     if frame == 0 {
@@ -9797,6 +9806,25 @@ pub fn vdso_tick() {
     // chrome's delay-until-deadline math). [1]=mono_ns [3]=real_ns [5]=anchor tsc
     // [6]=ns-per-tsc <<20. Calibration: measured tsc delta across REAL timer ticks
     // (forced advances would poison the rate, so those pass ticks==last and skip).
+    let d = frame as *mut u64;
+    // BUG-380: the sequence goes odd BEFORE the TSC of the new anchor is read
+    // (mfence; lfence; rdtsc: after the store is visible to every CPU). A
+    // reader that still gets the old page made its final sequence check before
+    // that, and it reads the TSC before that check (vdso.c: lfence; rdtsc;
+    // lfence inside the seqlock), so its TSC is below this one: the old
+    // formula at this anchor is at least what any reader of the old page saw,
+    // and the new anchor starts there. Before, the TSC was read first and the
+    // vDSO read its TSC after the check: a read that got the old page and its
+    // TSC after this tick (the tick landed between the two, a vCPU the host did
+    // not run) went on at the old rate past the new anchor, and a slower new
+    // rate put the next reads below it (up to 28 us under TCG).
+    // SAFETY: the identity-mapped clock frame; only this function writes it,
+    // with interrupts off, on the BSP.
+    let odd = unsafe { d.read_volatile() }.wrapping_add(1) | 1;
+    unsafe {
+        d.write_volatile(odd); // odd: update in progress
+        core::arch::asm!("mfence", "lfence", options(nostack, preserves_flags));
+    }
     let tsc = unsafe { core::arch::x86_64::_rdtsc() };
     let last_tick = VDSO_CAL_TICK.load(Ordering::Relaxed);
     if ticks > last_tick {
@@ -9826,8 +9854,7 @@ pub fn vdso_tick() {
     // runs ahead of the ticks it runs slower (1/8, or 3/4 from 5 ms) until
     // the ticks caught up. REALTIME is the same clock plus the boot epoch.
     let target = ticks * 10_000_000;
-    let d = frame as *mut u64;
-    // SAFETY: the identity-mapped clock frame; only this tick (the BSP) writes.
+    // SAFETY: as above; the old anchor is still on the page.
     let seen = unsafe { vdso_interp(d.add(1).read_volatile(), d.add(5).read_volatile(), d.add(6).read_volatile(), tsc) };
     let mono_ns = if seen > target {
         VDSO_BEHIND.fetch_add(1, Ordering::Relaxed);
@@ -9844,13 +9871,11 @@ pub fn vdso_tick() {
         VDSO_TSC_BACK.fetch_add(1, Ordering::Relaxed);
     }
     unsafe {
-        let seq = d.read_volatile().wrapping_add(1);
-        d.write_volatile(seq); // odd: update in progress
         d.add(1).write_volatile(mono_ns);
         d.add(3).write_volatile(real_ns);
         d.add(5).write_volatile(tsc);
         d.add(6).write_volatile(rate);
-        d.write_volatile(seq.wrapping_add(1)); // even: stable
+        d.write_volatile(odd.wrapping_add(1)); // even: stable
     }
 }
 
@@ -9894,8 +9919,24 @@ fn vdso_interp(anchor: u64, tsc0: u64, rate: u64, now: u64) -> u64 {
         return anchor;
     }
     let dt = now.wrapping_sub(tsc0);
-    let ns = if dt < 1 << 40 { ((dt as u128 * rate as u128) >> 20) as u64 } else { 0 };
+    // A TSC below the anchor's (another CPU a little behind): no time yet. A
+    // very old anchor: the two-tick cap (it was 0 before BUG-380, a step back
+    // to the anchor itself).
+    if dt as i64 <= 0 {
+        return anchor;
+    }
+    let ns = ((dt.min(1 << 40) as u128 * rate as u128) >> 20) as u64;
     anchor + ns.min(20_000_000)
+}
+
+/// lfence; rdtsc; lfence (Linux `rdtsc_ordered`): the TSC read after the
+/// loads before it and before the loads after it (BUG-371, BUG-380).
+#[inline(always)]
+fn vdso_rdtsc() -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: lfence and rdtsc only read the TSC and order instructions.
+    unsafe { core::arch::asm!("lfence", "rdtsc", "lfence", out("eax") lo, out("edx") hi, options(nostack, preserves_flags)) };
+    (hi as u64) << 32 | lo as u64
 }
 
 /// The clock of the vDSO page as a process reads it (None: no page yet).
@@ -9905,21 +9946,26 @@ fn vdso_clock(real: bool) -> Option<u64> {
         return None;
     }
     let d = f as *const u64;
-    // SAFETY: the identity-mapped clock frame, read only; seqlock as in vdso.c.
+    // SAFETY: the identity-mapped clock frame, read only; seqlock as in vdso.c,
+    // the TSC read inside it (BUG-380).
     unsafe {
         loop {
             let s1 = d.read_volatile();
             if s1 == 0 {
                 return None; // no tick has written it yet
             }
-            let base = d.add(if real { 3 } else { 1 }).read_volatile();
-            let tsc0 = d.add(5).read_volatile();
-            let rate = d.add(6).read_volatile();
-            if s1 & 1 != 0 || d.read_volatile() != s1 {
+            if s1 & 1 != 0 {
                 core::hint::spin_loop();
                 continue;
             }
-            return Some(vdso_interp(base, tsc0, rate, core::arch::x86_64::_rdtsc()));
+            let base = d.add(if real { 3 } else { 1 }).read_volatile();
+            let tsc0 = d.add(5).read_volatile();
+            let rate = d.add(6).read_volatile();
+            let now = vdso_rdtsc();
+            if d.read_volatile() != s1 {
+                continue;
+            }
+            return Some(vdso_interp(base, tsc0, rate, now));
         }
     }
 }
