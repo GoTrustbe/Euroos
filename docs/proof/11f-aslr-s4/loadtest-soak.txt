@@ -1,0 +1,26 @@
+## loadtest soak on (KVM 4 vCPU 16 GiB, e1000e restrict, hammer 4, 32 procs, churn-proc 8, 3900 s)
+[bootopt] aslr.arena=fixed
+commands 5583, err 0
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 367647, "err": 0, "p50_ms": 6.1, "p99_ms": 435.4, "max_ms": 6704.7, "busy_windows": 179
+  WATCHDOG TRIPPED: 0
+  KERNEL PANIC: 0
+  \[idt\] PAGE FAULT: 0
+  panicked at: 0
+  NMI PROBE: 0
+  FROZEN: 0
+  ^\[oom\]: 3
+  [churn-proc] FAILED: 0 of 4117
+[loadtest] completed clean · results → /
+## loadtest soak off (KVM 4 vCPU 16 GiB, e1000e restrict, hammer 4, 32 procs, churn-proc 8, 3900 s)
+[bootopt] aslr.arena=identity
+commands 5489, err 0
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 367226, "err": 0, "p50_ms": 6.2, "p99_ms": 434.8, "max_ms": 6925.7, "busy_windows": 176
+  WATCHDOG TRIPPED: 0
+  KERNEL PANIC: 0
+  \[idt\] PAGE FAULT: 0
+  panicked at: 0
+  NMI PROBE: 0
+  FROZEN: 0
+  ^\[oom\]: 3
+  [churn-proc] FAILED: 0 of 4048
+[loadtest] completed clean · results → /

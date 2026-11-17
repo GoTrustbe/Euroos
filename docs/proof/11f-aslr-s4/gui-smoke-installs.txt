@@ -1,0 +1,6 @@
+## gui-smoke public image on (KVM 4 vCPU 4 GiB)
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr4-runs/runs/gs-on
+## gui-smoke public image off (KVM 4 vCPU 4 GiB)
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr4-runs/runs/gs-off
+## installs on: wizard 15/15; ro-install plain/inject/ro0: 6/6 3/3 5/5 
+## installs off: wizard 15/15; ro-install plain/inject/ro0: 6/6 3/3 5/5 

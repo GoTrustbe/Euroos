@@ -95,6 +95,20 @@ gives 28). The heap of small allocations, the stack and the dynamic loader of a 
 yet: that is the next step of the work (design: `docs/design/ASLR.md`). An unknown value is ignored and the
 kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
 
+### Where the program's own memory lies: `aslr.arena`
+
+Besides its libraries and large areas, a Linux program started from the desktop or the shell has one block of
+memory of its own: the dynamic loader, the small heap, small allocations and the stack. This option decides at
+which address the program sees that block.
+
+| Value | What it does |
+|---|---|
+| `fixed` (default) | The block is seen at one fixed address far above the kernel (8 TiB), whatever memory it uses. A program can no longer learn where its memory physically lies from its own addresses. Not random yet: that is the next step (design: `docs/design/ASLR.md`). |
+| `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.16 and earlier. A way back if a program misbehaves with `fixed`. |
+
+With `aslr=legacy` the block always stays at `identity`. The log line `[bootopt] aslr.arena=...` shows the
+placement in use.
+
 ## The other options
 
 | Option | Values | Default | What it does |
@@ -108,6 +122,7 @@ kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
 | `virtio.transport` | `modern`, `legacy` | `modern` | How virtio devices are driven. |
 | `serial.chatter` | `on`, `off` | `off` | Detailed diagnostic lines on the serial console. |
 | `aslr` | `on`, `off`, `legacy` | `on` | Random addresses for the memory of Linux programs (see above). |
+| `aslr.arena` | `fixed`, `identity` | `fixed` | Where a Linux program sees its own memory block (see above). |
 | `debug.schedwatch` | `on`, `off` | `off` | A debugging aid for kernel developers. |
 
 ## Video and sound in the browser

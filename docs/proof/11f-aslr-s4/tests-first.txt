@@ -1,0 +1,19 @@
+# [aslr-phys] and [robust-paging], KVM 4 GiB 2 vCPU, image 0eeb97e: default (identity) vs boot option aslr.arena=fixed
+## id
+[bootopt] aslr=on
+[bootopt] aslr.arena=identity
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED (not yet: the arena leaves the identity map in step S4)
+[robust-paging] process page tables at 0..n free frames: 23 refusals (OutOfFrames, 0 frames kept), 6 builds (freed again) → OK ✓
+## fix
+[bootopt] aslr=on
+[bootopt] aslr.arena=fixed
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[robust-paging] process page tables at 0..n free frames: 23 refusals (OutOfFrames, 0 frames kept), 6 builds (freed again) → OK ✓
+## markers-compare identity -> fixed
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## Chromium launch with fixed (sites run)
+[aslr-layout] launch /pack/chrome: exe 0x226c290d3000 (span 323 MiB, align 0x1000) floor 0x284a793cd000 vdso 0x646e2fc66000 ld.so 0x80000800000 brk 0x800020f2000 stack 0x80007ee3000 (aslr=on, arena fixed)

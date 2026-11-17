@@ -1,7 +1,8 @@
 # ASLR for Linux-ABI processes: a virtual arena per process (BUG-088)
 
 Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); S0 and S1
-implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); the other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
+implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); S4 implemented behind the boot option
+`aslr.arena=fixed|identity`, `fixed` the default (branch `feature/11f-aslr-s4`, section 9); the other steps are design only. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -501,3 +502,50 @@ address with its frame (`translate_in`), so S4 sees the line turn OK without a c
 the arena base, so S5 only has to draw it; `free_fork_tables` frees the vDSO chain of `VDSO_SLOT`, a moved arena
 must not land in that slot (zone 8..12 TiB, slot 200: no overlap); `[aslr-exec]` reports ld.so as kept until S5
   draws the arena base in `do_child_execve`, and the vDSO until BUG-355 is solved.
+
+## 9. Verified in S4
+
+Branch `feature/11f-aslr-s4` (from `feature/11f-aslr-s01` `c71cce8`). Proof: `docs/proof/11f-aslr-s4/`.
+
+**What changed.** Boot option `aslr.arena=identity|fixed` (`ring3::arena_fixed`; `aslr=legacy` always keeps
+`identity`, its demand region at 1 TiB lies below the arena zone). With `fixed` the three launchers (`run_glibc`,
+`spawn_glibc_persistent`, `glibc_disk_launch`; `run_glibc_disk` and `spawn_glibc_disk_persistent` go through the last)
+take the arena RAM as before, zero and load it through the identity map (the kernel side) and give the process
+`ARENA_ZONE_BASE` (8 TiB) as its virtual base: `load_elf64(elf, virt, kern, ..)`, `setup_user_stack_glibc(top, kern(top), ..)`,
+`glibc_arena_layout(virt, ..)`. `ARENA_BASE` is the virtual base everywhere; `LAUNCH_ARENA_PHYS` is the RAM of the
+launched process (frees and the reaper). `paging::try_build_address_space_arena(virt, phys, n)` builds PML4[0] as a PDPT of
+1 GiB supervisor pages (no USER bit at any level) and hangs the arena under its zone slot with `map_user_arena`;
+`arena_split` takes the virtual base. `free_address_space` already frees that chain (section 7). Fork, copy-on-write,
+lazy arenas and exec in a child needed no change: they always worked on the parent's virtual base (S2).
+
+Corrections and findings:
+
+- Design 3.2 says `ARENA_PHYS` per process in `ChildMem` (0 for a child). Not done: nothing reaches a child's arena by a
+  RAM base (its arena is single frames, BUG-156), and a swapped 0 would make the reaper skip the sweep when a child owns the
+  globals at the end of a run. One global for the launched process (`LAUNCH_ARENA_PHYS`) is enough.
+- Miss found by reading (not by a fault): `reap_orphan_fork_children` cleared the copy-on-write counts of
+  `ARENA_BASE .. +span`; the counts are per frame, so with `fixed` the range (8 TiB) is clamped to the end of the table and
+  the sweep does nothing. It is a safety net (children release their counts when they end), so the miss is silent; no
+  failing test was possible without injecting a leaked count. Now `LAUNCH_ARENA_PHYS`.
+- `[pf-diag]` took a code pointer for plausible only in the identity range or the demand zone; the arena zone is added
+  (diagnostics only).
+- `translate_in` does not understand a 1 GiB leaf; with `fixed` PML4[0] consists of them. It is only used for user addresses
+  (arena zone, demand zone, vDSO), where there is none. Noted, not changed.
+- A10 (another CR3 touching memory of the launched process): no such access was found by the sweep and none showed up as a
+  ring-0 fault in the workloads (self-test boots, TCG matrix, Chromium starts, sites, interaction, video, 1 h soaks). The
+  places that look at a process from outside (`read_glibc_u32`, `phys_probe_note`, `[futex]`/`[abort]` dumps) already go
+  through `translate_in`; there is no signal delivery (`rt_sigaction` is a stub), thread exit clears `clear_child_tid` in
+  its own `exit` call. The list is in the proof README.
+- A11 (a device given a user address): none. Every block, audio and network path copies through a kernel buffer
+  (`pack_read`, `disk_read_bytes`, `virtio_blk::read_io_dev` with its own DMA buffer, ALSA `writei` -> `hda::pcm_write`,
+  sockets). Checked again by the TCG legs with the IOMMU on: only the deliberate fault records of the malicious-driver
+  self-tests.
+- Assumption 1 of 6.2 (no exec without fork) still holds: only `do_child_execve` execs.
+
+**`[aslr-phys]`**: FAILED with `identity` (exe ld.so stack brk mmap at their own physical address), OK with `fixed`
+in every boot. `[aslr]` itself is unchanged (PIE and ld.so 0 bits: the base is fixed, S5 draws it).
+
+**What S5 needs.** Draw the arena base (21 bits, 2 MiB steps in 8..12 TiB) instead of `ARENA_ZONE_BASE` in
+`arena_virt_for` and in `do_child_execve` (order of 2.4: `lazy_arena_discard` at the old base, free the chain, build at the
+new one); page slides for exe and ld.so; `place()` already takes the arena base. Then `fixed` becomes `on` and `identity`
+remains only for `aslr=legacy`.

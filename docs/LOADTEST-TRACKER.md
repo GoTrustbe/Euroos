@@ -1762,6 +1762,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   PIE of embedded programs, ld.so (0) and stack (8) need the arena to leave the identity map (S4, S5): `[aslr]` stays
   FAILED. New lines `[aslr-phys]`, `[aslr-ind]`, `[aslr-exec]` FAILED as "not yet", `[aslr-fork]`, `[demand-slots]`,
   `[vdso-ro]` OK. Found on the way: BUG-350 to BUG-355. Proof `docs/proof/11f-aslr-s01/`.
+- **2026-11-17 (`feature/11f-aslr-s4`, S4):** boot option `aslr.arena=fixed|identity`, default `fixed`: the arena of a
+  launched glibc process (ld.so, brk, small mmaps, stack, embedded programs) lies at 8 TiB instead of at its physical
+  address; PML4[0] of the process holds no user page. `[aslr-phys]` FAILED -> OK. Audit of every kernel path that reaches
+  user memory from another address space or hands a user buffer to a device: one silent miss fixed (the reaper's
+  copy-on-write sweep used the virtual base as frames), no ring-0 fault in any workload, IOMMU legs clean. Bits unchanged
+  (the base is fixed: S5 draws it). BUG-360..369 not used. Proof `docs/proof/11f-aslr-s4/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise

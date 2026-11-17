@@ -1,0 +1,95 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -nic none; base = c71cce8, off = S4 default (identity), on = S4 + aslr.arena=fixed; pins 12-13/14-15
+base-k-1g end=marker after 194s failed-lines=6 crash-lines=0
+base-k-2g end=marker after 208s failed-lines=4 crash-lines=0
+base-k-4g end=marker after 221s failed-lines=4 crash-lines=0
+base-k-8g end=marker after 226s failed-lines=4 crash-lines=0
+off-k-1g end=marker after 199s failed-lines=6 crash-lines=0
+off-k-2g end=marker after 219s failed-lines=4 crash-lines=0
+off-k-4g end=marker after 221s failed-lines=4 crash-lines=0
+off-k-8g end=marker after 244s failed-lines=4 crash-lines=0
+on-k-1g end=marker after 201s failed-lines=5 crash-lines=0
+on-k-2g end=marker after 220s failed-lines=3 crash-lines=0
+on-k-4g end=marker after 237s failed-lines=3 crash-lines=0
+on-k-8g end=marker after 223s failed-lines=3 crash-lines=0
+## markers-compare base -> off, 1G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> on, 1G
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> off, 2G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> on, 2G
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> off, 4G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> on, 4G
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> off, 8G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> on, 8G
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-phys: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## FAILED lines base 4G
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 9 (4 KiB 9, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mm
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 9 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31 → FAILED (not yet: stack-m
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), ke
+## crash lines base: 0
+## FAILED lines off 4G
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 10 (4 KiB 10, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives 
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, exe-mmap 10 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31 → FAILED (not yet: stack
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), ke
+## crash lines off: 0
+## FAILED lines on 4G
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 9 (4 KiB 9, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mm
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 9 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31 → FAILED (not yet: stack-m
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), ke
+## crash lines on: 0
+## layout with aslr=off, 2G: address lines ([aslr] first addresses, [glibc] spawned ...) base vs off
+base: 174 lines, md5 ced8d8c9bcb962f5952a6cf00d8e983e
+s4a: 174 lines, md5 ced8d8c9bcb962f5952a6cf00d8e983e
+[aslr]   exe      first 0x000013e01460  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x000014600000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x280000060100  varying bits  0  distinct 1/64
+[aslr]   stack    first 0x00002bcffd1c  varying bits  0  distinct 1/64
+[aslr]   brk      first 0x000015e00000  varying bits  0  distinct 1/64
+[aslr]   mmap     first 0x000017e05000  varying bits  0  distinct 1/64
+[aslr]   mmapbig  first 0x280000212000  varying bits  0  distinct 1/64
+[aslr]   vdso     first 0x640000000000  varying bits  0  distinct 1/64
+
+## after c695d58 (fixed the default): KVM 4 GiB without boot options and with aslr.arena=identity
+def-4g end=marker after 210s failed-lines=3 crash-lines=0
+id-4g end=marker after 199s failed-lines=4 crash-lines=0
+[bootopt] aslr.arena=fixed
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+markers-compare base -> def: -- WORSE: 0 -- CHANGED (not worse): 1 
+[bootopt] aslr.arena=identity
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena): exe ldso stack brk mmap → FAILED (the identity arena: boot option aslr.a
+markers-compare base -> id: -- WORSE: 0 -- CHANGED (not worse): 0 
