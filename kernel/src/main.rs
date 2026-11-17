@@ -4353,6 +4353,8 @@ fn main() -> Status {
         paging::arena_hi_selftest();
         // ASLR S5: an exec in a fork child moves its arena ([arena-move]).
         paging::arena_move_selftest();
+        // ASLR S6: an arena in three segments through fork, copy-on-write and exec ([arena-segs]).
+        paging::arena_segs_selftest();
         ring3::elf_bias_selftest();
         // ASLR S1: the demand region over many PML4 slots ([demand-slots]).
         ring3::demand_slots_selftest(&mut allocator);

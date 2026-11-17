@@ -11480,7 +11480,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         if lazy {
             // BUG-156: the arena of a fork child is single frames. They go
             // back to the pool; the new image gets a frame for what it touches.
-            let n = crate::paging::lazy_arena_discard(cr3, arena, nblocks);
+            let n = crate::paging::lazy_arena_discard(cr3, &crate::paging::Segs::one(arena, span));
             static SAID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
             if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
                 crate::serial_println!("[execve] task {}: {} KiB of arena pages back to the process pool", crate::sched::current(), n * 4);
@@ -11515,7 +11515,7 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     let arena = if ap.virt != arena {
         use x86_64::registers::control::Cr3;
         let cr3 = Cr3::read().0.start_address().as_u64();
-        let ok = crate::paging::lazy_arena_rebase(cr3, arena, ap.virt, nblocks);
+        let ok = crate::paging::lazy_arena_rebase(cr3, &crate::paging::Segs::one(arena, span), &crate::paging::Segs::one(ap.virt, span));
         crate::paging::flush_tlb_all();
         if !ok {
             // The old chain is gone and the new one could not be built: the
@@ -11720,7 +11720,6 @@ fn do_glibc_fork() -> u64 {
     if census {
         FORK_CENSUS_BEFORE.store(census_unattributed_kib(), Ordering::Relaxed);
     }
-    let nblocks = span >> 21;
     // BUG-156: the child has no arena in one piece any more (128 MiB of the
     // process pool per browser process, copied whole at every fork, and the
     // 13th process did not fit a 4 GiB machine). Its arena is page tables
@@ -11742,7 +11741,7 @@ fn do_glibc_fork() -> u64 {
             return (-12i64) as u64;
         }
     };
-    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, arena, nblocks) {
+    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, &crate::paging::Segs::one(arena, span)) {
         let n = crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
         crate::serial_println!("[fork] arena alloc FAILED (no frame for the page tables of a {} MiB arena, {n} given back, pool has {} MiB)",
@@ -11787,7 +11786,7 @@ fn do_glibc_fork() -> u64 {
     // Share the pages of the parent arena that hold something (ld.so, libc,
     // heap, stacks) copy-on-write, 2 MiB at a time with a window for the
     // timer (BUG-128). The forking thread stands in this syscall.
-    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, arena, nblocks, FORK_POOL_RESERVE, &mut irq_window) else {
+    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, &crate::paging::Segs::one(arena, span), FORK_POOL_RESERVE, &mut irq_window) else {
         crate::serial_println!("[fork] arena alloc FAILED ({} MiB arena, pool has {} MiB)",
             span >> 20, crate::procpool::free_frames() / 256);
         undo_fork("no memory for the copy of the arena");
@@ -13236,11 +13235,11 @@ pub fn spawn_glibc_persistent(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, av, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
             p
         }
         Ok(p) => p,
@@ -13923,11 +13922,11 @@ fn glibc_disk_launch(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, av, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
             p
         }
         Ok(p) => p,
@@ -15324,11 +15323,11 @@ pub fn run_glibc(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, av, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, av, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
             p
         }
         Ok(p) => p,

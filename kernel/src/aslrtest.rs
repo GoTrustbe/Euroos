@@ -16,8 +16,10 @@
 //!   address (the identity-mapped arena; looked up in the page tables of the
 //!   process by `run_glibc`). Until step S4 the arena regions are.
 //! - `[aslr-ind]`: the bits that vary in the distance between two regions
-//!   (stack - mmap, exe - stack, exe - mmap). Regions that move together give
-//!   0; the target is 20 (step S6 gives the arena regions their own bases).
+//!   (stack - mmap, exe - stack, exe - mmap; since S6 also stack - ld.so,
+//!   exe - brk and brk - stack: every pair of the three arena segments).
+//!   Regions that move together give 0; the target is 20 (step S6 gives the
+//!   arena regions their own bases).
 //! - `[aslr-fork]`: a fork child sees the layout of its parent bit for bit.
 //! - `[aslr-exec]`: an exec in a fork child gets a new draw in every region.
 
@@ -34,7 +36,9 @@ const STARTS: usize = 64;
 const FORKS: usize = 8;
 const KEYS: [&str; 8] = ["exe", "ldso", "libc", "stack", "brk", "mmap", "mmapbig", "vdso"];
 const EXE: usize = 0;
+const LDSO: usize = 1;
 const STACK: usize = 3;
+const BRK: usize = 4;
 const MMAP: usize = 5;
 const MMAPBIG: usize = 6;
 const VDSO: usize = 7;
@@ -204,8 +208,14 @@ fn report_ind(mode: Mode, seen: &[[u64; 8]]) {
         varying(&d)
     };
     let (sm, es, em) = (pair(STACK, MMAP), pair(EXE, STACK), pair(EXE, MMAP));
+    // ASLR S6 (design S6 exit criterion): stack - ld.so, and the brk heap
+    // against the image and the stack segment.
+    let (sl, eb, bs) = (pair(STACK, LDSO), pair(EXE, BRK), pair(BRK, STACK));
     let (lb, vb) = (pair(2, EXE), pair(VDSO, MMAPBIG));
-    let low: Vec<&str> = [("stack-mmap", sm), ("exe-stack", es), ("exe-mmap", em)]
+    // Shown, not judged: the S1 regions against the executable, and the two
+    // pairs that share a segment (only their page slides differ).
+    let (eb1, ev, el, bm) = (pair(MMAPBIG, EXE), pair(VDSO, EXE), pair(LDSO, EXE), pair(MMAP, BRK));
+    let low: Vec<&str> = [("stack-mmap", sm), ("exe-stack", es), ("exe-mmap", em), ("stack-ldso", sl), ("exe-brk", eb), ("brk-stack", bs)]
         .iter()
         .filter(|&&(_, b)| b < IND_BITS)
         .map(|&(n, _)| n)
@@ -218,7 +228,7 @@ fn report_ind(mode: Mode, seen: &[[u64; 8]]) {
         alloc::format!("FAILED (not yet: {} move with one arena base until step S6)", low.join(", "))
     };
     crate::serial_println!(
-        "[aslr-ind] {} starts: varying bits of the distance stack-mmap {sm}, exe-stack {es}, exe-mmap {em} (want >= {IND_BITS}); libc-exe {lb}, vDSO-mmap1MiB {vb} → {verdict}",
+        "[aslr-ind] {} starts: varying bits of the distance stack-mmap {sm}, exe-stack {es}, exe-mmap {em}, stack-ldso {sl}, exe-brk {eb}, brk-stack {bs} (want >= {IND_BITS}); libc-exe {lb}, vDSO-mmap1MiB {vb}, mmap1MiB-exe {eb1}, vDSO-exe {ev}; same segment: ldso-exe {el}, mmap-brk {bm} → {verdict}",
         seen.len()
     );
 }

@@ -19,6 +19,11 @@
 //! `legacy` and `on` and 0 in `off`. Step S5: with `on` the arena itself lies at a
 //! random 2 MiB step of 8..12 TiB (`arena_base`), and the embedded executable and
 //! ld.so get a page slide inside it; `off` and `legacy` draw none of the three.
+//! Step S6: with `on` the arena is cut into three segments over the same RAM
+//! (image: executable and ld.so; heap: brk and small mmaps; stack), each at a
+//! random 2 MiB step of a window of its own (`split_segs`), so that the
+//! distance between them is not fixed any more; `off` places them at the start
+//! of their windows.
 
 use core::ops::Range;
 
@@ -28,8 +33,20 @@ pub const GIB: u64 = 1 << 30;
 pub const TIB: u64 = 1 << 40;
 /// The user half of 4-level paging: every user address lies below it.
 pub const USER_TOP: u64 = 1 << 47;
-/// The arena zone of step S2 (`paging::ARENA_ZONE_*`): 8..12 TiB.
-pub const ARENA_ZONE: Range<u64> = 8 * TIB..12 * TIB;
+/// The arena zone (`paging::ARENA_ZONE_*`): 8..20 TiB since step S6, the three
+/// segment windows below.
+pub const ARENA_ZONE: Range<u64> = 8 * TIB..20 * TIB;
+/// ASLR S6: the window of each arena segment, 4 TiB (21 bits of 2 MiB steps).
+/// The image window is the arena zone of S2..S5: a one-piece arena (S5,
+/// `aslr.split=off`) lies there as before.
+pub const SEG_WINDOW: u64 = 4 * TIB;
+pub const IMAGE_ZONE: Range<u64> = 8 * TIB..12 * TIB;
+pub const HEAP_ZONE: Range<u64> = 12 * TIB..16 * TIB;
+pub const STACK_ZONE: Range<u64> = 16 * TIB..20 * TIB;
+/// ASLR S6: the stack segment is the last 4 MiB of the arena: the stack top
+/// lies 1..2 MiB below its end (as before S6), so the stack has 2..3 MiB below
+/// it before the end of its segment (before S6: 1 MiB before the mmap window).
+pub const STACK_SEG: u64 = 4 * MIB;
 /// ASLR S5: the arena base is a 2 MiB step of the zone (21 bits).
 pub const ARENA_STEP: u64 = 2 * MIB;
 /// Where ld.so lies in the arena (before its page slide), as before S5.
@@ -64,8 +81,9 @@ pub const VDSO_PAGES: u64 = 2;
 /// The largest executable window `draw` accepts (`exe_span` above it is cut).
 pub const EXE_SPAN_MAX: u64 = TIB;
 
-/// Bytes of one draw (one per launch and per exec).
-pub const DRAW_BYTES: usize = 32;
+/// Bytes of one draw (one per launch and per exec). S6 added the fifth word
+/// (the bases of the heap and stack segments).
+pub const DRAW_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -154,6 +172,126 @@ pub struct Layout {
     pub arena: u64,
     pub exe_slide: u64,
     pub ldso_slide: u64,
+    /// ASLR S6: the offsets of the heap and the stack segment in their
+    /// windows (multiples of `ARENA_STEP`, below `SEG_WINDOW`); the image
+    /// segment takes `arena`.
+    pub heap_seg: u64,
+    pub stack_seg: u64,
+}
+
+/// ASLR S6: one segment of an arena: `len` bytes of the arena from offset
+/// `off` (the RAM of a launched process at `phys + off`) seen at `virt`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Seg {
+    pub virt: u64,
+    pub off: u64,
+    pub len: u64,
+}
+
+impl Seg {
+    pub fn end(&self) -> u64 {
+        self.virt + self.len
+    }
+    /// The 2 MiB blocks of the segment.
+    pub fn blocks(&self) -> u64 {
+        self.len / ARENA_STEP
+    }
+    pub fn has(&self, va: u64) -> bool {
+        va >= self.virt && va - self.virt < self.len
+    }
+}
+
+/// ASLR S6: the segments of an arena, in the order of their offsets, with no
+/// gap between them in the arena (`off` of one = `off + len` of the one
+/// before): one (identity, `fixed`, the S5 layout) or three (image, heap,
+/// stack). Every function that walks an arena by its virtual addresses walks
+/// this list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Segs {
+    n: usize,
+    s: [Seg; 3],
+}
+
+impl Segs {
+    /// An arena in one piece of `span` bytes at `virt`.
+    pub const fn one(virt: u64, span: u64) -> Segs {
+        let z = Seg { virt: 0, off: 0, len: 0 };
+        Segs { n: 1, s: [Seg { virt, off: 0, len: span }, z, z] }
+    }
+    /// Three segments; None unless they follow each other in the arena, every
+    /// one 2 MiB aligned and not empty, and none overlaps another virtually.
+    pub fn three(s: [Seg; 3]) -> Option<Segs> {
+        let aligned = s.iter().all(|x| x.len > 0 && x.virt % ARENA_STEP == 0 && x.off % ARENA_STEP == 0 && x.len % ARENA_STEP == 0);
+        let follow = s[0].off == 0 && s[1].off == s[0].len && s[2].off == s[1].off + s[1].len;
+        let apart = (0..3).all(|i| (0..3).all(|j| i == j || s[i].end() <= s[j].virt || s[j].end() <= s[i].virt));
+        (aligned && follow && apart).then_some(Segs { n: 3, s })
+    }
+    pub fn list(&self) -> &[Seg] {
+        &self.s[..self.n]
+    }
+    /// The image segment's virtual base (`ARENA_BASE`): the executable and ld.so.
+    pub fn base(&self) -> u64 {
+        self.s[0].virt
+    }
+    pub fn span(&self) -> u64 {
+        self.list().iter().map(|x| x.len).sum()
+    }
+    pub fn split(&self) -> bool {
+        self.n > 1
+    }
+    /// The virtual base of every 2 MiB block, segment by segment.
+    pub fn blocks(self) -> impl Iterator<Item = u64> {
+        (0..self.n).flat_map(move |i| {
+            let s = self.s[i];
+            (0..s.blocks()).map(move |b| s.virt + b * ARENA_STEP)
+        })
+    }
+    /// The virtual address of arena offset `off` (`off` = the span: the end of
+    /// the last segment).
+    pub fn virt(&self, off: u64) -> u64 {
+        for x in self.list() {
+            if off >= x.off && off - x.off < x.len {
+                return x.virt + (off - x.off);
+            }
+        }
+        let l = &self.s[self.n - 1];
+        l.virt + off.saturating_sub(l.off)
+    }
+    /// The arena offset of the virtual address `va`, when it lies in a segment.
+    pub fn off(&self, va: u64) -> Option<u64> {
+        self.list().iter().find(|x| x.has(va)).map(|x| x.off + (va - x.virt))
+    }
+    /// The segment `va` lies in.
+    pub fn seg_of(&self, va: u64) -> Option<Seg> {
+        self.list().iter().copied().find(|x| x.has(va))
+    }
+    /// Does `[ptr, ptr + len)` lie inside one segment (a range across the gap
+    /// between two segments is not memory of the process)?
+    pub fn contains(&self, ptr: u64, len: u64) -> bool {
+        match ptr.checked_add(len) {
+            Some(end) => self.list().iter().any(|x| ptr >= x.virt && end <= x.end()),
+            None => false,
+        }
+    }
+}
+
+/// ASLR S6: where an arena of `span` bytes is cut (arena offsets): the image
+/// segment ends where the brk heap begins (`euromm::arena::glibc_layout`: 32 MiB,
+/// a quarter of a smaller arena), the stack segment is the last `STACK_SEG`.
+pub fn seg_cuts(span: u64) -> (u64, u64) {
+    let span = span & !(ARENA_STEP - 1);
+    let h = if span >= 128 * MIB { 32 * MIB } else { (span / 4) & !(ARENA_STEP - 1) };
+    (h, span.saturating_sub(STACK_SEG))
+}
+
+/// ASLR S6: the three segments of an arena of `span` bytes for the draw `l`:
+/// image, heap and stack each at the start of its window plus its drawn offset,
+/// moved down as far as needed to end inside the window (as `arena_base`).
+/// None for an arena too small to cut (below 32 MiB; the launchers take 64 MiB
+/// at least).
+pub fn split_segs(l: &Layout, span: u64) -> Option<Segs> {
+    let _ = (l, span);
+    None // tests first: not cut yet
 }
 
 /// ASLR S5: the virtual base of an arena of `span` bytes for the draw `l`:
@@ -161,9 +299,15 @@ pub struct Layout {
 /// end inside the zone (the offsets of the last `span` of the zone fall onto
 /// one base; with 128 MiB that is 64 of the 2^21 values).
 pub fn arena_base(l: &Layout, span: u64) -> u64 {
-    let size = ARENA_ZONE.end - ARENA_ZONE.start;
+    window_base(IMAGE_ZONE.start, l.arena, span)
+}
+
+/// The base of `span` bytes in the window from `start` (`SEG_WINDOW` bytes) for
+/// the drawn offset `off`, moved down just far enough to end in the window.
+fn window_base(start: u64, off: u64, span: u64) -> u64 {
+    let size = SEG_WINDOW;
     let span = round_up(span.min(size), ARENA_STEP);
-    ARENA_ZONE.start + (l.arena & (size - 1) & !(ARENA_STEP - 1)).min(size - span)
+    start + (off & (size - 1) & !(ARENA_STEP - 1)).min(size - span)
 }
 
 fn word(r: &[u8; DRAW_BYTES], i: usize) -> u64 {
@@ -199,6 +343,8 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             arena: 0,
             exe_slide: 0,
             ldso_slide: 0,
+            heap_seg: 0,
+            stack_seg: 0,
         },
         Mode::Off => Layout {
             exe_base: EXE_BASE,
@@ -211,6 +357,8 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             arena: 0,
             exe_slide: 0,
             ldso_slide: 0,
+            heap_seg: 0,
+            stack_seg: 0,
         },
         Mode::On => {
             let align = exe_align.clamp(PAGE, GIB).next_power_of_two();
@@ -227,7 +375,10 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             let arena = ((w1 >> 42) & 0x1F_FFFF) * ARENA_STEP;
             let exe_slide = ((w2 >> 42) & 0x1FF) * PAGE;
             let ldso_slide = ((w2 >> 51) & 0x1FF) * PAGE;
-            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena, exe_slide, ldso_slide }
+            // ASLR S6: the heap and stack segments: 21 bits of 2 MiB steps
+            // each, from the fifth word (bits 0..20 and 21..41).
+            let (heap_seg, stack_seg) = (0, 0); // tests first: not drawn yet
+            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena, exe_slide, ldso_slide, heap_seg, stack_seg }
         }
     }
 }
@@ -247,7 +398,7 @@ mod tests {
         }
         fn bytes(&mut self) -> [u8; DRAW_BYTES] {
             let mut r = [0u8; DRAW_BYTES];
-            for i in 0..4 {
+            for i in 0..DRAW_BYTES / 8 {
                 r[i * 8..i * 8 + 8].copy_from_slice(&self.next().to_le_bytes());
             }
             r
@@ -379,9 +530,10 @@ mod tests {
                 let l = draw(&r, Mode::On, 200 * MIB, PAGE);
                 let a = arena_base(&l, span);
                 assert_eq!(a % ARENA_STEP, 0);
-                assert!(a >= ARENA_ZONE.start);
-                assert!(a + span.min(ARENA_ZONE.end - ARENA_ZONE.start) <= ARENA_ZONE.end, "arena runs out of its zone");
-                assert!(l.arena % ARENA_STEP == 0 && l.arena < ARENA_ZONE.end - ARENA_ZONE.start);
+                // S6: the one-piece arena keeps the zone of S5 (the image window).
+                assert!(a >= IMAGE_ZONE.start);
+                assert!(a + span.min(SEG_WINDOW) <= IMAGE_ZONE.end, "arena runs out of its zone");
+                assert!(l.arena % ARENA_STEP == 0 && l.arena < SEG_WINDOW);
                 assert!(l.exe_slide % PAGE == 0 && l.exe_slide < SLIDE_WINDOW);
                 assert!(l.ldso_slide % PAGE == 0 && l.ldso_slide < SLIDE_WINDOW);
                 // ld.so (under 1 MiB, euromm::arena) with its slide ends below
@@ -414,6 +566,129 @@ mod tests {
         assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.exe_base)) >= 30);
         assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.mmap_floor)) >= 30);
         assert!(pick(&|l| l.ldso_slide.wrapping_sub(l.exe_slide)) >= 9);
+    }
+
+    /// ASLR S6: the three segments of every arena size the launchers and an
+    /// exec use lie in their own windows, 2 MiB aligned, cut where the brk heap
+    /// and the stack segment begin, and form a valid segment list.
+    #[test]
+    fn split_segments_in_their_windows() {
+        for span_mib in [64u64, 96, 128, 192, 256, 384, 512, 1024] {
+            let span = span_mib * MIB;
+            let (h, s) = seg_cuts(span);
+            // ld.so with its slide (under 1 MiB) ends in the image segment.
+            assert!(LDSO_OFF + SLIDE_WINDOW + MIB <= h, "{span_mib} MiB: image segment {h:#x} too small");
+            for r in inputs() {
+                let l = draw(&r, Mode::On, 200 * MIB, PAGE);
+                let segs = split_segs(&l, span).expect("an arena of 64 MiB or more is cut");
+                let x = segs.list();
+                assert_eq!(x.len(), 3);
+                assert_eq!(Segs::three([x[0], x[1], x[2]]), Some(segs));
+                assert_eq!((x[0].off, x[0].len), (0, h));
+                assert_eq!((x[1].off, x[1].len), (h, s - h));
+                assert_eq!((x[2].off, x[2].len), (s, STACK_SEG));
+                assert_eq!(segs.span(), span);
+                assert_eq!(segs.base(), x[0].virt);
+                for (seg, z) in x.iter().zip([IMAGE_ZONE, HEAP_ZONE, STACK_ZONE]) {
+                    assert!(seg.virt >= z.start && seg.end() <= z.end, "{span_mib} MiB: segment {seg:?} out of {z:?}");
+                    assert_eq!(seg.virt % ARENA_STEP, 0);
+                }
+            }
+        }
+    }
+
+    /// ASLR S6: every segment base has 21 bits of its own; the distance
+    /// between two segments varies in as many (design S6: >= 20), and none is
+    /// tied to the draws of S1.
+    #[test]
+    fn split_entropy() {
+        let span = 128 * MIB;
+        let rows: Vec<(Layout, Segs)> = inputs()
+            .iter()
+            .map(|r| {
+                let l = draw(r, Mode::On, 200 * MIB, PAGE);
+                (l, split_segs(&l, span).expect("cut"))
+            })
+            .collect();
+        let pick = |f: &dyn Fn(&Layout, &Segs) -> u64| -> u32 { varying(&rows.iter().map(|(l, s)| f(l, s)).collect::<Vec<_>>()) };
+        let v = |s: &Segs, i: usize| s.list()[i].virt;
+        for i in 0..3 {
+            assert_eq!(pick(&|_, s| v(s, i)), 21, "segment {i}");
+        }
+        assert!(pick(&|_, s| v(s, 1).wrapping_sub(v(s, 0))) >= 21);
+        assert!(pick(&|_, s| v(s, 2).wrapping_sub(v(s, 1))) >= 21);
+        assert!(pick(&|_, s| v(s, 2).wrapping_sub(v(s, 0))) >= 21);
+        assert!(pick(&|l, s| v(s, 2).wrapping_sub(l.mmap_floor)) >= 30);
+        assert!(pick(&|l, s| v(s, 1).wrapping_sub(l.exe_base)) >= 30);
+        assert!(pick(&|l, s| l.vdso.wrapping_sub(v(s, 2))) >= 27);
+    }
+
+    /// ASLR S6 (`[aslr-ind]`, the exit criterion of S6): the distance between
+    /// two regions of different segments varies in at least 20 bits; every
+    /// region keeps at least the bits of S5. Inside one segment (exe and
+    /// ld.so; brk and the small mmaps) only the page slides differ.
+    #[test]
+    fn split_region_distances() {
+        let span = 128 * MIB;
+        let rows: Vec<[u64; 5]> = inputs()
+            .iter()
+            .map(|r| {
+                let l = draw(r, Mode::On, 200 * MIB, PAGE);
+                let segs = split_segs(&l, span).expect("cut");
+                let g = crate::arena::glibc_layout_segs(&segs, crate::arena::Slides { brk: l.brk, mmap: l.mmap, stack: l.stack }).expect("a layout");
+                [g.exe + l.exe_slide, g.ldso + l.ldso_slide, g.brk_start, g.mmap_start, g.stack_top]
+            })
+            .collect();
+        let col = |a: usize| varying(&rows.iter().map(|v| v[a]).collect::<Vec<_>>());
+        let d = |a: usize, b: usize| varying(&rows.iter().map(|v| v[a].wrapping_sub(v[b])).collect::<Vec<_>>());
+        for (n, a, b) in [("exe-stack", 0, 4), ("exe-brk", 0, 2), ("exe-mmap", 0, 3), ("stack-mmap", 4, 3), ("stack-ldso", 4, 1), ("brk-stack", 2, 4)] {
+            assert!(d(a, b) >= 20, "{n}: {} bits", d(a, b));
+        }
+        assert_eq!((col(0), col(1)), (30, 30));
+        assert!(col(2) >= 29 && col(3) >= 30 && col(4) >= 29);
+        assert!(d(1, 0) <= 11 && d(3, 2) <= 11, "inside a segment only the slides differ");
+    }
+
+    /// ASLR S6: `off` puts the segments at the start of their windows; `legacy`
+    /// draws no segment offset (its arena is the identity one).
+    #[test]
+    fn split_off_and_legacy() {
+        for r in inputs().iter().take(200) {
+            let o = draw(r, Mode::Off, 200 * MIB, PAGE);
+            let segs = split_segs(&o, 128 * MIB).expect("cut");
+            let x = segs.list();
+            assert_eq!((x[0].virt, x[1].virt, x[2].virt), (IMAGE_ZONE.start, HEAP_ZONE.start, STACK_ZONE.start));
+            let g = draw(r, Mode::Legacy, 200 * MIB, PAGE);
+            assert_eq!((g.heap_seg, g.stack_seg), (0, 0));
+        }
+        assert!(split_segs(&draw(&[0u8; DRAW_BYTES], Mode::On, 0, 0), 16 * MIB).is_none());
+    }
+
+    /// ASLR S6: a segment list maps arena offsets to virtual addresses and back,
+    /// and a range is memory of the process only inside one segment.
+    #[test]
+    fn segs_translate_and_contain() {
+        let one = Segs::one(0x0620_0000, 64 * MIB);
+        assert!(!one.split());
+        assert_eq!(one.virt(5 * MIB), 0x0620_0000 + 5 * MIB);
+        assert!(one.contains(0x0620_0000, 64 * MIB) && !one.contains(0x0620_0000, 64 * MIB + 1));
+        let seg = |virt, off, len| Seg { virt, off, len };
+        let t = Segs::three([seg(9 * TIB, 0, 32 * MIB), seg(13 * TIB, 32 * MIB, 92 * MIB), seg(17 * TIB, 124 * MIB, 4 * MIB)]).unwrap();
+        assert!(t.split());
+        assert_eq!(t.span(), 128 * MIB);
+        assert_eq!(t.virt(0), 9 * TIB);
+        assert_eq!(t.virt(32 * MIB), 13 * TIB);
+        assert_eq!(t.virt(127 * MIB), 17 * TIB + 3 * MIB);
+        assert_eq!(t.virt(128 * MIB), 17 * TIB + 4 * MIB);
+        assert_eq!(t.off(13 * TIB + 4096), Some(32 * MIB + 4096));
+        assert_eq!(t.off(13 * TIB - 4096), None);
+        assert!(t.contains(13 * TIB, 92 * MIB));
+        assert!(!t.contains(9 * TIB + 32 * MIB - 4096, 8192), "a range past the end of the image segment");
+        assert!(!t.contains(u64::MAX - 10, 100));
+        // not following each other, unaligned or overlapping: refused
+        assert!(Segs::three([seg(9 * TIB, 0, 32 * MIB), seg(13 * TIB, 30 * MIB, 92 * MIB), seg(17 * TIB, 124 * MIB, 4 * MIB)]).is_none());
+        assert!(Segs::three([seg(9 * TIB + 4096, 0, 32 * MIB), seg(13 * TIB, 32 * MIB, 92 * MIB), seg(17 * TIB, 124 * MIB, 4 * MIB)]).is_none());
+        assert!(Segs::three([seg(9 * TIB, 0, 32 * MIB), seg(9 * TIB + 16 * MIB, 32 * MIB, 92 * MIB), seg(17 * TIB, 124 * MIB, 4 * MIB)]).is_none());
     }
 
     /// `off`: the arena at 8 TiB, no slide (the layout of S4); `legacy`: no

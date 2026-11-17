@@ -28,6 +28,12 @@ const SWAPPED_PTE: u64 = 1 << 9;
 pub const ARENA_ZONE_BASE: u64 = 8 << 40;
 pub const ARENA_ZONE_END: u64 = 12 << 40;
 
+/// ASLR S6: an arena is a list of segments over one span of arena offsets
+/// (one piece, or image + heap + stack at bases of their own). Every function
+/// below that walks an arena by its virtual addresses takes the list
+/// (`Segs::blocks`: the base of every 2 MiB block, segment by segment).
+pub use euromm::layout::{Seg, Segs};
+
 /// Can an arena lie at `addr`: under PML4[0] (every arena today, at its
 /// physical address) or in the arena zone. The page-fault dispatch and the
 /// arena walks go by this instead of `addr >> 39 == 0` (ASLR S2).
@@ -487,14 +493,15 @@ fn rwx_big_inner(falloc: &mut FrameAllocator, arena_phys: u64, nblocks: u64, str
 /// is missing.
 pub fn try_build_address_space_arena(
     falloc: &mut FrameAllocator,
-    virt_arena: u64,
+    segs: &Segs,
     arena_phys: u64,
-    nblocks: u64,
 ) -> Result<u64, OutOfFrames> {
-    if virt_arena == arena_phys {
-        return try_build_address_space_rwx_big(falloc, arena_phys, nblocks);
+    if !segs.split() && segs.base() == arena_phys {
+        return try_build_address_space_rwx_big(falloc, arena_phys, segs.span() / MIB2);
     }
-    if virt_arena < ARENA_ZONE_BASE || virt_arena.saturating_add(nblocks * MIB2) > ARENA_ZONE_END {
+    // ASLR S6: every segment in the zone (the RAM of segment `s` is
+    // `arena_phys + s.off`).
+    if segs.list().iter().any(|s| s.virt < ARENA_ZONE_BASE || s.virt.saturating_add(s.len) > ARENA_ZONE_END) {
         return Err(OutOfFrames);
     }
     let [pml4, pdpt] = falloc.allocate_many::<2>().map_err(|_| OutOfFrames)?;
@@ -512,7 +519,7 @@ pub fn try_build_address_space_arena(
     }
     let mapped = {
         let mut get_pd = || falloc.allocate().ok();
-        map_user_arena(pml4, virt_arena, arena_phys, nblocks, &mut get_pd)
+        segs.list().iter().all(|s| map_user_arena(pml4, s.virt, arena_phys + s.off, s.blocks(), &mut get_pd))
     };
     if !mapped {
         free_address_space(falloc, pml4);
@@ -1222,7 +1229,7 @@ const OWNED: u64 = 1 << 9;
 /// with `nblocks` empty page tables over the arena at `virt_arena` instead of
 /// a block of memory. False when a table frame could not be had (the caller
 /// gives everything back through `free_fork_tables`).
-pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, nblocks: u64) -> bool {
+pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, segs: &Segs) -> bool {
     // SAFETY: three fresh identity-mapped frames; filled completely.
     unsafe {
         core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
@@ -1240,8 +1247,8 @@ pub fn fill_remap_tables_lazy(pml4: u64, pdpt: u64, pd: u64, virt_arena: u64, nb
         for i in 0..512usize {
             pdp.add(i).write_volatile((i as u64 * MIB2) | PRESENT | WRITABLE | HUGE);
         }
-        for b in 0..nblocks {
-            let virt = virt_arena + b * MIB2;
+        // ASLR S6: every block of every segment.
+        for virt in segs.blocks() {
             if !in_arena_zone(virt) {
                 return false;
             }
@@ -1449,15 +1456,15 @@ unsafe fn arena_pte_ptr(pml4: u64, virt: u64) -> Option<(*mut u64, u64)> {
 /// with them (`free_address_space`). Only with room to spare: without it the
 /// block stays a 2 MiB page and a fork copies it as before. Returns the
 /// blocks split.
-pub fn arena_split(falloc: &mut FrameAllocator, pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
-    if falloc.free_frames() < nblocks as usize + 4096 {
+pub fn arena_split(falloc: &mut FrameAllocator, pml4: u64, segs: &Segs) -> usize {
+    if falloc.free_frames() < (segs.span() / MIB2) as usize + 4096 {
         return 0;
     }
     let mut n = 0;
     // SAFETY: identity-mapped tables of an address space no task runs on yet.
     unsafe {
-        for b in 0..nblocks {
-            let base = virt_arena + b * MIB2;
+        // ASLR S6: every block of every segment.
+        for base in segs.blocks() {
             let Some(pdpt) = arena_pdpt(pml4, base) else { continue };
             let e3 = (pdpt as *const u64).add(((base >> 30) & 0x1FF) as usize).read_volatile();
             if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
@@ -1487,15 +1494,15 @@ pub fn arena_split(falloc: &mut FrameAllocator, pml4: u64, virt_arena: u64, nblo
 /// after every 2 MiB. Returns (pages shared, zero pages left out, pages
 /// copied), or None when the pool has no frame for a table or a copy (the
 /// caller undoes the fork).
-pub fn share_arena_cow(parent: u64, child: u64, virt_arena: u64, nblocks: u64, reserve: usize,
+pub fn share_arena_cow(parent: u64, child: u64, segs: &Segs, reserve: usize,
                        between: &mut dyn FnMut()) -> Option<(usize, usize, usize)> {
     let refs = cow_refs();
     let (mut shared, mut zero, mut copied) = (0usize, 0usize, 0usize);
     // The timer gets a window after about 4096 entries or 16 MiB read
     // (BUG-128), not after every 2 MiB: sharing an entry costs little.
     let mut work = 0usize;
-    for b in 0..nblocks {
-        let base = virt_arena + b * MIB2;
+    // ASLR S6: every block of every segment (the child has the same list).
+    for base in segs.blocks() {
         // SAFETY: identity-mapped tables of the running process and of the
         // child (not running). The parent's pages are read through the
         // current address space; a fresh pool frame through the identity map.
@@ -1727,11 +1734,11 @@ fn page_is_zero(va: u64) -> bool {
 /// or lazy itself (a fork child that forks). `between` runs after every 2 MiB
 /// and may let other tasks run. Returns (pages copied, pages left out), or
 /// None when the pool has no frame for a page (the caller undoes the fork).
-pub fn clone_arena_lazy(parent: u64, child: u64, virt_arena: u64, nblocks: u64, reserve: usize,
+pub fn clone_arena_lazy(parent: u64, child: u64, segs: &Segs, reserve: usize,
                         between: &mut dyn FnMut()) -> Option<(usize, usize)> {
     let (mut copied, mut skipped) = (0usize, 0usize);
-    for b in 0..nblocks {
-        let base = virt_arena + b * MIB2;
+    // ASLR S6: every block of every segment.
+    for base in segs.blocks() {
         // SAFETY: identity-mapped tables; the pages of the parent are read
         // through the current address space (they are present: checked per
         // page), the fresh frames of the child through the identity mapping
@@ -1772,14 +1779,15 @@ pub fn clone_arena_lazy(parent: u64, child: u64, virt_arena: u64, nblocks: u64, 
 /// execve in a fork child: every page of its lazy arena goes back to the pool
 /// and reads as zeros again. Returns the frames freed. The caller runs on
 /// `pml4`; the TLB is flushed here.
-pub fn lazy_arena_discard(pml4: u64, virt_arena: u64, nblocks: u64) -> usize {
+pub fn lazy_arena_discard(pml4: u64, segs: &Segs) -> usize {
     let mut freed = 0;
     let refs = cow_refs();
     // SAFETY: identity-mapped tables of the running process; the caller is its
     // only task (execve) and touches no arena page between here and the flush.
     unsafe {
-        for b in 0..nblocks {
-            let Some(pt) = lazy_pte_ptr(pml4, virt_arena + b * MIB2) else { continue };
+        // ASLR S6: every block of every segment.
+        for v in segs.blocks() {
+            let Some(pt) = lazy_pte_ptr(pml4, v) else { continue };
             for i in 0..512usize {
                 let e = pt.add(i).read_volatile();
                 if e & PRESENT != 0 && e & (OWNED | COW) != 0 {
@@ -2602,14 +2610,17 @@ pub fn robust_selftest() -> bool {
     let mut built = 0;
     // (name, frames needed, builder)
     type Builder = fn(&mut FrameAllocator, u64, &[u64; 8], &[u64; 8]) -> Result<u64, OutOfFrames>;
-    let cases: [(&str, usize, Builder); 6] = [
+    let cases: [(&str, usize, Builder); 7] = [
         ("wx", 4, |f, a, e, w| try_build_address_space(f, a, e, w)),
         ("wx_big", 5, |f, a, e, w| try_build_address_space_big(f, a, 6, e, w)),
         ("rwx", 3, |f, a, _, _| try_build_address_space_rwx(f, a)),
         ("rwx_big", 4, |f, a, _, _| try_build_address_space_rwx_big(f, a, 6)),
         ("remap", 3, |f, a, _, _| try_build_address_space_remap(f, a, a)),
         // ASLR S4: the arena in the zone (PML4[0] PDPT + zone PDPT + PD).
-        ("arena_zone", 4, |f, a, _, _| try_build_address_space_arena(f, ARENA_ZONE_BASE, a, 6)),
+        ("arena_zone", 4, |f, a, _, _| try_build_address_space_arena(f, &Segs::one(ARENA_ZONE_BASE, 6 * MIB2), a)),
+        // ASLR S6: three segments of two blocks in three windows (PML4[0]
+        // PDPT + a PDPT and a PD per segment).
+        ("arena_segs", 8, |f, a, _, _| try_build_address_space_arena(f, &robust_segs(), a)),
     ];
     for (name, need, build) in cases {
         for have in 0..=need {
@@ -2653,7 +2664,15 @@ pub fn robust_selftest() -> bool {
 
 /// A scratch address space with a lazy arena of `nb` blocks at `base` (the
 /// tables of a fork child, from the process pool), or None (nothing kept).
-fn scratch_lazy_space(base: u64, nb: u64) -> Option<u64> {
+/// ASLR S6: the segments of the `arena_segs` case of `[robust-paging]`: two
+/// blocks each at the start of the image, heap and stack windows.
+fn robust_segs() -> Segs {
+    const TIB: u64 = 1 << 40;
+    let seg = |virt, off| Seg { virt, off, len: 2 * MIB2 };
+    Segs::three([seg(8 * TIB, 0), seg(12 * TIB, 2 * MIB2), seg(16 * TIB, 4 * MIB2)]).expect("valid segments")
+}
+
+fn scratch_lazy_space(segs: &Segs) -> Option<u64> {
     let t = [crate::procpool::alloc(), crate::procpool::alloc(), crate::procpool::alloc()];
     let [Some(pml4), Some(pdpt), Some(pd)] = t else {
         for f in t.into_iter().flatten() {
@@ -2661,7 +2680,7 @@ fn scratch_lazy_space(base: u64, nb: u64) -> Option<u64> {
         }
         return None;
     };
-    if !fill_remap_tables_lazy(pml4, pdpt, pd, base, nb) {
+    if !fill_remap_tables_lazy(pml4, pdpt, pd, segs) {
         free_fork_tables(pml4);
         crate::procpool::free(pml4);
         return None;
@@ -2709,11 +2728,12 @@ pub fn arena_hi_selftest() -> bool {
     }
     let free0 = crate::procpool::free_frames();
     let (lf0, cc0) = (crate::ring3::ARENA_LAZY_FAULTS.load(Relaxed), COW_COPIED.load(Relaxed));
-    let Some(a) = scratch_lazy_space(base, NB) else {
+    let segs = Segs::one(base, NB * MIB2);
+    let Some(a) = scratch_lazy_space(&segs) else {
         crate::serial_println!("[arena-hi] no frames for a scratch address space -> FAILED ✗");
         return false;
     };
-    let Some(b) = scratch_lazy_space(base, NB) else {
+    let Some(b) = scratch_lazy_space(&segs) else {
         free_fork_tables(a);
         crate::procpool::free(a);
         crate::serial_println!("[arena-hi] no frames for a scratch address space -> FAILED ✗");
@@ -2756,7 +2776,7 @@ pub fn arena_hi_selftest() -> bool {
                     (p as *mut u64).write_volatile(pat(k));
                     ((p + 4088) as *mut u64).write_volatile(!pat(k));
                 }
-                shared = share_arena_cow(a, b, base, NB, 0, &mut || {});
+                shared = share_arena_cow(a, b, &segs, 0, &mut || {});
                 (pages[0] as *mut u64).write_volatile(pat(9));
                 for (k, &p) in pages.iter().enumerate() {
                     rd[k][0] = (p as *const u64).read_volatile();
@@ -2820,19 +2840,27 @@ pub fn arena_hi_selftest() -> bool {
 /// The caller has given the pages at `old` back (`lazy_arena_discard`, which
 /// releases the copy-on-write references the parent looks up by address);
 /// here the table chain at `old` goes back to the process pool and empty lazy
-/// tables for `nblocks` blocks are built at `new`. Both bases lie in the arena
-/// zone above PML4[0]. False (nothing of the new chain kept) when a table frame
-/// could not be had; the caller runs on `pml4` and flushes the TLB after.
-pub fn lazy_arena_rebase(pml4: u64, old: u64, new: u64, nblocks: u64) -> bool {
-    let zone = |v: u64| v >= ARENA_ZONE_BASE && v.saturating_add(nblocks * MIB2) <= ARENA_ZONE_END && v % MIB2 == 0;
+/// tables are built at `new`. Every segment of both lists lies in the arena
+/// zone above PML4[0]. S6: first every old segment goes, then every new one
+/// is built (a new segment may lie where an old one was). False (nothing of
+/// the new chain kept) when a table frame could not be had; the caller runs on
+/// `pml4` and flushes the TLB after.
+pub fn lazy_arena_rebase(pml4: u64, old: &Segs, new: &Segs) -> bool {
+    let zone = |s: &Segs| {
+        s.list().iter().all(|x| x.virt >= ARENA_ZONE_BASE && x.virt.saturating_add(x.len) <= ARENA_ZONE_END && x.virt % MIB2 == 0)
+    };
     if !zone(old) || !zone(new) {
         return false;
     }
-    lazy_arena_unbuild(pml4, old, nblocks);
-    if lazy_arena_build(pml4, new, nblocks) {
+    for s in old.list() {
+        lazy_arena_unbuild(pml4, s.virt, s.blocks());
+    }
+    if new.list().iter().all(|s| lazy_arena_build(pml4, s.virt, s.blocks())) {
         return true;
     }
-    lazy_arena_unbuild(pml4, new, nblocks);
+    for s in new.list() {
+        lazy_arena_unbuild(pml4, s.virt, s.blocks());
+    }
     false
 }
 
@@ -2939,11 +2967,12 @@ pub fn arena_move_selftest() -> bool {
         return false;
     }
     let free0 = crate::procpool::free_frames();
-    let Some(a) = scratch_lazy_space(x, NB) else {
+    let (sx, sy, sz) = (Segs::one(x, NB * MIB2), Segs::one(y, NB * MIB2), Segs::one(z, NB * MIB2));
+    let Some(a) = scratch_lazy_space(&sx) else {
         crate::serial_println!("[arena-move] no frames for a scratch address space -> FAILED ✗");
         return false;
     };
-    let Some(b) = scratch_lazy_space(x, NB) else {
+    let Some(b) = scratch_lazy_space(&sx) else {
         free_fork_tables(a);
         crate::procpool::free(a);
         crate::serial_println!("[arena-move] no frames for a scratch address space -> FAILED ✗");
@@ -2971,13 +3000,13 @@ pub fn arena_move_selftest() -> bool {
                 for (k, &o) in off.iter().enumerate() {
                     ((x + o) as *mut u64).write_volatile(pat(k));
                 }
-                shared = share_arena_cow(a, b, x, NB, 0, &mut || {});
+                shared = share_arena_cow(a, b, &sx, 0, &mut || {});
                 load(b);
                 pre = ((x + off[1]) as *const u64).read_volatile();
                 ((x + off[2]) as *mut u64).write_volatile(u64::MAX);
                 // The exec: pages at the old base go, the arena moves.
-                lazy_arena_discard(b, x, NB);
-                moved[0] = lazy_arena_rebase(b, x, y, NB);
+                lazy_arena_discard(b, &sx);
+                moved[0] = lazy_arena_rebase(b, &sx, &sy);
                 load(b);
                 if moved[0] {
                     for (k, &o) in off.iter().enumerate() {
@@ -2993,8 +3022,8 @@ pub fn arena_move_selftest() -> bool {
                 }
                 load(b);
                 if moved[0] {
-                    lazy_arena_discard(b, y, NB);
-                    moved[1] = lazy_arena_rebase(b, y, z, NB);
+                    lazy_arena_discard(b, &sy);
+                    moved[1] = lazy_arena_rebase(b, &sy, &sz);
                     load(b);
                     if moved[1] {
                         ((z + off[0]) as *mut u64).write_volatile(pat(12));
@@ -3043,6 +3072,146 @@ pub fn arena_move_selftest() -> bool {
         ),
         Some(w) => crate::serial_println!(
             "[arena-move] fork child of a lazy arena at {x:#x} execs and moves to {y:#x}: {w}; teardown {t} frames, pool {free0} -> {free1} -> FAILED ✗"
+        ),
+    }
+    why.is_none()
+}
+
+// -- ASLR S6: an arena in three segments ([arena-segs]) -----------------------
+
+/// ASLR step S6 ([arena-segs]): an arena cut into three segments (image, heap,
+/// stack) at bases in three windows, through fork, copy-on-write, exec and
+/// teardown. Two scratch address spaces (parent A, child B) get a lazy arena of
+/// 2 + 4 + 2 blocks: the image across a GiB boundary at 9 TiB - 2 MiB, the heap
+/// at 13 TiB, the stack at 16.5 TiB. A writes a page in every segment (lazy
+/// faults through the page-fault handler) and shares the arena copy-on-write
+/// with B; B reads them and writes the heap page (a copy of its own). Then B
+/// execs: its pages are discarded and all three segments move to new bases in
+/// the same windows (lazy_arena_rebase); B writes the heap and the stack at the
+/// new bases and reads an untouched image page (zero). A then writes the stack
+/// page it shared: no child holds it any more. Checked: nothing of B left under
+/// the old slots, every block lazy at the new bases, contents, the counts of the
+/// frames of A, the census, and every frame back in the process pool.
+pub fn arena_segs_selftest() -> bool {
+    const TIB: u64 = 1 << 40;
+    let seg = |virt, off, len| Seg { virt, off, len };
+    let segs = |i: u64, h: u64, s: u64| Segs::three([seg(i, 0, 2 * MIB2), seg(h, 2 * MIB2, 4 * MIB2), seg(s, 6 * MIB2, 2 * MIB2)]);
+    let (Some(old), Some(new)) = (
+        segs(9 * TIB - MIB2, 13 * TIB, 16 * TIB + 512 * GIB),
+        segs(10 * TIB + 7 * MIB2, 15 * TIB + 3 * MIB2, 19 * TIB + 5 * MIB2),
+    ) else {
+        crate::serial_println!("[arena-segs] the segment lists are not valid -> FAILED ✗");
+        return false;
+    };
+    let o = old.list();
+    let n = new.list();
+    // One page per segment of A (the image twice, on both sides of the GiB).
+    let pages = [o[0].virt + 0x3000, o[0].virt + MIB2 + 0x1000, o[1].virt + 2 * MIB2 + 0x5000, o[2].virt + 2 * MIB2 - 4096];
+    let pat = |k: usize| 0x3C3C_0000_0000_5E65u64 | ((k as u64) << 32);
+    if crate::procpool::free_frames() < 256 {
+        crate::serial_println!("[arena-segs] the process pool has {} frames: SKIPPED", crate::procpool::free_frames());
+        return false;
+    }
+    let free0 = crate::procpool::free_frames();
+    let Some(a) = scratch_lazy_space(&old) else {
+        crate::serial_println!("[arena-segs] no lazy arena in three segments (image {:#x}, heap {:#x}, stack {:#x}) -> FAILED ✗", o[0].virt, o[1].virt, o[2].virt);
+        return false;
+    };
+    let Some(b) = scratch_lazy_space(&old) else {
+        free_fork_tables(a);
+        crate::procpool::free(a);
+        crate::serial_println!("[arena-segs] no frames for the second scratch address space -> FAILED ✗");
+        return false;
+    };
+    let mut why: Option<&str> = None;
+    if !cow_space_register(b) {
+        why = Some("no memory to register the child space");
+    }
+    let (mut shared, mut moved) = (None, false);
+    let (mut rd_pre, mut rd_new, mut rd_a, mut zero_new) = ([0u64; 4], [0u64; 2], [0u64; 4], u64::MAX);
+    if why.is_none() {
+        let smap = crate::ring3::smap_active();
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            // SAFETY: as in arena_move_selftest: both spaces map the kernel like
+            // every process space; interrupts are off, the boot CR3 is back
+            // before they are on again; STAC/CLAC for SMAP.
+            unsafe {
+                let boot: u64;
+                core::arch::asm!("mov {}, cr3", out(reg) boot, options(nostack, preserves_flags));
+                let load = |c: u64| core::arch::asm!("mov cr3, {}", in(reg) c, options(nostack, preserves_flags));
+                load(a);
+                if smap { core::arch::asm!("stac", options(nostack)); }
+                for (k, &p) in pages.iter().enumerate() {
+                    (p as *mut u64).write_volatile(pat(k));
+                }
+                shared = share_arena_cow(a, b, &old, 0, &mut || {});
+                load(b);
+                for (k, &p) in pages.iter().enumerate() {
+                    rd_pre[k] = (p as *const u64).read_volatile();
+                }
+                (pages[2] as *mut u64).write_volatile(u64::MAX);
+                // The exec: pages at the old bases go, the three segments move.
+                lazy_arena_discard(b, &old);
+                moved = lazy_arena_rebase(b, &old, &new);
+                load(b);
+                if moved {
+                    let (h, s) = (n[1].virt + 2 * MIB2 + 0x5000, n[2].virt + 2 * MIB2 - 4096);
+                    (h as *mut u64).write_volatile(pat(4));
+                    (s as *mut u64).write_volatile(pat(5));
+                    rd_new = [(h as *const u64).read_volatile(), (s as *const u64).read_volatile()];
+                    zero_new = ((n[0].virt + MIB2 + 0x8000) as *const u64).read_volatile();
+                }
+                load(a);
+                (pages[3] as *mut u64).write_volatile(pat(6));
+                for (k, &p) in pages.iter().enumerate() {
+                    rd_a[k] = (p as *const u64).read_volatile();
+                }
+                if smap { core::arch::asm!("clac", options(nostack)); }
+                load(boot);
+            }
+        });
+        let refs = cow_refs();
+        let slot = |s: u64, v: u64| unsafe { (s as *const u64).add(((v >> 39) & 0x1FF) as usize).read_volatile() } & PRESENT != 0;
+        let whole = |s: u64, l: &Segs| l.blocks().all(|v| arena_is_lazy(s, v));
+        let a_frames: [u64; 4] = core::array::from_fn(|k| translate_in(a, pages[k]).unwrap_or(0) & ADDR_MASK);
+        if shared != Some((4, 0, 0)) {
+            why = Some("share_arena_cow did not share the four pages of the three segments");
+        } else if (0..4).any(|k| rd_pre[k] != pat(k)) {
+            why = Some("the child did not read the shared pages before its exec");
+        } else if !moved {
+            why = Some("lazy_arena_rebase refused the move of the three segments");
+        } else if old.blocks().any(|v| arena_is_lazy(b, v)) || o.iter().any(|x| slot(b, x.virt)) {
+            why = Some("the child kept tables under the slots of its old segments");
+        } else if !whole(b, &new) || n.iter().any(|x| !slot(b, x.virt)) {
+            why = Some("the arena of the child is not whole at its new bases");
+        } else if rd_new != [pat(4), pat(5)] || zero_new != 0 {
+            why = Some("the child reads wrong contents at its new bases");
+        } else if rd_a[3] != pat(6) || (0..3).any(|k| rd_a[k] != pat(k)) {
+            why = Some("the contents of the parent changed");
+        } else if a_frames.iter().any(|&f| f == 0 || refs.extra(f) != 0) {
+            why = Some("a frame of the parent still counts a holder after the exec of the child");
+        } else if (lazy_arena_frames(a), lazy_arena_frames(b)) != (4, 3) {
+            why = Some("census: want parent 4 and child 3 frames");
+        } else if !whole(a, &old) {
+            why = Some("the arena of the parent is not whole");
+        }
+    }
+    let t = free_fork_tables(b);
+    crate::procpool::free(b);
+    let t = t + free_fork_tables(a);
+    crate::procpool::free(a);
+    let free1 = crate::procpool::free_frames();
+    if why.is_none() && free1 != free0 {
+        why = Some("frames were not all given back");
+    }
+    match why {
+        None => crate::serial_println!(
+            "[arena-segs] lazy arena in three segments (image {:#x}, heap {:#x}, stack {:#x}): written, shared copy-on-write with a fork child, the child execs and its segments move to {:#x}, {:#x}, {:#x}; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown {t} frames, pool {free0} -> {free1} -> OK ✓",
+            o[0].virt, o[1].virt, o[2].virt, n[0].virt, n[1].virt, n[2].virt
+        ),
+        Some(w) => crate::serial_println!(
+            "[arena-segs] lazy arena in three segments (image {:#x}, heap {:#x}, stack {:#x}): {w}; teardown {t} frames, pool {free0} -> {free1} -> FAILED ✗",
+            o[0].virt, o[1].virt, o[2].virt
         ),
     }
     why.is_none()
