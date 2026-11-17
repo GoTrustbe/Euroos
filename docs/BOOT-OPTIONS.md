@@ -93,8 +93,9 @@ attacker who finds a bug in a program cannot know in advance where its code and 
 With `on`, every part of a program gets about 30 random bits (Linux gives 28): the browser's main program, its
 libraries and large areas, and also the program's own block (the dynamic loader, the small heap, small
 allocations and the stack; see `aslr.arena` below). Each new process the browser starts gets new addresses for
-all of them. The parts inside the program's own block still move together: who learns one address there can work
-out the others. Giving them separate places is a later, optional step (design: `docs/design/ASLR.md`, step S6).
+all of them. The program's own block is cut into three parts that each get a place of their own: the program and
+the dynamic loader, the small heap with the small allocations, and the stack (see `aslr.split` below). Who learns
+an address in one part cannot work out the others.
 An unknown value is ignored and the kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
 
 ### Where the program's own memory lies: `aslr.arena`
@@ -105,12 +106,29 @@ which address the program sees that block.
 
 | Value | What it does |
 |---|---|
-| `random` (default) | The block is seen at a random place between 8 and 12 TiB, new for every start and for every new process the browser starts. Inside it, the program itself and the dynamic loader get a random page offset too. With `aslr=off` the place is always 8 TiB. |
+| `random` (default) | The block is seen at random places, new for every start and for every new process the browser starts: in three parts between 8 and 20 TiB (see `aslr.split`), or in one piece between 8 and 12 TiB. Inside it, the program itself and the dynamic loader get a random page offset too. With `aslr=off` the places are always the same (8, 12 and 16 TiB; 8 TiB in one piece). |
 | `fixed` | The block is always seen at 8 TiB, whatever memory it uses. A program cannot learn where its memory physically lies, but the addresses repeat. A way back if a program misbehaves with `random`. |
 | `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.16 and earlier. The way back if a program misbehaves with `random` and with `fixed`. |
 
 With `aslr=legacy` the block always stays at `identity`. The log line `[bootopt] aslr.arena=...` shows the
 placement in use.
+
+### Three parts or one: `aslr.split`
+
+With `aslr.arena=random` the program's own block is seen in three parts, each at a random place of its own: the
+program and the dynamic loader (8 to 12 TiB), the small heap and small allocations (12 to 16 TiB), and the stack
+(16 to 20 TiB). The distance between two parts is different at every start, so one address the program gives away
+does not tell where the others are. The parts still use the same memory as before; only where the program sees
+them changes. The stack part is 4 MiB: the stack has at least 2 MiB of room, and a stack that grows past its
+part ends the program instead of running into the heap.
+
+| Value | What it does |
+|---|---|
+| `on` (default) | Three parts at random places of their own. |
+| `off` | The block in one piece at one random place, as before this option existed. A way back if a program misbehaves with three parts. |
+
+With `aslr.arena=fixed` or `identity` the block is always one piece. The log line `[bootopt] aslr.split=...` shows
+what is in use.
 
 ## The other options
 
@@ -126,6 +144,7 @@ placement in use.
 | `serial.chatter` | `on`, `off` | `off` | Detailed diagnostic lines on the serial console. |
 | `aslr` | `on`, `off`, `legacy` | `on` | Random addresses for the memory of Linux programs (see above). |
 | `aslr.arena` | `random`, `fixed`, `identity` | `random` | Where a Linux program sees its own memory block (see above). |
+| `aslr.split` | `on`, `off` | `on` | Whether that block is seen in three parts at places of their own (see above). |
 | `debug.schedwatch` | `on`, `off` | `off` | A debugging aid for kernel developers. |
 
 ## Video and sound in the browser

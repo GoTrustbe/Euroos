@@ -1,0 +1,64 @@
+# 21 KVM boots (2 GiB, 2 vCPU) per image; [aslr] = 64 starts of the embedded probe gaslrx per boot. s6 = 831894f (aslr=on, random, split on), base = 7b2eea6 (S5).
+## s6
+boots 21; [aslr] verdicts: OK 21
+region   over boots  per boot min..max  distinct firsts
+exe              30             30..30   21/21
+ldso             30             30..30   21/21
+libc             30             30..30   21/21
+stack            29             29..29   21/21
+brk              29             29..29   21/21
+mmap             30             30..30   21/21
+mmapbig          30             30..30   21/21
+vdso             27             27..27   21/21
+distance over boots (first start of each boot):
+  exe-heap (brk)             31
+  heap-stack (brk-stack)     31
+  exe-stack                  32
+  exe-mmap 4 KiB             31
+  exe-mmap 1 MiB             34
+  exe-vDSO                   31
+  stack-mmap 4 KiB           31
+  stack-ld.so                32
+  ld.so-exe (same segment)   12
+  mmap-brk (same segment)    14
+[aslr-ind] per boot: OK 21
+  stack-mmap         min 31 max 31
+  exe-stack          min 32 max 32
+  exe-mmap           min 31 max 31
+  stack-ldso         min 32 max 32
+  exe-brk            min 31 max 31
+  brk-stack          min 31 max 31
+  libc-exe           min 34 max 34
+  vDSO-mmap1MiB      min 31 max 31
+  mmap1MiB-exe       min 34 max 34
+  vDSO-exe           min 31 max 31
+  ldso-exe           min 12 max 12
+  mmap-brk           min 14 max 14
+## base (7b2eea6)
+boots 21; [aslr] verdicts: OK 21
+region   over boots  per boot min..max  distinct firsts
+exe              30             30..30   21/21
+ldso             30             30..30   21/21
+libc             30             30..30   21/21
+stack            29             29..29   21/21
+brk              29             29..29   21/21
+mmap             30             30..30   21/21
+mmapbig          30             30..30   21/21
+vdso             27             27..27   21/21
+distance over boots (first start of each boot):
+  exe-heap (brk)             14
+  heap-stack (brk-stack)     10
+  exe-stack                  10
+  exe-mmap 4 KiB             15
+  exe-mmap 1 MiB             34
+  exe-vDSO                   30
+  stack-mmap 4 KiB           10
+  stack-ld.so                10
+  ld.so-exe (same segment)   12
+  mmap-brk (same segment)    14
+[aslr-ind] per boot: FAILED 21
+  stack-mmap         min 10 max 10
+  exe-stack          min 10 max 10
+  exe-mmap           min 15 max 15
+  libc-exe           min 34 max 34
+  vDSO-mmap1MiB      min 31 max 31

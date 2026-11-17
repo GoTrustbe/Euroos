@@ -1,0 +1,3 @@
+# cargo test (default-members), .16, -j 6, working tree of 831894f
+188 suites, 1396 passed, 0 failed, 1 ignored  (S5 e9b488d: 188 suites, 1390 passed)
+new: test layout::tests::segs_translate_and_contain ... ok;test layout::tests::split_off_and_legacy ... ok;test layout::tests::split_entropy ... ok;test layout::tests::split_region_distances ... ok;test layout::tests::split_segments_in_their_windows ... ok;

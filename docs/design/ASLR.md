@@ -3,7 +3,9 @@
 Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); S0 and S1
 implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); S4 implemented behind the boot option
 `aslr.arena=fixed|identity`, `fixed` the default (branch `feature/11f-aslr-s4`, section 9); S5 implemented,
-`aslr.arena=random` the default, BUG-088 closed (branch `feature/11f-aslr-s5`, section 10); S6..S8 are design only. Written against `feature/app-control` @ `e4b8ba4`;
+`aslr.arena=random` the default, BUG-088 closed (branch `feature/11f-aslr-s5`, section 10); S6 implemented, image, heap
+and stack segments at bases of their own, `aslr.split=on` the default (branch `feature/11f-aslr-s6`, section 11); S7 and
+S8 are design only. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -621,3 +623,65 @@ their own virtual segments over the same RAM (design 3.1): `arena_place` becomes
 segment list, `ChildMem` carries it, and `[aslr-ind]` is the test (>= 20 bits per distance). The bits for three bases
 need two more offsets of 21 bits: S5 leaves 50 bits of the 32-byte draw unused (word 0 bits 44..63, word 1 bit 63,
 word 2 bits 60..63, word 3 bits 39..63), so either they are cut from those or `DRAW_BYTES` grows.
+
+## 11. Verified in S6
+
+Branch `feature/11f-aslr-s6` (from `feature/11f-aslr-s5` `7b2eea6`). Proof: `docs/proof/11f-aslr-s6/`.
+
+| commit | step |
+|---|---|
+| `fcb4736` | tests first: `euromm::layout` segments (host tests fail), the arena functions of `paging` take a segment list (one segment everywhere, no change in behaviour), self-test `[arena-segs]` and the `[robust-paging]` case `arena_segs` (fail: the zone ended at 12 TiB), `[aslr-ind]` judges every pair of segments |
+| `831894f` | S6: image, heap and stack segments at bases of their own, boot option `aslr.split=on|off` |
+
+**What changed.** An arena is a list of segments over one span of arena offsets (`euromm::layout::Segs`): one piece
+(`identity`, `fixed`, `aslr.split=off`), or three: image (offset 0 up to the brk heap: 32 MiB, a quarter of a smaller
+arena), heap (from there to 4 MiB before the end: brk and the small-mmap window) and stack (the last 4 MiB). Each lies at
+a random 2 MiB step of a 4 TiB window of its own: image 8..12 TiB (the S5 field `arena`), heap 12..16, stack 16..20 TiB
+(two new 21-bit fields from a fifth word of the draw: `DRAW_BYTES` 32 -> 40; S5 left 50 bits unused, but no two 21-bit
+runs among them, so the draw grew instead). `aslr=off` puts the three at the start of their windows. The arena zone of
+`paging` is 8..20 TiB (PML4 16..39). The RAM of the launched process stays one contiguous piece: segment `s` maps
+`phys + s.off` at `s.virt`, so the reaper, the frees and the census, which go by RAM, are unchanged.
+
+Every function that walks an arena by its virtual addresses takes the list (`try_build_address_space_arena`,
+`arena_split`, `fill_remap_tables_lazy`, `share_arena_cow`, `clone_arena_lazy`, `lazy_arena_discard`,
+`lazy_arena_rebase`); fork gives the child the list of its parent, exec unbuilds every old segment and then builds every
+new one (design 2.4: discard first). `in_user_arena` accepts a range inside one segment. In the kernel the list is
+`ARENA_BASE` (image) plus the heap and stack segment, keyed to the image base (the native paths that swap `ARENA_BASE`
+see one piece), and is part of `ChildMem`. `euromm::arena::glibc_layout_segs` gives every region at the offset of before,
+seen through its segment; the small-mmap window now ends with the heap segment (before: 1 MiB below the stack top).
+
+**Measured** (21 KVM boots per image, 64 starts of `gaslrx` each; Chromium 20 starts per image, launched browser and
+every exec'd child):
+
+| distance (varying bits) | before (`7b2eea6`) | after (`831894f`) |
+|---|---|---|
+| exe - brk (image - heap) | 14 | 31 |
+| brk - stack (heap - stack) | 10 | 31 |
+| exe - stack | 10 | 32 |
+| exe - small mmap | 15 | 31 |
+| stack - small mmap | 10 | 31 |
+| stack - ld.so | 10 | 32 |
+| exe - mmap 1 MiB, exe - vDSO | 34, 30 | 34, 31 |
+| Chromium ld.so - brk, brk - stack, ld.so - stack (launch and exec) | 12, 10, 10 | 31, 31, 32 |
+
+`[aslr-ind]` FAILED in 21 of 21 boots before, OK in 21 of 21 after. The regions themselves keep the bits of S5 (exe,
+ld.so, small mmap 30; brk, stack 29; vDSO 27); Chromium arena, heap and stack segment bases 21 bits each; none of 185
+exec'd children kept an address of the launched browser. Inside one segment only the page slides differ (ld.so - exe 12,
+small mmap - brk 14 bits), as designed.
+
+**Corrections and findings:**
+
+- Design 2.1 gave the three windows (8..12, 12..16, 16..20 TiB) and 3.1 the segment list; both hold as written. The
+  design said `aslr.split=on/off`: done, default `on`; `fixed` and `identity` are always one piece.
+- The cut: the image segment must hold ld.so with its largest slide (8 + 2 + 1 MiB) and ends where the brk heap begins;
+  the stack segment is 4 MiB, so the stack keeps at least 2 MiB (before S6 1 MiB was reserved below the stack top, and the
+  stack could silently run on into an unused mmap window). A stack that grows past its segment now faults in ring 3 (a
+  guard), and the small-mmap window is 1..2 MiB smaller than before.
+- Two places would have done nothing for the new segments without failing (S4 rule: a silent place is a fault): the
+  zone end (12 TiB) under every walk that frees or counts arena tables, and the copy-on-write page scan of
+  `[fork-cow-write]` (`base .. base + span`). A third, the non-lazy wipe in `do_child_execve`, would have written into the
+  gap between segments. All three per segment now (audit: `docs/proof/11f-aslr-s6/audit.md`).
+- `clone_arena_lazy` has no caller since BUG-156; converted, not removed.
+- Two test corrections after the tests-first commit: the `[robust-paging]` totals had to count the new case (31 refusals,
+  7 builds), and a host-test bound on the pairs inside one segment (`<= 11` varying bits) was wrong for a difference of
+  two slides (it counts up to 14 bits); it now checks the distance range. Neither touches a >= 20-bit criterion.

@@ -1,0 +1,9 @@
+# gui-smoke, public image, KVM 4 vCPU 4 GiB
+## on: [gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr6-runs/runs/gs-on
+## off: [gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr6-runs/runs/gs-off
+## leg: [gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr6-runs/runs/gs-leg
+# installs (s6-pub / s6-st, CPUs 30-33)
+## wizard: [wizard-test] 15/15 checks passed; screenshots + serial logs in /srv/euroos/aslr6-runs/wizard-on/
+## ro-install plain: PASS 6, FAIL 0
+## ro-install inject: PASS 3, FAIL 0
+## ro-install ro0: PASS 5, FAIL 0

@@ -1,0 +1,19 @@
+# tests first: KVM 2 GiB, 2 vCPU. fcb4736 (tests, no fix) and the S6 working tree before its commit (the same code as 831894f, [robust-paging] totals not yet counted)
+## fcb4736
+[arena-segs] no lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000) -> FAILED ✗
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, exe-mmap 15, stack-ldso 10, exe-brk 14, brk-stack 10 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → FAILED (not yet: stack-mmap, exe-stack, exe-mmap, stack-ldso, exe-brk, brk-stack move with one arena base until step S6)
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+[robust-paging] arena_segs: 8/8 frames → refused, 8 free afterwards ✗
+[robust-paging] process page tables at 0..n free frames: 32 refusals (OutOfFrames, 0 frames kept), 6 builds (freed again) → FAILED ✗
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=false, usb=true, hda=true, paint-bucket=true, form-field=true → FAILED ✗
+## working tree of 831894f (before the [robust-paging] totals were updated)
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown 41 frames, pool 73728 -> 73728 -> OK ✓
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[robust-paging] process page tables at 0..n free frames: 31 refusals (OutOfFrames, 0 frames kept), 7 builds (freed again) → FAILED ✗
+## 831894f, KVM 2 GiB
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown 41 frames, pool 73728 -> 73728 -> OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[robust-paging] process page tables at 0..n free frames: 31 refusals (OutOfFrames, 0 frames kept), 7 builds (freed again) → OK ✓
+[robust] former panic sites answer with an error: net-cmd=true, app-cmd=true, nvme-identify=true, page-tables=true, usb=true, hda=true, paint-bucket=true, form-field=true → OK ✓

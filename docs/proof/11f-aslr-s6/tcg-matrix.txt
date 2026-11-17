@@ -1,0 +1,103 @@
+# TCG matrix, q35 -cpu qemu64,+smep,+smap, restrict=on, 10 legs per image; on = s6-st (831894f, default options), base = 7b2eea6
+## on
+combined-smp1-iommu-1g done 08:00:25 after 426s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 08:01:40 after 586s desktop=1 wd=0 nmi=0
+kernel-smp1 done 07:46:48 after 507s desktop=1 wd=0 nmi=0
+kernel-smp4 done 07:44:22 after 511s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 07:53:19 after 391s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 07:51:54 after 452s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 07:28:45 after 647s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 07:38:21 after 576s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 07:27:00 after 542s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 07:35:51 after 531s desktop=1 wd=0 nmi=0
+## base
+combined-smp1-iommu-1g done 08:00:45 after 421s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 08:01:03 after 567s desktop=1 wd=0 nmi=0
+kernel-smp1 done 07:47:08 after 466s desktop=1 wd=0 nmi=0
+kernel-smp4 done 07:47:23 after 542s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 07:53:44 after 396s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 07:51:36 after 531s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 07:28:45 after 647s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 07:39:22 after 637s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 07:27:45 after 587s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 07:38:21 after 636s desktop=1 wd=0 nmi=0
+## markers-compare base -> on per leg
+### combined-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### combined-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr-ind: base FAILx1 | new OKx1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### kernel-smp1.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### kernel-smp4.log
+-- WORSE: 1
+   vdso-mono: base OKx1 | new FAILx1
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### storage-smp1-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr-ind: base FAILx1 | new OKx1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### storage-smp4-iommu-1g.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### user-smp1-iommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### user-smp1-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### user-smp4-iommu.log
+-- WORSE: 1
+   vdso-mono: base OKx1 | new FAILx1
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+### user-smp4-noiommu.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+## crash lines (panic, GP, ring-0 page fault, double fault): on 0, base 0
+## on: [vdso-mono] FAILED in 8 of 10 legs (BUG-380)
+## on: IOMMU fault-record lines per leg: combined-smp1-iommu-1g=4 combined-smp4-iommu-1g=4 kernel-smp1=1 kernel-smp4=1 storage-smp1-iommu-1g=3 storage-smp4-iommu-1g=3 user-smp1-iommu=2 user-smp1-noiommu=1 user-smp4-iommu=2 user-smp4-noiommu=1
+## base: [vdso-mono] FAILED in 8 of 10 legs (BUG-380)
+## base: IOMMU fault-record lines per leg: combined-smp1-iommu-1g=4 combined-smp4-iommu-1g=4 kernel-smp1=1 kernel-smp4=1 storage-smp1-iommu-1g=3 storage-smp4-iommu-1g=3 user-smp1-iommu=2 user-smp1-noiommu=1 user-smp4-iommu=2 user-smp4-noiommu=1

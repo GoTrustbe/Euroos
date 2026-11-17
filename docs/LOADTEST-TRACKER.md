@@ -1784,6 +1784,14 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   three 123/123, two lost one openstreetmap step (map tiles not drawn yet, no child crash; base soak beside it 123/123),
   see the proof. These are the exit criteria of S5 in the design, so the bug is closed; S6 is tracked in the design, not
   here. Found: BUG-380. Proof `docs/proof/11f-aslr-s5/`.
+- **2026-11-17 (`feature/11f-aslr-s6`, S6, `831894f`, tests first `fcb4736`):** optional hardening after the fix. The arena
+  of a glibc process is cut into image (exe + ld.so), heap (brk + small mmaps) and stack segments, each at a random 2 MiB
+  step of its own 4 TiB window (8..12, 12..16, 16..20 TiB); boot option `aslr.split=on|off`, `on` the default. `[aslr-ind]`
+  FAILED -> **OK in 21 of 21 boots**: exe-stack 10 -> 32, stack-mmap 10 -> 31, exe-mmap 15 -> 31, exe-brk 14 -> 31,
+  brk-stack 10 -> 31, stack-ld.so 10 -> 32 bits; Chromium ld.so-brk, brk-stack, ld.so-stack 12/10/10 -> 31/31/32 at the
+  launch and in every exec'd child. Region bits as in S5. Audit of every place that turns an arena address into another
+  (proof `audit.md`): two silent places and one gap write found by reading and fixed. See the proof for the regression.
+  Proof `docs/proof/11f-aslr-s6/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3167,6 +3175,19 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   rdtsc ordering); the size points at the slew of the tick anchor (BUG-355: the anchor may run ahead of the tick count and
   is pulled back at 1/8 or 3/4 of the rate) meeting a vCPU that was not running for a while. Not looked into further: not
   caused by S5 (the code paths are those of `9c4d420`), out of scope of this branch.
+
+### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ⬜ OPEN
+- **Status:**   OPEN · **Severity:** HIGH when it happens (the machine stops answering; no panic, no watchdog line), seen once
+- **Found:**    2026-11-17 · the regression of ASLR S6 (`proof/11f-aslr-s6/`), in the chrome-mem-soak of the **base** image
+  `7b2eea6` (S5, browser image, KVM 2 vCPU, 8 GiB), round 1, at the YouTube consent step: the desktop loop did not answer
+  the serial console within 40 s. The NMI probes (symbolised with the map of that build) show CPU 0 in the browser main
+  task (task 1, last system call 47 recvmsg) with IF=0 at `ring3::child_mem_swap+0x1ab`, a `lock cmpxchg`/`pause` spin on a
+  static spin lock, called from `ensure_globals_for_current` <- `yield_reacquire` <- `PollKeys::sleep` <-
+  `linux_dispatch_inner_raw`; the swapped globals were owned by task 77 (a fork child). So one of the locks `child_mem_swap`
+  takes (`CHILD_MEM`, or one of the swapped lists: `DEMAND_FILE_MAPS`, `PROT_NONE_RANGES`, `SHARED_ALIASES`, `SHARED_MAPS`,
+  `DEMAND_FREE`) was held by a task that did not run while this one spun with interrupts off. Not reproduced: the A/B rerun
+  of the same base soak and every S6 run passed (see the proof). Not looked into further and not fixed (out of scope of S6;
+  S6 adds only atomics to that swap, so the S6 code has the same path).
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)

@@ -1,0 +1,22 @@
+# Chromium [aslr-layout] lines, 20 starts per image (launched browser + every exec child). on = 831894f (aslr=on, random, split on), base = 7b2eea6 (S5), same image kind.
+## on
+launch: 20 lines; varying bits: exe 30, ld.so 30, arena 21, hseg 21, sseg 21, brk 29, stack 29, floor 30, vdso 27
+launch: distances varying bits: ld.so-brk 31, brk-stack 31, ld.so-stack 32, exe-brk 31, exe-stack 33, exe-floor 32, exe-vdso 31, stack-floor 32
+exec: 185 lines; varying bits: exe 30, ld.so 30, arena 21, hseg 21, sseg 21, brk 29, stack 30, floor 30, vdso 27
+exec: distances varying bits: ld.so-brk 31, brk-stack 31, ld.so-stack 32, exe-brk 31, exe-stack 33, exe-floor 32, exe-vdso 31, stack-floor 32
+## base
+launch: 20 lines; varying bits: exe 30, ld.so 30, arena 21, brk 29, stack 29, floor 30, vdso 27
+launch: distances varying bits: ld.so-brk 12, brk-stack 10, ld.so-stack 10, exe-brk 32, exe-stack 32, exe-floor 32, exe-vdso 30, stack-floor 34
+exec: 186 lines; varying bits: exe 30, ld.so 30, arena 21, brk 29, stack 30, floor 30, vdso 27
+exec: distances varying bits: ld.so-brk 12, brk-stack 10, ld.so-stack 10, exe-brk 32, exe-stack 32, exe-floor 32, exe-vdso 31, stack-floor 34
+## off
+launch: 20 lines; varying bits: exe 0, ld.so 0, arena 0, hseg 0, sseg 0, brk 0, stack 0, floor 0, vdso 0
+launch: distances varying bits: ld.so-brk 0, brk-stack 0, ld.so-stack 0, exe-brk 0, exe-stack 0, exe-floor 0, exe-vdso 0, stack-floor 0
+exec: 190 lines; varying bits: exe 0, ld.so 0, arena 0, hseg 0, sseg 0, brk 0, stack 0, floor 0, vdso 0
+exec: distances varying bits: ld.so-brk 0, brk-stack 0, ld.so-stack 0, exe-brk 0, exe-stack 0, exe-floor 0, exe-vdso 0, stack-floor 0
+## leg
+launch: 20 lines; varying bits: exe 0, ld.so 0, arena 0, brk 8, stack 8, floor 20, vdso 0
+launch: distances varying bits: ld.so-brk 8, brk-stack 10, ld.so-stack 8, exe-brk 8, exe-stack 8, exe-floor 20, exe-vdso 0, stack-floor 29
+exec: 188 lines; varying bits: exe 0, ld.so 0, arena 0, brk 8, stack 9, floor 20, vdso 0
+exec: distances varying bits: ld.so-brk 8, brk-stack 10, ld.so-stack 9, exe-brk 8, exe-stack 9, exe-floor 20, exe-vdso 0, stack-floor 29
+## on: exec children (185) that kept an address of the launched browser, per region: none

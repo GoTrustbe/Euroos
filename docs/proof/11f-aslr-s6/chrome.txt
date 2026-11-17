@@ -1,0 +1,30 @@
+# Chromium (chrome-pack2.img, nss-pack-vid.img), browser image = public image + ui.tour=off update.check=off (+ aslr=off / aslr=legacy), smp 2, KVM, user-net without hostfwd. on = 831894f default, base = 7b2eea6 (S5).
+# health per run: verdict, [abort] lines, ring-0 faults/panics/watchdog, FROZEN, [oom], exec lines, arena mmap window full, ring-3 kills
+## starts20-on: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=185 window-full=0 ring3-kills=0
+## starts20-off: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=190 window-full=0 ring3-kills=0
+## starts20-leg: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=188 window-full=0 ring3-kills=0
+## starts20-base: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 FROZEN=0 oom=0 execs=186 window-full=0 ring3-kills=0
+## sites-on: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/a6/sites-on | aborts=0 ring0=0 FROZEN=0 oom=0 execs=43 window-full=0 ring3-kills=0
+## sites-base: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/a6/sites-base | aborts=0 ring0=0 FROZEN=0 oom=0 execs=43 window-full=0 ring3-kills=0
+## interact-on: [chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/shm/a6/interact-on | aborts=0 ring0=0 FROZEN=0 oom=0 execs=14 window-full=0 ring3-kills=0
+## sites-off: [chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/a6/sites-off | aborts=0 ring0=0 FROZEN=0 oom=0 execs=23 window-full=0 ring3-kills=0
+## sites-leg: [chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/a6/sites-leg | aborts=0 ring0=0 FROZEN=0 oom=0 execs=23 window-full=0 ring3-kills=0
+## soak-on: [chrome-mem-soak] FAIL (25 step(s)): 5 rounds in 4292 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=69 window-full=0 ring3-kills=0
+## soak-base: [chrome-mem-soak] CRASH/HANG: HANG: the desktop loop did not answer the serial console within 40 s: 0 rounds i | aborts=0 ring0=0 FROZEN=0 oom=0 execs=16 window-full=0 ring3-kills=0
+## soak2-on: [chrome-mem-soak] PASS: 5 rounds in 3922 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=67 window-full=0 ring3-kills=0
+## soak2-base: [chrome-mem-soak] PASS: 5 rounds in 3939 s | aborts=0 ring0=0 FROZEN=0 oom=0 execs=68 window-full=0 ring3-kills=0
+# run conditions: starts20-*: stage A (with KVM boots, TCG matrix, entropy boots). sites-*, interact-on: quiet (at most four guests, no TCG). soak-on/soak-base/loadtest: B3 (three guests). soak2-*: stage C (two guests).
+# soak-on / soak-base used a clip directory that also held h264.mp4: soak-on failed only the 25 h264+aac steps (no H.264 decoder: MEDIA_ERR_SRC_NOT_SUPPORTED; open codecs only), all 123 other steps ok; soak-base hung in round 1 (BUG-390). Both run again as soak2-* with VP9 + Opus only.
+## consent banners
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banne
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (534, 640), banne
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+## local VP9+Opus with sound, one clip a round (picture: consecutive screendumps differ; sound: 5 s windows above the noise floor)
+soak-on: picture 28 of 28 28 of 28 28 of 28 28 of 28 28 of 28 | sound 12 of 12 12 of 12 12 of 12 12 of 12 12 of 12 
+soak2-on: picture 28 of 28 28 of 28 28 of 28 28 of 28 28 of 28 | sound 12 of 12 12 of 12 12 of 12 12 of 12 12 of 12 
+soak2-base: picture 28 of 28 28 of 28 28 of 28 28 of 28 28 of 28 | sound 12 of 12 12 of 12 12 of 12 12 of 12 12 of 12 
+## soak-base hang (BUG-390): NMI probe, symbolised with the map of the 7b2eea6 public build
+RIP ring3::child_mem_swap+0x1ab (lock cmpxchg / pause spin, IF=0) <- ensure_globals_for_current <- yield_reacquire <- PollKeys::sleep <- linux_dispatch_inner_raw; task 1 chrome, last syscall 47 (recvmsg), globals owner task 77
