@@ -1792,6 +1792,11 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   launch and in every exec'd child. Region bits as in S5. Audit of every place that turns an arena address into another
   (proof `audit.md`): two silent places and one gap write found by reading and fixed. See the proof for the regression.
   Proof `docs/proof/11f-aslr-s6/`.
+- **2026-11-17 (`feature/11f-bug380`, from `7b2eea6`):** BUG-380 and BUG-371 fixed: the vDSO and the kernel read the
+  TSC inside the seqlock (`lfence; rdtsc; lfence`, `vdso.so` rebuilt), `vdso_tick` makes the sequence odd before it reads
+  the anchor TSC, interrupts off. `[vdso-mono]` strict (any step back, stalled reads, AP readers, cross-CPU): FAILED in
+  12 of 12 base legs -> OK everywhere (TCG matrix 10/10, 30/30 loaded KVM boots). Found: BUG-400 (the tick count runs
+  slow against the host). Proof `docs/proof/11f-bug380/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3152,11 +3157,15 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Found:**    2026-11-17 · `[fork-cow-write]` (11f-bugs-35x): `fstat(read end of pipe2)` = -9. Linux gives
   `S_IFIFO`. The self-test takes fstat of a directory instead.
 
-### BUG-371 — the vDSO reads the TSC with a plain rdtsc: steps back of a few hundred ns ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW
+### BUG-371 — the vDSO reads the TSC with a plain rdtsc: steps back of a few hundred ns ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug380`, `f426198`, with BUG-380: the same read) · **Severity:** LOW
 - **Found:**    2026-11-17 · `[vdso-mono]` (11f-bugs-35x): after BUG-355, steps back under 1 us in 2 of 4 KVM boots
   (2 x, max 401 ns; 1 x 275 ns). `userland/glibc/vdso.c` executes rdtsc without lfence, so the CPU may read the TSC
   before the loads of the clock page are done. Needs a rebuilt `vdso.so` (lfence; rdtsc, as Linux's `rdtsc_ordered`).
+- **Cause:**    the rdtsc was unordered and outside the seqlock (BUG-380); the sub-us steps are the same mechanism with a
+  short window.
+- **Fix:**      `lfence; rdtsc; lfence` inside the seqlock in `vdso.c` (`vdso.so` rebuilt) and in the kernel reader.
+- **Test:**     `[vdso-mono]` now counts every step back (no 1 us threshold): see BUG-380.
 
 ### BUG-372 — a kernel write into an untouched page of a writable file mapping gives EFAULT ⬜ OPEN
 - **Status:**   OPEN · **Severity:** LOW
@@ -3165,16 +3174,39 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   mapping (a library's .data) that the process has not written yet still refuses a system call's write (Linux would
   copy the page). Once the process wrote it, or after a fork, it is accepted.
 
-### BUG-380 — the vDSO clock steps back by microseconds under TCG and on a loaded host ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (a few to tens of microseconds; BUG-355 removed the 10 ms steps)
+### BUG-380 — the vDSO clock steps back by microseconds under TCG and on a loaded host ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug380`, `f426198`) · **Severity:** LOW (a few to tens of microseconds; BUG-355 removed the 10 ms steps)
 - **Found:**    2026-11-17 · `[vdso-mono]` in the regression of ASLR S5 (`proof/11f-aslr-s5/`), the same in the base
   `417f6b9` (S4 + the BUG-355 fix): FAILED in 9 of 10 TCG legs of the base and 6 of 10 of S5, with one vCPU as well
   (steps back mono up to 24 us, boot up to 28 us, realtime up to 21 us, 1 or 2 times per 2 s run; "system call outside its
   two vDSO reads" up to 38 us), and once in 32 KVM boots while the R630 ran every lane at once (legacy 1 GiB: mono 3 us,
-  boot 4 us). The same boot on a quiet host: OK 3 of 3 (and the base 3 of 3). Not BUG-371 (that is under 1 us and the
-  rdtsc ordering); the size points at the slew of the tick anchor (BUG-355: the anchor may run ahead of the tick count and
-  is pulled back at 1/8 or 3/4 of the rate) meeting a vCPU that was not running for a while. Not looked into further: not
-  caused by S5 (the code paths are those of `9c4d420`), out of scope of this branch.
+  boot 4 us). The same boot on a quiet host: OK 3 of 3 (and the base 3 of 3).
+- **Cause:**    `vdso.c` checked the sequence of the clock page and read the TSC after that, outside the seqlock. A
+  reader whose rdtsc came after the tick had replaced the anchor (the tick between the check and the rdtsc, or a vCPU the
+  host did not run there) ran the old rate past the new anchor; the new anchor often has a lower rate (the BUG-355 slew,
+  a new calibration under TCG), so the next read was lower. The kernel reader (clock_gettime, gettimeofday) did the same.
+  Proof: the old and the ordered formula read side by side in the same boots, with reads stalled between page loads and
+  rdtsc: every step of the old one (2 to 8 per boot, up to 1.7 ms) came right after a read that took its TSC after the
+  page changed; the ordered one 0 in all 6 legs (KVM and TCG, 1/2/4 vCPU). Ruled out: a published anchor below an
+  earlier one (anchor TSC never below the previous, the ordered read never went back), nested or AP writers (0), the
+  TCG calibration as such (only a source of the rate difference), a different syscall formula (the same flaw).
+- **Fix:**      `vdso.c` loads the page, `lfence; rdtsc; lfence`, then checks the sequence and reads again if it changed;
+  a TSC below the anchor adds nothing, a very old anchor gets the 2-tick cap. `vdso.so` rebuilt (no signature: embedded in
+  the signed kernel; command in `vdso.c`). `vdso_tick` makes the sequence odd before it reads the anchor TSC
+  (`mfence; lfence; rdtsc`), with interrupts off for the whole update; the kernel reader is the same as `vdso.c`.
+- **Test:**     `[vdso-mono]` strict: any step back (mono, boot, real), any system call outside its two vDSO reads, part C
+  (16 reads stalled across a late tick), every AP reading along (some reads stalled a tick period) and checked against
+  the largest value any CPU read before. `7b2eea6` + test: FAILED in 12 of 12 legs (KVM with busy siblings and TCG, 1/2/4
+  vCPU) -> `f426198`: OK in 6 of 6, TCG matrix 10 of 10, 30 of 30 KVM boots with busy siblings, 9 of 9 quiet KVM boots
+  (`proof/11f-bug380/`). Drift against the host unchanged by the fix (BUG-400).
+
+### BUG-400 — the tick count, and with it the vDSO clock, runs slow against the host ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW on KVM (about 1 s per 15 min), MEDIUM under TCG (about 1 %)
+- **Found:**    2026-11-17 · drift measurement of BUG-380 (`proof/11f-bug380/drift.txt`, 12 min, `uptime` over the serial
+  console): KVM 2 vCPU -1145 ppm (`7b2eea6` clock) and -809 ppm (fix), TCG 1 vCPU -9705 and -8671 ppm. The vDSO clock
+  follows `ticks x 10 ms` to within 5 ppm in every run (by design since BUG-355), so the tick count itself loses time:
+  a late tick under two periods counts as one, and the LAPIC period is calibrated once. Not caused by BUG-380's fix (the
+  same drift before and after, both runs at the same time on the same host). Not looked into further.
 
 ### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ⬜ OPEN
 - **Status:**   OPEN · **Severity:** HIGH when it happens (the machine stops answering; no panic, no watchdog line), seen once

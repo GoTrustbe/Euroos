@@ -11,6 +11,13 @@
  *   [1] mono_sec  [2] mono_nsec   (CLOCK_MONOTONIC family)
  *   [3] real_sec  [4] real_nsec   (CLOCK_REALTIME family)
  * Readers retry on a torn/odd sequence, exactly like the Linux vDSO does.
+ *
+ * Build (no signature: the image is embedded in the kernel, which is signed):
+ *   gcc -Os -fPIC -shared -nostdlib -ffreestanding -Wl,-Bsymbolic -Wl,-T,vdso.lds
+ *       -Wl,--version-script,vdso.map -Wl,--hash-style=both -Wl,-soname,linux-vdso.so.1
+ *       -o vdso.so vdso.c
+ * The kernel's copy of the read (ring3.rs vdso_interp/vdso_clock) and the
+ * [vdso-mono] self-test must keep the same formula.
  */
 typedef long time_t;
 struct timespec { time_t tv_sec; long tv_nsec; };
@@ -31,17 +38,25 @@ extern char __ehdr_start[] __attribute__((visibility("hidden")));
  * now = anchor + (rdtsc - anchor_tsc) scaled -- REAL sub-tick time, the way the
  * Linux vDSO does it. A clock that is flat for 10 ms between ticks broke chrome's
  * delay-until-deadline math; rdtsc interpolation gives monotonic microseconds. */
-static inline unsigned long rdtsc_(void)
+/* BUG-371/BUG-380: lfence before the rdtsc, so the TSC is read after the loads
+ * of the page; lfence after it, so the sequence is checked again only after the
+ * TSC was read (Linux rdtsc_ordered). The read sits INSIDE the seqlock: a
+ * reader that took the TSC after the kernel replaced the anchor reads again.
+ * Before, the TSC was read after the check: a tick between the two (or a vCPU
+ * the host stopped there) made the reader run the old rate past the new
+ * anchor, and the clock stepped back by up to 28 us when the new rate was
+ * slower (BUG-380), or a few hundred ns from the unordered rdtsc (BUG-371). */
+static inline unsigned long rdtsc_ordered_(void)
 {
     unsigned int lo, hi;
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    __asm__ __volatile__("lfence\n\trdtsc\n\tlfence" : "=a"(lo), "=d"(hi) : : "memory");
     return ((unsigned long)hi << 32) | lo;
 }
 
 static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
 {
 
-    unsigned long s1, base_ns, tsc0, per10ms, dt_ns, ns;
+    unsigned long s1, base_ns, tsc0, per10ms, now, dt_ns, ns;
     int real;
     switch (clk) {
     case 0: case 5: case 11: real = 1; break;      /* REALTIME / _COARSE / TAI */
@@ -59,21 +74,31 @@ static int read_clock(int clk, unsigned long *sec, unsigned long *nsec)
      * same tick-anchored source that fills [3] here, so every reader agrees. The
      * earlier instant-expiry/57-year split came from MIXED sources, not from serving
      * realtime as such. */
-    do {
+    for (;;) {
         s1 = __vdso_data[0];
+        if (s1 & 1) { /* the kernel is mid-update */
+            __asm__ __volatile__("pause");
+            continue;
+        }
         base_ns = __vdso_data[real ? 3 : 1];
         tsc0    = __vdso_data[5];
         per10ms = __vdso_data[6];
-    } while (__vdso_data[0] != s1 || (s1 & 1));
+        now = rdtsc_ordered_();
+        if (__vdso_data[0] == s1)
+            break;
+    }
     dt_ns = 0;
     if (per10ms) { /* [6]: ns-per-tsc in <<20 fixed point — mul+shift only, no
                       128-bit division (that pulls __udivti3 into a vDSO that must
                       not have relocations or libcalls) */
-        unsigned long dt = rdtsc_() - tsc0;
-        if (dt < (unsigned long)1 << 40) /* sane window; a stale anchor stays flat */
+        unsigned long dt = now - tsc0;
+        if ((long)dt > 0) { /* a TSC below the anchor's (another CPU): no time yet */
+            if (dt > (unsigned long)1 << 40)
+                dt = (unsigned long)1 << 40; /* a very old anchor: the cap below */
             dt_ns = (unsigned long)(((unsigned __int128)dt * per10ms) >> 20);
-        if (dt_ns > 20000000ul)
-            dt_ns = 20000000ul; /* cap at 2 ticks: never run ahead of the kernel clock */
+            if (dt_ns > 20000000ul)
+                dt_ns = 20000000ul; /* cap at 2 ticks: never run ahead of the kernel clock */
+        }
     }
     ns = base_ns + dt_ns;
     *sec = ns / 1000000000ul;
