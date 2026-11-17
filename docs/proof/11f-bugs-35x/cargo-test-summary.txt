@@ -1,0 +1,4 @@
+# cargo test (workspace default-members) on .16, tree of eed2a95 (the later commits change only kernel/src, the kernel crate, not a default member)
+suites: 188
+passed 1387 failed 0 ignored 1
+rc=0

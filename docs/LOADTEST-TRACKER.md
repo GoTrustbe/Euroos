@@ -1762,6 +1762,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   PIE of embedded programs, ld.so (0) and stack (8) need the arena to leave the identity map (S4, S5): `[aslr]` stays
   FAILED. New lines `[aslr-phys]`, `[aslr-ind]`, `[aslr-exec]` FAILED as "not yet", `[aslr-fork]`, `[demand-slots]`,
   `[vdso-ro]` OK. Found on the way: BUG-350 to BUG-355. Proof `docs/proof/11f-aslr-s01/`.
+- **2026-11-17 (`feature/11f-bugs-35x`, from `c71cce8`):** BUG-351 (kernel writes into libc .data/.bss of a fork
+  child), BUG-352 (a fork child ended by a fault is reported to wait4) and BUG-355 (the vDSO clock stepped back up to
+  10 ms; exec'd children have a vDSO again) fixed, self-tests `[fork-cow-write]`, `[fork-fault-wait]`, `[vdso-mono]`.
+  Found: BUG-370 to BUG-372. Proof `docs/proof/11f-bugs-35x/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3049,21 +3053,42 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   mapped one at the new draw; that was taken back for BUG-355 in `1d95d9b`).
   `[aslr-fork]` FAILED (`deaba4d`) -> OK 8/8 (`0073feb`, `1d95d9b`) in KVM boots at 1/2/4/8 GiB. Proof `proof/11f-aslr-s01/`.
 
-### BUG-351 — getrandom in a fork child into a copy-on-write page returns EFAULT ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (glibc falls back; a program that checks the error sees EFAULT)
+### BUG-351 — getrandom in a fork child into a copy-on-write page returns EFAULT ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `d839c89`, `b4355d7`) · **Severity:** LOW (glibc falls back; a program that checks the error sees EFAULT)
 - **Found:**    2026-11-16 · `[cst]` lines of the `[aslr-fork]` children: `318(0x2b3be3735178,0x8,0x1) = -14` in 8 of 8 fork
   children on `277b4dc` (glibc's malloc asks 8 bytes into its tcache, a demand page shared copy-on-write with the parent).
-- **Likely cause (not verified):** the kernel's copy to user memory does not break a copy-on-write share before it
-  writes, and refuses the read-only page instead.
-- **Next:**     a self-test that forks, writes nothing, and calls getrandom into a heap buffer; then break the share in
-  the copy-out path as the page-fault path does.
+- **Cause:**    not copy-on-write (the fault path breaks a share for a kernel write as for ring 3): `demand_file_backed`
+  refused every user range that overlapped ANY file mapping. The flat whole-library mapping of libc stays in
+  `DEMAND_FILE_MAPS` under its .data segment and its .bss overlay, so a system call writing there gave EFAULT
+  (getrandom, clock_gettime, gettimeofday, sysinfo, getrlimit, getcwd, socketpair, getdents64; pipe2 even returned 0
+  without storing the descriptors).
+- **Fix:**      page by page the newest mapping decides (the .bss overlay is anonymous); a page of a file mapping that the
+  process holds writable or shares copy-on-write takes the write, unless mprotect made it read-only since: read-only
+  mprotects of file ranges are recorded per address space (`RO_FILE_RANGES`), because Chromium's ProtectedMemory
+  CHECKs that EFAULT (`base::internal::CheckMemoryReadOnly`; the first rule without it, `d839c89`, made every renderer
+  abort at its start, 161-205 aborts per session: `proof/11f-bugs-35x/bug351-renderer-abort.txt`). pipe2 returns
+  EFAULT when it cannot store the descriptors.
+- **Test:**     `[fork-cow-write]`: a fork child of `gaslrx fork` takes 13 kinds of kernel writes into pages it shares
+  copy-on-write (demand and arena pages); each must succeed, give the child its own copy and leave the parent's bytes
+  unchanged (read through the parent's address space). `1 of 26 -> FAILED` (c71cce8 + test) -> `26 of 26 -> OK`
+  (`537de96`, KVM 1/2/4 GiB with 2 vCPU, 2 GiB with 4 vCPU). Left: BUG-370, BUG-372.
 
-### BUG-352 — a fork child killed by a ring-3 fault is not reported to the parent's wait4 ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (the parent hangs 60 s per dead child, then gets no status)
+### BUG-352 — a fork child killed by a ring-3 fault is not reported to the parent's wait4 ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `b2c78a0`) · **Severity:** MEDIUM (the parent hangs 60 s per dead child, then gets no status)
 - **Found:**    2026-11-16 · S0 boot of the self-test image: after each `[isolation] ... TERMINATED` of a fork child,
-  `[wait4] blocking wait for pid N gave up after 60 s`, then `[fork] child pid N ... outlived its run`. 8 children took
-  the `[aslr]` self-test 8 minutes. With BUG-350 fixed the probe no longer triggers it; any other child fault still would.
-- **Next:**     give the parent the child's status (killed by SIGSEGV) when isolation ends a fork child.
+  `[wait4] blocking wait for pid N gave up after 60 s`, then `[fork] child pid N ... outlived its run`.
+- **Cause:**    the #PF, #GP and #UD handlers mark the faulting task dead and call `fault_kill_group`, which handles the
+  launched process only. A fork child's other tasks ran on, no exit was recorded for wait4, and its memory came back
+  only at the end of the run.
+- **Fix:**      `fault_kill_group` ends the whole fork child (every task, futex waits purged) and queues it;
+  `fault_killed_poll` tears it down from another process's context (the parent's wait4 on every round, the desktop
+  loop, the next fault) with the status "killed by the signal" (SIGSEGV 11, SIGILL 4), as kill(2) and the OOM killer
+  already did. This kernel delivers no signals at all (rt_sigaction is accepted, nothing is delivered), so there is no
+  SIGCHLD, for a normal exit neither; the parent sees the death by wait4 and by end-of-file on the child's descriptors.
+- **Test:**     `[fork-fault-wait]`: the fork child of `gaslrx fork` gets the return address 0x10 at its first system
+  call and faults in ring 3. `last reap pid 0, run 60 s -> FAILED` (c71cce8 + test) -> `waitpid got status 0xb (killed
+  by SIGSEGV), run 0 s -> OK` (`537de96`, KVM 1/2/4 GiB with 2 vCPU, 2 GiB with 4 vCPU). Not covered: a task of a fork
+  child that overflows its kernel stack (`[g1]`) is still ended alone.
 
 ### BUG-353 — the vDSO pages were mapped user-writable in every glibc process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`) · **Severity:** HIGH (security: one process could rewrite code and time that
@@ -3073,18 +3098,46 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Cause:**    the vDSO mapper set `WRITABLE | USER` on the leaf; the image frames and the clock frame are shared by all.
 - **Fix:**      user read-only (`map_user_4k_falloc`, and `map_user_4k_pool` for children). `[vdso-ro]` OK at 1/2/4/8 GiB.
 
-### BUG-355 — Chromium's network service aborts when an exec'd child has a vDSO ⬜ OPEN (avoided)
-- **Status:**   OPEN, avoided (`1d95d9b`: no vDSO after exec, as before) · **Severity:** MEDIUM (a page load fails)
+### BUG-355 — Chromium's network service aborts when an exec'd child has a vDSO ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `eed2a95`, `537de96`) · **Severity:** MEDIUM (a page load fails)
 - **Found:**    2026-11-16 · ASLR S1 Chromium runs with `0073feb` (vDSO mapped into exec'd children): the network service
-  (`--type=utility`, `network.mojom.NetworkService`) aborted in 2 of 6 sessions (site matrix round 1, start 2 of 20):
-  `[abort] t39 "Chrome_ChildIOTh"`, CHECK in `net::HttpNetworkTransaction::RecordStreamRequestResult` (stack symbolized
-  with the chrome of `chrome-pack2.img` and the exe base of the `[aslr-layout] exec` line). Logs:
-  `proof/11f-aslr-s01/bug355/`.
-- **Likely cause (not verified):** the vDSO clock (`userland/glibc/vdso.c`) is the tick anchor plus rdtsc, capped at two
-  ticks; across a late tick or another CPU it can return a monotonic time below an earlier one, and the network stack
-  CHECKs the order of its timestamps. The browser main process has always used the vDSO; its children never did.
-- **Next:**     a self-test of vDSO monotonicity against the syscall on all CPUs over tick boundaries; then the vDSO for exec'd
-  children again (it is what makes `[aslr-exec]` give a vDSO a new draw).
+  aborted in 2 of 6 sessions, CHECK in `net::HttpNetworkTransaction::RecordStreamRequestResult`
+  (`proof/11f-aslr-s01/bug355/`). `1d95d9b` took the vDSO after exec away.
+- **Cause:**    the vDSO clock ran backwards. The clock page held `ticks * 10 ms` as its anchor and the vDSO adds up to
+  two ticks of rdtsc time to it; the tick count does not follow a late tick (a gap under two periods counts as one, a
+  vCPU that was not running, interrupts held off), so the next anchor was often below what a reader had just seen.
+  `[vdso-mono]` measured steps back of up to 10 ms (9998 us) in MONOTONIC, BOOTTIME and REALTIME, 51 to 154 per run,
+  and the system call (the bare tick count) up to 20 ms behind the vDSO. Chromium's browser process always read the
+  vDSO; its exec'd children used the system call, monotonic but coarse. With a vDSO the network service saw time go
+  backwards. Ruled out: a clock frame that differs between processes (one frame, mapped read-only in every child;
+  `[vdso-mono]` checks it in the fork child).
+- **Fix:**      `vdso_tick` publishes the larger of the tick time and the time readers see at that moment (the clock is
+  continuous), and while it is ahead of the tick count it runs slower (1/8, 3/4 from 5 ms) until the ticks caught up;
+  REALTIME is that clock plus the boot epoch. clock_gettime, gettimeofday and the realtime futex conversion read the
+  same page with the formula of `vdso.c`. The vDSO is mapped after an exec in a fork child again, at the new draw.
+- **Test:**     `[vdso-mono]` (16 late ticks of 1.5 periods with interrupts held off, then a 2 s run, the vDSO read as
+  `vdso.c` reads it, against the system call): `steps back 9998 us, system call outside its two vDSO reads -> FAILED`
+  (c71cce8 + test) -> `0 steps back over 1 us, system call between its two vDSO reads -> OK` (`537de96`, KVM 1/2/4 GiB
+  with 2 vCPU, 2 GiB with 4 vCPU). Chromium with a vDSO in every exec'd child (`b4355d7`): 16 site sessions (start + one round) 16/16 PASS, 20 starts 20/20, a 3-round session 36/36: 0 aborts, 0 in the network service (`proof/11f-bugs-35x/chrome.txt`).
+  Left: BUG-371.
+
+### BUG-370 — fstat on a pipe end answers EBADF ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · `[fork-cow-write]` (11f-bugs-35x): `fstat(read end of pipe2)` = -9. Linux gives
+  `S_IFIFO`. The self-test takes fstat of a directory instead.
+
+### BUG-371 — the vDSO reads the TSC with a plain rdtsc: steps back of a few hundred ns ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · `[vdso-mono]` (11f-bugs-35x): after BUG-355, steps back under 1 us in 2 of 4 KVM boots
+  (2 x, max 401 ns; 1 x 275 ns). `userland/glibc/vdso.c` executes rdtsc without lfence, so the CPU may read the TSC
+  before the loads of the clock page are done. Needs a rebuilt `vdso.so` (lfence; rdtsc, as Linux's `rdtsc_ordered`).
+
+### BUG-372 — a kernel write into an untouched page of a writable file mapping gives EFAULT ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · reading `demand_file_backed` for BUG-351: mmap and mprotect protections are not kept per
+  page (only PROT_NONE and, since BUG-351, read-only mprotects of file ranges), so a page of a private writable file
+  mapping (a library's .data) that the process has not written yet still refuses a system call's write (Linux would
+  copy the page). Once the process wrote it, or after a fork, it is accepted.
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)
