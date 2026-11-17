@@ -188,7 +188,7 @@ fn report_phys(seen: &[[u64; 8]], phys: &[(u64, u64)]) {
         crate::serial_println!("[aslr-phys] {looked} addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓");
     } else {
         crate::serial_println!(
-            "[aslr-phys] {looked} addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena):{same} → FAILED (not yet: the arena leaves the identity map in step S4)"
+            "[aslr-phys] {looked} addresses of a glibc process looked up in its page tables; at their own physical address (identity-mapped arena):{same} → FAILED (the identity arena: boot option aslr.arena=identity or aslr=legacy)"
         );
     }
 }

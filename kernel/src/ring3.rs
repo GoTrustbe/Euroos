@@ -11695,11 +11695,12 @@ static VDSO_CUR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::
 // -- ASLR S4: the arena of a launched process outside the identity map ---------
 
 /// Boot option `aslr.arena=`: false = `identity` (the arena of a launched glibc
-/// process at its physical address, as before), true = `fixed` (at
-/// `paging::ARENA_ZONE_BASE`, 8 TiB, with PML4[0] holding no user page).
+/// process at its physical address, as before S4), true = `fixed` (at
+/// `paging::ARENA_ZONE_BASE`, 8 TiB, with PML4[0] holding no user page; the
+/// default since S4 was proven, docs/proof/11f-aslr-s4).
 static ARENA_FIXED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(ARENA_FIXED_DEFAULT);
 /// `aslr.arena=` without the option.
-pub const ARENA_FIXED_DEFAULT: bool = false;
+pub const ARENA_FIXED_DEFAULT: bool = true;
 pub fn arena_set_fixed(on: bool) {
     ARENA_FIXED.store(on, Ordering::Relaxed);
 }

@@ -46,8 +46,8 @@
 //!   default, `x11`, sends X events only.
 //!
 //! - `aslr.arena=identity|fixed`: where the arena of a launched Linux program
-//!   lies: at its physical address (`identity`, default) or at 8 TiB, outside
-//!   the kernel's identity map (`fixed`, ASLR step S4). `aslr=legacy` keeps
+//!   lies: at 8 TiB, outside the kernel's identity map (`fixed`, default, ASLR
+//!   step S4) or at its physical address (`identity`, as before S4). `aslr=legacy` keeps
 //!   `identity`.
 //! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
 //!   programs (docs/design/ASLR.md, euromm::layout). `on` is the default (ring3::ASLR_DEFAULT);
