@@ -9776,6 +9776,7 @@ static VDSO_IMAGE_FRAMES: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::V
 /// Refresh the vDSO clock page. Called from the timer tick: seq goes odd, the
 /// monotonic and real clocks are written, seq goes even — readers retry on odd.
 pub fn vdso_tick() {
+    let _w = VdsoWriter::enter();
     let frame = VDSO_TIME_FRAME.load(Ordering::Relaxed);
     if frame == 0 {
         return;
@@ -9839,6 +9840,9 @@ pub fn vdso_tick() {
     let ahead = mono_ns - target;
     let rate = if ahead == 0 { cal } else if ahead < 5_000_000 { cal - cal / 8 } else { cal / 4 };
     let real_ns = mono_ns + (base * 1_000_000_000).saturating_sub(base_ticks * 10_000_000);
+    if tsc < unsafe { d.add(5).read_volatile() } {
+        VDSO_TSC_BACK.fetch_add(1, Ordering::Relaxed);
+    }
     unsafe {
         let seq = d.read_volatile().wrapping_add(1);
         d.write_volatile(seq); // odd: update in progress
@@ -9854,6 +9858,34 @@ pub fn vdso_tick() {
 /// the largest difference (ns): each one was a step back before the fix.
 static VDSO_BEHIND: AtomicU64 = AtomicU64::new(0);
 static VDSO_BEHIND_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// BUG-380 (`[vdso-mono]` diagnosis): writers of the clock page that began
+/// while another was still writing (a task-context caller interrupted by the
+/// timer tick), writers on an AP, and anchors older than the one before.
+static VDSO_WRITERS: AtomicU64 = AtomicU64::new(0);
+static VDSO_NESTED: AtomicU64 = AtomicU64::new(0);
+static VDSO_TICK_AP: AtomicU64 = AtomicU64::new(0);
+static VDSO_TSC_BACK: AtomicU64 = AtomicU64::new(0);
+
+struct VdsoWriter;
+
+impl VdsoWriter {
+    fn enter() -> Self {
+        if VDSO_WRITERS.fetch_add(1, Ordering::SeqCst) != 0 {
+            VDSO_NESTED.fetch_add(1, Ordering::Relaxed);
+        }
+        if (crate::apic::lapic_id() & 0xff) as u8 != crate::percpu::bsp_apic_id() {
+            VDSO_TICK_AP.fetch_add(1, Ordering::Relaxed);
+        }
+        VdsoWriter
+    }
+}
+
+impl Drop for VdsoWriter {
+    fn drop(&mut self) {
+        VDSO_WRITERS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// The vDSO's interpolation (`userland/glibc/vdso.c` `read_clock`): the anchor
 /// plus the rdtsc time since it, at most two ticks.
@@ -9930,6 +9962,20 @@ pub(crate) fn clock_ns(clk: u64) -> u64 {
 /// the vDSO readers had seen, and by how much at most (ns).
 pub(crate) fn vdso_behind_stats() -> (u64, u64) {
     (VDSO_BEHIND.load(Ordering::Relaxed), VDSO_BEHIND_MAX.load(Ordering::Relaxed))
+}
+
+/// `[vdso-mono]` (BUG-380): writers that began while another was writing,
+/// writers on an AP, anchors with a tsc below the previous anchor.
+pub(crate) fn vdso_writer_stats() -> (u64, u64, u64) {
+    (VDSO_NESTED.load(Ordering::Relaxed), VDSO_TICK_AP.load(Ordering::Relaxed), VDSO_TSC_BACK.load(Ordering::Relaxed))
+}
+
+/// `[vdso-mono]`: the interpolation of the clock page and the vDSO image.
+pub(crate) fn test_vdso_interp(anchor: u64, tsc0: u64, rate: u64, now: u64) -> u64 {
+    vdso_interp(anchor, tsc0, rate, now)
+}
+pub(crate) fn test_vdso_so() -> &'static [u8] {
+    VDSO_SO
 }
 
 // Self-test access (forkvdsotest.rs: BUG-351, BUG-352, BUG-355).
