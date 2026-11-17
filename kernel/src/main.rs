@@ -4375,6 +4375,8 @@ fn main() -> Status {
         churn::fork_churn(&mut allocator);
         // BUG-140: the scheduler slots of the tasks of ended fork children ([churn-forkthreads]).
         churn::fork_thread_churn(&mut allocator);
+        // BUG-390: the locks of the swapped demand state and a holder with interrupts on ([swap-irq]).
+        { let l = ring3::swap_irq_selftest(&mut allocator, 1); serial_println!("{l}"); }
         // BUG-170: the sync socket of Chromium's audio stream ([syncsock]).
         churn::sync_socket_test(&mut allocator);
         // BUG-181: the ALSA device with 6, 1 and 2 channels ([pcmch]).

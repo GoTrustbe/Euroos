@@ -11297,7 +11297,137 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
     core::mem::swap(&mut *DEMAND_FREE.lock(), &mut cm.free);
+    CHILD_MEM_SWAPS.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// Swaps of the per-process demand state done so far (`child_mem_swap`, in or out).
+pub static CHILD_MEM_SWAPS: AtomicU64 = AtomicU64::new(0);
+
+// -- BUG-390: the locks of the swapped state and a holder with interrupts on ([swap-irq]) --
+//
+// `child_mem_swap` runs with interrupts off (every caller: the system-call and
+// fault entries, `yield_reacquire`, `irq_window`) and takes CHILD_MEM and the
+// five lists it swaps. Ring-0 code runs on the BSP only, so a holder of one of
+// those locks that the timer preempted with interrupts on can never run again
+// once a task with interrupts off spins on that lock: the machine stops. The
+// soak of BUG-390 stopped exactly there (DEMAND_FILE_MAPS, `child_mem_swap+0x1ab`
+// in the 7b2eea6 build), and the desktop loop takes DEMAND_FILE_MAPS with
+// interrupts on in the heartbeat census (`dump_rip_profile` ->
+// `demand_addr_origin`). The test below does that from a kernel task while a
+// program with fork children and threads swaps the state all the time.
+
+static SWAPHAM_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static SWAPHAM_CALLS: AtomicU64 = AtomicU64::new(0);
+static SWAPHAM_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
+
+/// A kernel task (interrupts on, preemptible, as the desktop loop) that does
+/// what the heartbeat census does: name the file behind demand addresses.
+extern "C" fn swap_hammer_main() -> ! {
+    loop {
+        while SWAPHAM_ON.load(Ordering::Acquire) {
+            let base = demand_base();
+            let span = DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(base).max(0x1000);
+            let n = SWAPHAM_CALLS.load(Ordering::Relaxed);
+            let s = demand_addr_origin(base + (n.wrapping_mul(0x9E37_79B9_7F4A_7C15) % span));
+            core::hint::black_box(s);
+            SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        {
+            let _g = crate::sched::IfOffGuard::new();
+            if !SWAPHAM_ON.load(Ordering::Acquire) {
+                crate::sched::block_on(SWAPHAM_CHAN);
+            }
+        }
+        crate::sched::yield_now();
+    }
+}
+
+/// `[swap-irq]`: (1) every lock that `child_mem_swap` and `fork_child_owner`
+/// take is held with interrupts off, also when the taker had them on; (2) the
+/// stress: `gslots` (40 fork children with 6 threads each, ended three ways,
+/// with threads of the parent beside them) runs while a kernel task with
+/// interrupts on takes DEMAND_FILE_MAPS without pause (`demand_addr_origin`).
+/// Before the fix (2) stops the machine (BUG-390). `rounds` runs of (2).
+pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
+    let rounds = rounds.max(1);
+    let if_was = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::enable();
+    let mut bad: Vec<&str> = Vec::new();
+    macro_rules! held_irq_off {
+        ($name:literal, $l:expr) => {{
+            {
+                let _g = $l.lock();
+                if x86_64::instructions::interrupts::are_enabled() {
+                    bad.push($name);
+                }
+            }
+            if !x86_64::instructions::interrupts::are_enabled() {
+                bad.push(concat!($name, " (interrupts left off)"));
+                x86_64::instructions::interrupts::enable();
+            }
+        }};
+    }
+    held_irq_off!("CHILD_MEM", CHILD_MEM);
+    held_irq_off!("DEMAND_FILE_MAPS", DEMAND_FILE_MAPS);
+    held_irq_off!("PROT_NONE_RANGES", PROT_NONE_RANGES);
+    held_irq_off!("SHARED_ALIASES", SHARED_ALIASES);
+    held_irq_off!("SHARED_MAPS", SHARED_MAPS);
+    held_irq_off!("DEMAND_FREE", DEMAND_FREE);
+    held_irq_off!("GLIBC_FORK_CHILDREN", GLIBC_FORK_CHILDREN);
+    held_irq_off!("CHILD_THREADS", CHILD_THREADS);
+    {
+        let g = GLIBC_FORK_CHILDREN.try_lock();
+        if g.is_some() && x86_64::instructions::interrupts::are_enabled() {
+            bad.push("GLIBC_FORK_CHILDREN (try_lock)");
+        }
+    }
+    x86_64::instructions::interrupts::enable();
+    if SWAPHAM_TASK.load(Ordering::Relaxed) == usize::MAX {
+        match crate::sched::spawn_kernel(swap_hammer_main, 0) {
+            Some(t) => SWAPHAM_TASK.store(t, Ordering::Relaxed),
+            None => {
+                if !if_was {
+                    x86_64::instructions::interrupts::disable();
+                }
+                return String::from("[swap-irq] no free task slot for the kernel task: SKIPPED");
+            }
+        }
+    }
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let mut runs_ok = 0usize;
+    let mut detail = String::new();
+    for r in 0..rounds {
+        reap_dead(falloc);
+        let s0 = CHILD_MEM_SWAPS.load(Ordering::Relaxed);
+        SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+        SWAPHAM_ON.store(true, Ordering::Release);
+        crate::sched::wake(SWAPHAM_CHAN, 1);
+        let prev_deadline = GLIBC_DEADLINE_TICKS.swap(36_000, Ordering::Relaxed);
+        let (out, exit) = run_glibc(falloc, gslots_bytes(), ldlinux_bytes(), &[b"/bin/gslots"], &[b"PATH=/bin"], caps);
+        GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
+        SWAPHAM_ON.store(false, Ordering::Release);
+        reap_dead(falloc);
+        let swaps = CHILD_MEM_SWAPS.load(Ordering::Relaxed) - s0;
+        let calls = SWAPHAM_CALLS.load(Ordering::Relaxed);
+        let ok = (exit == 88 || exit == 89) && out.contains("GSLOTS:") && calls > 0 && (exit == 89 || swaps > 0);
+        if ok {
+            runs_ok += 1;
+        }
+        if r < 3 || !ok {
+            detail.push_str(&alloc::format!(" run {}: exit {} swaps {swaps} lookups {calls}{};",
+                r + 1, exit as i64, if ok { "" } else { " FAILED" }));
+        }
+    }
+    if !if_was {
+        x86_64::instructions::interrupts::disable();
+    }
+    let ok = bad.is_empty() && runs_ok == rounds;
+    alloc::format!(
+        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} -> {}",
+        if bad.is_empty() { String::from("none") } else { bad.join(", ") },
+        if ok { "OK ✓" } else { "FAILED" })
 }
 
 /// A fork child exited: drop its saved memory state.
