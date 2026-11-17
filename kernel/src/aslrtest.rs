@@ -256,7 +256,7 @@ fn report_exec(_mode: Mode, out: &str) {
             if n >= 4 {
                 not_yet.push(match k {
                     "ldso" => "ld.so (the arena base stays until S5)",
-                    "vdso" => "vDSO (none after exec: BUG-355)",
+                    "vdso" => "vDSO (an exec'd child has none)",
                     "exe" => "exe",
                     "floor" => "mmap floor",
                     other => other,

@@ -1,0 +1,63 @@
+# Tests first. KVM 2 GiB, 2 vCPU, HD-Audio, -nic none (kboot.sh), pins 19,39 / 18,38 / 16,17,36,37.
+# t1 = c71cce8 + the self-tests (no fix), t2 = t1 + diagnostics (the cause of BUG-351), t3 = BUG-351 fixed (first rule), t4 = all three fixed (2 vCPU and 4 vCPU), fin4 = 537de96 (final)
+
+== t1/t1-2G.log
+[fork-cow-write] fork child: 1 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found); refused or wrong: getrandom@demand = -14, clock_gettime@demand = -14, gettimeofday@demand = -14, uname@demand: restore refused, sysinfo@demand = -14, getrlimit@demand = -14, getcwd@demand = -14, pipe2@demand: still shared, read@demand = -9, fstat@demand = -9, socketpair@demand = -14, getdents64@demand = -14, getrandom@arena: parent's bytes changed, clock_gettime@arena: parent's bytes changed, gettimeofday@arena: parent's bytes changed, uname@arena: parent's bytes changed, sysinfo@arena: parent's bytes changed, getrlimit@arena: parent's bytes changed, getcwd@are
+[wait4] blocking wait for pid 1341 gave up after 60 s
+[fork-fault-wait] fork child pid 1 faulted in ring 3: last reap pid 0 status 0x0, run 60 s (want status 0xb, < 10 s) → FAILED
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (16058368 rounds): steps back mono 9998 us, boot 9998 us, real 9998 us (51 times); system call outside its two vDSO reads 63502896 times (max 20000 us); tick anchor behind the readers 0 times (max 0 us); clock frame shared by 4 of 4 child calls (fork and exec), exec'd child has a vDSO: yes → FAILED
+
+== t2/t2-2G.log
+[fork-cow-write]   diag getrandom@demand = -14: 0x2ace28c2b200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag clock_gettime@demand = -14: 0x2ace28c2a200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag gettimeofday@demand = -14: 0x2ace28c29200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag sysinfo@demand = -14: 0x2ace28c27200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag getrlimit@demand = -14: 0x2ace28c26200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag getcwd@demand = -14: 0x2ace28c25200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag read@demand = -9: 0x2ace28c23200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag fstat@demand = -9: 0x2ace28c22200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag socketpair@demand = -14: 0x2ace28c21200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag getdents64@demand = -14: 0x2ace28c20200: arena-ok=true file-backed=true next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[(2ace28c19000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag 0x1460a000: frame 0x1460a000 -> 0x1848000, parent's bytes 0x200..=0x20f changed
+[fork-cow-write]   diag 0x14609000: frame 0x14609000 -> 0x1849000, parent's bytes 0x200..=0x20f changed
+[fork-cow-write]   diag 0x14608000: frame 0x14608000 -> 0x184a000, parent's bytes 0x200..=0x20e changed
+[fork-cow-write]   diag 0x14607000: frame 0x14607000 -> 0x184b000, parent's bytes 0x200..=0x385 changed
+[fork-cow-write]   diag 0x14606000: frame 0x14606000 -> 0x184c000, parent's bytes 0x200..=0x26f changed
+[fork-cow-write]   diag 0x14605000: frame 0x14605000 -> 0x184d000, parent's bytes 0x200..=0x20d changed
+[fork-cow-write]   diag 0x14604000: frame 0x14604000 -> 0x184e000, parent's bytes 0x200..=0x201 changed
+[fork-cow-write]   diag 0x14603000: frame 0x14603000 -> 0x184f000, parent's bytes 0x200..=0x207 changed
+[fork-cow-write]   diag 0x14602000: frame 0x14602000 -> 0x1850000, parent's bytes 0x200..=0x207 changed
+[fork-cow-write]   diag fstat@arena = -9: 0x14601200: arena-ok=true file-backed=false next=0x2ace28e2b000 end=0x600000000000 base=0x200000000000 filemaps=[] cr0=0x80010033
+[fork-cow-write]   diag 0x14600000: frame 0x14600000 -> 0x1851000, parent's bytes 0x200..=0x204 changed
+[fork-cow-write]   diag 0x13e02000: frame 0x13e02000 -> 0x1854000, parent's bytes 0x200..=0x305 changed
+[fork-cow-write]   diag 0x13e03000: frame 0x13e03000 -> 0x1853000, parent's bytes 0xf00..=0xf00 changed
+[fork-cow-write] fork child: 1 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found); refused or wrong: getrandom@demand = -14, clock_gettime@demand = -14, gettimeofday@demand = -14, uname@demand: restore refused, sysinfo@demand = -14, getrlimit@demand = -14, getcwd@demand = -14, pipe2@demand: still shared, read@demand = -9, fstat@demand = -9, socketpair@demand = -14, getdents64@demand = -14, getrandom@arena: parent's bytes changed, clock_gettime@arena: parent's bytes changed, gettimeofday@arena: parent's bytes changed, uname@arena: parent's bytes changed, sysinfo@arena: parent's bytes changed, getrlimit@arena: parent's bytes changed, getcwd@are
+[wait4] blocking wait for pid 1341 gave up after 60 s
+[fork-fault-wait] fork child pid 1341 faulted in ring 3: last reap pid 0 status 0x0, run 60 s (want status 0xb, < 10 s) → FAILED
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (15962065 rounds): steps back mono 9998 us, boot 9998 us, real 9998 us (120 times); system call outside its two vDSO reads 62602044 times (max 20000 us); tick anchor behind the readers 0 times (max 0 us); clock frame shared by 4 of 4 child calls (fork and exec), exec'd child has a vDSO: not measured (the probe cannot exec) → FAILED
+
+== t3/t3-2G.log
+[fork-cow-write]   diag fstat@demand = -9: 0x2a9464c40200: arena-ok=true file-backed=false next=0x2a9464e49000 end=0x600000000000 base=0x200000000000 filemaps=[(2a9464c37000, 212000, 2d)] cr0=0x80010033
+[fork-cow-write]   diag fstat@arena = -9: 0x14601200: arena-ok=true file-backed=false next=0x2a9464e49000 end=0x600000000000 base=0x200000000000 filemaps=[] cr0=0x80010033
+[fork-cow-write] fork child: 24 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found); refused or wrong: fstat@demand = -9, fstat@arena = -9; child line printed → FAILED
+[wait4] blocking wait for pid 1341 gave up after 60 s
+[fork-fault-wait] fork child pid 1341 faulted in ring 3: last reap pid 0 status 0x0, run 60 s (want status 0xb, < 10 s) → FAILED
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (12998989 rounds): steps back mono 9997 us, boot 9997 us, real 9997 us (154 times); system call outside its two vDSO reads 50951887 times (max 20000 us); tick anchor behind the readers 0 times (max 0 us); clock frame shared by 4 of 4 child calls (fork and exec), exec'd child has a vDSO: not measured (the probe cannot exec) → FAILED
+
+== t4/t4-2G-s2.log
+[fork-cow-write] fork child: 26 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found), each got its own copy, parent's bytes unchanged → OK ✓
+[fork] child pid 1341 (task 6) ended by signal 11 after a fault in ring 3: its parent's wait4 gets the status
+[fork-fault-wait] fork child pid 1341 faulted in ring 3: the parent's waitpid got status 0xb (killed by SIGSEGV), run 0 s → OK ✓
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (9662563 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times); system call outside its two vDSO reads 1 times (max 0 us); tick anchor behind the readers 7077 times (max 10561 us); clock frame shared by 4 of 4 child calls (fork and exec), exec'd child has a vDSO: not measured (the probe cannot exec) → FAILED
+
+== t4/t4-2G-s4.log
+[fork-cow-write] fork child: 26 system calls wrote into pages shared copy-on-write with the parent (16 demand, 16 arena pages found), each got its own copy, parent's bytes unchanged → OK ✓
+[fork] child pid 1341 (task 6) ended by signal 11 after a fault in ring 3: its parent's wait4 gets the status
+[fork-fault-wait] fork child pid 1341 faulted in ring 3: the parent's waitpid got status 0xb (killed by SIGSEGV), run 0 s → OK ✓
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (9605922 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times); system call outside its two vDSO reads 0 times (max 0 us); tick anchor behind the readers 7055 times (max 11053 us); clock frame shared by 4 of 4 child calls (fork and exec), exec'd child has a vDSO: not measured (the probe cannot exec) → OK ✓
+
+== base c71cce8, the BUG-351 symptom in the [cst] trace of the [aslr-fork] children (base-2G)
+[cst] t6 318(0x2b978467d178,0x8,0x1) = 0xfffffffffffffff2
+[cst] t6 318(0x2852ab439178,0x8,0x1) = 0xfffffffffffffff2
+[cst] t6 318(0x29edc1ae4178,0x8,0x1) = 0xfffffffffffffff2
+[cst] t6 318(0x2bca9f100178,0x8,0x1) = 0xfffffffffffffff2

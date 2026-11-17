@@ -1,0 +1,88 @@
+# Chromium, public image of b4355d7 (kernel code as 537de96; only the self-test differs) + euroos-boot.conf (update.check=off, ui.tour=off; aslr=on default), chrome-pack2.img, nss-pack-vid.img, smp 2, 6 GiB, KVM, pins 16,36 / 17,37 / 18,38 / 19,39
+# serial counts per session: [abort] lines, of them in Chrome_ChildIOTh (the network service, BUG-355), exec lines with a vDSO / all exec lines, kernel crash lines
+b01 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b02 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 24/24 | crash/oom/frozen 0
+b03 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b04 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b05 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b06 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b07 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b08 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b09 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b10 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b11 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b12 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 24/24 | crash/oom/frozen 0
+b13 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b14 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 24/24 | crash/oom/frozen 0
+b15 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+b16 | [chrome-smoke] PASS - 14/14 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0
+r3 | [chrome-smoke] PASS - 36/36 steps ok, report and screenshots | aborts 0, network service 0 | execs with vDSO 43/43 | crash/oom/frozen 0
+starts (20 boots) | [chrome-smoke] starts: 20/20 PASS | aborts 0, network service 0 | execs with vDSO 195/195 | crash/oom/frozen 0
+
+## consent banners
+     16 [gui-smoke] ok   consent euro-os: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+     16 [gui-smoke] ok   consent github: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+     16 [gui-smoke] ok   consent openstreetmap: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+     16 [gui-smoke] ok   consent wikipedia: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banne
+      1 [gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+      3 [gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (534, 640), banner g
+     13 [gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner g
+
+## starts
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 51.2 s (seconds after Enter: launched 3.1, window on screen 3.4,
+[chrome-smoke] PASS - 5/5 steps ok, report and screenshots in /srv/euroos/b35x-runs/runs/starts/start-20
+[chrome-smoke] starts: 20/20 PASS
+
+## r3 (3 rounds, one session)
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 51.9 s (second
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[gui-smoke] ok   consent euro-os-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.6 s, load finished 2.3 s later; content 678 colours, commonest 78%;
+[gui-smoke] ok   consent wikipedia-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.4 s, load finished 3.0 s later; content 
+[gui-smoke] ok   consent github-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 10.0 s later; conten
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found no
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.5 s, load finished 6.8 s later; content 268 colours, commone
+[gui-smoke] ok   consent openstreetmap-r1: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.7 s, load finished 1.7 s later; content 22
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/re
+[gui-smoke] ok   consent euro-os-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.3 s, load finished 2.0 s later; content 678 colours, commonest 78%;
+[gui-smoke] ok   consent wikipedia-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.5 s, load finished 4.7 s later; content 
+[gui-smoke] ok   consent github-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 8.4 s later; content
+[gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 5.4 s, load finished 5.9 s later; content 283 colours, commone
+[gui-smoke] ok   consent openstreetmap-r2: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.9 s, load finished 1.4 s later; content 22
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/re
+[gui-smoke] ok   consent euro-os-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.7 s, load finished 2.0 s later; content 678 colours, commonest 78%;
+[gui-smoke] ok   consent wikipedia-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 2.3 s, load finished 1.6 s later; content 
+[gui-smoke] ok   consent github-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 9.2 s later; content
+[gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.5 s, load finished 6.2 s later; content 283 colours, commone
+[gui-smoke] ok   consent openstreetmap-r3: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.6 s, load finished 1.6 s later; content 22
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/re
+
+## earlier: eed2a95 (first BUG-351 rule) sessions s01-s03: renderer aborts 205/161/170 (bug351-renderer-abort.txt); b4355d7 a01, a02: PASS 14/14, 0 aborts
