@@ -1394,6 +1394,11 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+/// BUG-400 (`[clock-drift]`, `uptime`): timer interrupts taken on the BSP, and
+/// the ticks they added to the tick count (the rest of the count is forced
+/// advances from task context).
+pub static TICK_IRQS: AtomicU64 = AtomicU64::new(0);
+pub static TICK_ADDED: AtomicU64 = AtomicU64::new(0);
 
 // -- S0 measurement (docs/design/SMP-SCHEDULER.md) --
 // Run time per task on the TSC (a short turn right after a tick is never seen by
@@ -1569,6 +1574,8 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
         }
     }
     crate::interrupts::TICKS.fetch_add(add, Ordering::Relaxed);
+    TICK_IRQS.fetch_add(1, Ordering::Relaxed);
+    TICK_ADDED.fetch_add(add, Ordering::Relaxed);
     // Who was running when this tick landed: the CPU ledger the [cpu] heartbeat
     // line reads (the browser's download crawled at 8 KB/s in run 61 with the
     // data queued unread: was the reader starved, and by whom?).
