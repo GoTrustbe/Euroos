@@ -105,6 +105,7 @@ mod renametest;
 mod aslrtest;
 mod forkvdsotest;
 mod clockdrift;
+mod timebase;
 mod nts;
 mod verity;
 mod euroattr;

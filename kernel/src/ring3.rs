@@ -9853,7 +9853,16 @@ fn vdso_tick_one() {
     // the larger of the tick time and the time readers see now, and while it
     // runs ahead of the ticks it runs slower (1/8, or 3/4 from 5 ms) until
     // the ticks caught up. REALTIME is the same clock plus the boot epoch.
-    let target = ticks * 10_000_000;
+    // BUG-400: the target is the time base (TSC time held to the HPET) plus
+    // the forced tick advances, no longer `ticks x 10 ms`: the tick count
+    // follows the time base to within half a period, and a forced advance
+    // (tickless idle, a frozen-clock poll) still moves the clock with it.
+    let tb = crate::timebase::running();
+    let target = if tb {
+        crate::timebase::ns_at(tsc) + ticks.saturating_sub(crate::sched::real_ticks()) * 10_000_000
+    } else {
+        ticks * 10_000_000
+    };
     // SAFETY: as above; the old anchor is still on the page.
     let seen = unsafe { vdso_interp(d.add(1).read_volatile(), d.add(5).read_volatile(), d.add(6).read_volatile(), tsc) };
     let mono_ns = if seen > target {
@@ -9863,9 +9872,20 @@ fn vdso_tick_one() {
     } else {
         target
     };
-    let cal = VDSO_NS_PER_TSC.load(Ordering::Relaxed);
+    let cal = if tb { crate::timebase::rate_shift20() } else { VDSO_NS_PER_TSC.load(Ordering::Relaxed) };
     let ahead = mono_ns - target;
-    let rate = if ahead == 0 { cal } else if ahead < 5_000_000 { cal - cal / 8 } else { cal / 4 };
+    // BUG-400: a lead under 1 ms (the time base changed its rate a little) is
+    // taken out over one period; 7/8 for a lead of 1 ns was a 1.25 ms lag at
+    // the next tick and a jump forward there.
+    let rate = if ahead == 0 {
+        cal
+    } else if ahead < 1_000_000 {
+        cal - ((cal as u128 * ahead as u128) / 10_000_000) as u64
+    } else if ahead < 5_000_000 {
+        cal - cal / 8
+    } else {
+        cal / 4
+    };
     let real_ns = mono_ns + (base * 1_000_000_000).saturating_sub(base_ticks * 10_000_000);
     if tsc < unsafe { d.add(5).read_volatile() } {
         VDSO_TSC_BACK.fetch_add(1, Ordering::Relaxed);

@@ -143,6 +143,12 @@ pub fn selftest() {
     halt_until(crate::hpet::ns() + 30_000_000);
     let d = sample();
     let late = report("late", c, d);
+    let (src, n, refused, restarts, last, max) = crate::timebase::stats();
+    crate::serial_println!(
+        "[clock-drift]   time base: reference {src}, {n} samples ({refused} refused, {restarts} restarts), offset from it now {:+} us, largest {} us",
+        last / 1000,
+        max / 1000
+    );
     crate::serial_println!(
         "[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> {}",
         if rest && late { "OK" } else { "FAILED" }
@@ -154,13 +160,15 @@ pub fn selftest() {
 pub fn diag_line() -> alloc::string::String {
     let s = sample();
     alloc::format!(
-        "clock diag: hpet {} ns, tsc {}, ticks {}, irqs {}, added {}, tsc/tick {}, mono {} ns",
+        "clock diag: hpet {} ns, tsc {}, ticks {}, irqs {}, added {}, tsc/tick {}, mono {} ns, time base {} samples, offset {} ns",
         s.hpet_ns,
         s.tsc,
         s.ticks,
         s.irqs,
         s.added,
         crate::apic::TSC_PER_TICK.load(Ordering::Relaxed),
-        s.mono
+        s.mono,
+        crate::timebase::stats().1,
+        crate::timebase::stats().4
     )
 }
