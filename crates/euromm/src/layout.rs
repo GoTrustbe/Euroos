@@ -16,7 +16,9 @@
 //! - `off`: the zones of `on` with every draw 0: the same addresses every run.
 //!
 //! The slides inside the arena (brk, small mmaps, stack) are those of before in
-//! `legacy` and `on` (the arena does not move until step S5) and 0 in `off`.
+//! `legacy` and `on` and 0 in `off`. Step S5: with `on` the arena itself lies at a
+//! random 2 MiB step of 8..12 TiB (`arena_base`), and the embedded executable and
+//! ld.so get a page slide inside it; `off` and `legacy` draw none of the three.
 
 use core::ops::Range;
 
@@ -159,8 +161,9 @@ pub struct Layout {
 /// end inside the zone (the offsets of the last `span` of the zone fall onto
 /// one base; with 128 MiB that is 64 of the 2^21 values).
 pub fn arena_base(l: &Layout, span: u64) -> u64 {
-    let _ = (l, span);
-    ARENA_ZONE.start
+    let size = ARENA_ZONE.end - ARENA_ZONE.start;
+    let span = round_up(span.min(size), ARENA_STEP);
+    ARENA_ZONE.start + (l.arena & (size - 1) & !(ARENA_STEP - 1)).min(size - span)
 }
 
 fn word(r: &[u8; DRAW_BYTES], i: usize) -> u64 {
@@ -216,7 +219,15 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             // 2^27 pages; the last one has no room for the clock page after it:
             // it takes the one below (one value of 2^27 twice as likely).
             let v = (word(r, 3) & (VDSO_DRAW - 1) & !(PAGE - 1)).min(VDSO_DRAW - VDSO_PAGES * PAGE);
-            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena: 0, exe_slide: 0, ldso_slide: 0 }
+            // ASLR S5, from bits the draws above leave unused: the arena
+            // offset (21 bits of 2 MiB steps, word 1 bits 42..62) and the page
+            // slides of the embedded executable and ld.so (9 bits each, word 2
+            // bits 42..50 and 51..59).
+            let (w1, w2) = (word(r, 1), word(r, 2));
+            let arena = ((w1 >> 42) & 0x1F_FFFF) * ARENA_STEP;
+            let exe_slide = ((w2 >> 42) & 0x1FF) * PAGE;
+            let ldso_slide = ((w2 >> 51) & 0x1FF) * PAGE;
+            Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena, exe_slide, ldso_slide }
         }
     }
 }
@@ -396,7 +407,9 @@ mod tests {
         assert_eq!(pick(&|l| l.ldso_slide), 9);
         assert_eq!(pick(&|l| arena_base(l, span) + l.exe_slide), 30);
         assert_eq!(pick(&|l| arena_base(l, span) + LDSO_OFF + l.ldso_slide), 30);
-        assert_eq!(pick(&|l| arena_base(l, span) + span - MIB - l.stack), 29);
+        // 21 + 8 bits drawn; the subtraction of the slide borrows from the
+        // bits above it, so the statistic may count one bit more.
+        assert!(pick(&|l| arena_base(l, span) + span - MIB - l.stack) >= 29);
         // Not tied to the draws of S1 or to each other.
         assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.exe_base)) >= 30);
         assert!(pick(&|l| arena_base(l, span).wrapping_sub(l.mmap_floor)) >= 30);

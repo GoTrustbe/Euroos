@@ -2824,8 +2824,96 @@ pub fn arena_hi_selftest() -> bool {
 /// zone above PML4[0]. False (nothing of the new chain kept) when a table frame
 /// could not be had; the caller runs on `pml4` and flushes the TLB after.
 pub fn lazy_arena_rebase(pml4: u64, old: u64, new: u64, nblocks: u64) -> bool {
-    let _ = (pml4, old, new, nblocks);
+    let zone = |v: u64| v >= ARENA_ZONE_BASE && v.saturating_add(nblocks * MIB2) <= ARENA_ZONE_END && v % MIB2 == 0;
+    if !zone(old) || !zone(new) {
+        return false;
+    }
+    lazy_arena_unbuild(pml4, old, nblocks);
+    if lazy_arena_build(pml4, new, nblocks) {
+        return true;
+    }
+    lazy_arena_unbuild(pml4, new, nblocks);
     false
+}
+
+/// The lazy tables of `nblocks` blocks at `virt` (arena zone) go back to the
+/// process pool: every page table (a page still in it is released as at an
+/// exit), then a page directory or PDPT that holds nothing any more, whose
+/// entry is cleared. Tables of other blocks under the same slot stay.
+fn lazy_arena_unbuild(pml4: u64, virt: u64, nblocks: u64) {
+    let refs = cow_refs();
+    // SAFETY: identity-mapped tables of the address space the caller runs on
+    // alone (exec); the caller flushes the TLB.
+    unsafe {
+        let empty = |t: u64| (0..512usize).all(|i| (t as *const u64).add(i).read_volatile() == 0);
+        for b in 0..nblocks {
+            let v = virt + b * MIB2;
+            let e4p = (pml4 as *mut u64).add(((v >> 39) & 0x1FF) as usize);
+            let e4 = e4p.read_volatile();
+            if e4 & PRESENT == 0 { continue; }
+            let pdpt = e4 & ADDR_MASK;
+            let e3p = (pdpt as *mut u64).add(((v >> 30) & 0x1FF) as usize);
+            let e3 = e3p.read_volatile();
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 { continue; }
+            let pd = e3 & ADDR_MASK;
+            let e2p = (pd as *mut u64).add(((v >> 21) & 0x1FF) as usize);
+            let e2 = e2p.read_volatile();
+            if e2 & PRESENT != 0 && e2 & HUGE == 0 && e2 & LAZY_PT != 0 {
+                let pt = e2 & ADDR_MASK;
+                for k in 0..512usize {
+                    let _ = arena_entry_release((pt as *const u64).add(k).read_volatile(), &refs);
+                }
+                e2p.write_volatile(0);
+                crate::procpool::free(pt);
+            }
+            if empty(pd) {
+                e3p.write_volatile(0);
+                crate::procpool::free(pd);
+                if empty(pdpt) {
+                    e4p.write_volatile(0);
+                    crate::procpool::free(pdpt);
+                }
+            }
+        }
+    }
+}
+
+/// Empty lazy tables for `nblocks` blocks at `virt` (arena zone, above
+/// PML4[0]), as `fill_remap_tables_lazy` builds them for a fork child. False
+/// when a frame could not be had (what was built stays; the caller unbuilds).
+fn lazy_arena_build(pml4: u64, virt: u64, nblocks: u64) -> bool {
+    // SAFETY: identity-mapped tables; fresh pool frames are zeroed before use.
+    unsafe {
+        let fresh = || -> Option<u64> {
+            let t = crate::procpool::alloc()?;
+            core::ptr::write_bytes(t as *mut u8, 0, 4096);
+            Some(t)
+        };
+        for b in 0..nblocks {
+            let v = virt + b * MIB2;
+            let e4p = (pml4 as *mut u64).add(((v >> 39) & 0x1FF) as usize);
+            if e4p.read_volatile() & PRESENT == 0 {
+                let Some(t) = fresh() else { return false };
+                e4p.write_volatile(t | PRESENT | WRITABLE | USER);
+            }
+            let e3p = ((e4p.read_volatile() & ADDR_MASK) as *mut u64).add(((v >> 30) & 0x1FF) as usize);
+            if e3p.read_volatile() & PRESENT == 0 {
+                let Some(t) = fresh() else { return false };
+                e3p.write_volatile(t | PRESENT | WRITABLE | USER);
+            }
+            let e3 = e3p.read_volatile();
+            if e3 & HUGE != 0 {
+                return false;
+            }
+            let e2p = ((e3 & ADDR_MASK) as *mut u64).add(((v >> 21) & 0x1FF) as usize);
+            if e2p.read_volatile() & PRESENT != 0 {
+                return false; // something is mapped there already: not ours
+            }
+            let Some(pt) = fresh() else { return false };
+            e2p.write_volatile(pt | PRESENT | WRITABLE | USER | LAZY_PT);
+        }
+    }
+    true
 }
 
 /// ASLR step S5 ([arena-move]): the exec of a fork child that moves its arena.

@@ -45,10 +45,11 @@
 //!   hosted Chromium to the page over DevTools, as it did until 2026-11. The
 //!   default, `x11`, sends X events only.
 //!
-//! - `aslr.arena=identity|fixed`: where the arena of a launched Linux program
-//!   lies: at 8 TiB, outside the kernel's identity map (`fixed`, default, ASLR
-//!   step S4) or at its physical address (`identity`, as before S4). `aslr=legacy` keeps
-//!   `identity`.
+//! - `aslr.arena=random|fixed|identity`: where the arena of a launched Linux
+//!   program (and of its fork children) lies: at a random 2 MiB step of
+//!   8..12 TiB, drawn per launch and per exec (`random`, default, ASLR step S5;
+//!   with `aslr=off` the draw is 0), always at 8 TiB (`fixed`, step S4) or at its
+//!   physical address (`identity`, as before S4). `aslr=legacy` keeps `identity`.
 //! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
 //!   programs (docs/design/ASLR.md, euromm::layout). `on` is the default (ring3::ASLR_DEFAULT);
 //!   `legacy` is the layout of before (demand region in PML4 slot 2); `on` places
@@ -124,8 +125,10 @@ fn apply(text: &str) {
                     Ok(p) if (1..=100).contains(&p) => crate::sched::set_driver_budget(p),
                     _ => crate::serial_println!("[bootopt] sched.drvbudget={v} is not 1..100: ignored"),
                 },
-                ("aslr.arena", "identity") => crate::ring3::arena_set_fixed(false),
-                ("aslr.arena", "fixed") => crate::ring3::arena_set_fixed(true),
+                ("aslr.arena", v) => match crate::ring3::arena_mode_parse(v) {
+                    Some(m) => crate::ring3::arena_set_mode(m),
+                    None => crate::serial_println!("[bootopt] aslr.arena={v} is not random, fixed or identity: ignored"),
+                },
                 ("aslr", v) => match euromm::layout::Mode::parse(v) {
                     Some(m) => crate::ring3::aslr_set_mode(m),
                     None => crate::serial_println!("[bootopt] aslr={v} is not on, off or legacy: ignored"),
