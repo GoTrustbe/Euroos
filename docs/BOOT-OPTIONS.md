@@ -88,7 +88,7 @@ attacker who finds a bug in a program cannot know in advance where its code and 
 |---|---|
 | `on` (default) | Every start of a program, and every new program a browser process starts, gets its own random addresses for the program read from disk (the browser), its libraries and large memory areas. A started program also gets a random place for its small clock page (vDSO). |
 | `off` | The same layout as `on`, but always at the same addresses. For people who compare two logs of the same run. Not for daily use. |
-| `legacy` | The layout of EuroOS 2026.11.16 and earlier: fewer random bits and the browser program always at the same address. A way back if a program misbehaves with `on`; it will be removed later. |
+| `legacy` | The layout of EuroOS 2026.11.16 and earlier: fewer random bits and the browser program always at the same address. A way back if a program misbehaves with `on`; it may be removed in a later release. |
 
 With `on`, every part of a program gets about 30 random bits (Linux gives 28): the browser's main program, its
 libraries and large areas, and also the program's own block (the dynamic loader, the small heap, small
@@ -97,6 +97,7 @@ all of them. The program's own block is cut into three parts that each get a pla
 the dynamic loader, the small heap with the small allocations, and the stack (see `aslr.split` below). Who learns
 an address in one part cannot work out the others.
 An unknown value is ignored and the kernel log says so; the log line `[bootopt] aslr=...` shows the mode in use.
+What this protects, what it does not and how to switch it off when a program misbehaves: [SECURITY-ASLR.md](SECURITY-ASLR.md).
 
 ### Where the program's own memory lies: `aslr.arena`
 

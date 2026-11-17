@@ -1,11 +1,12 @@
 # ASLR for Linux-ABI processes: a virtual arena per process (BUG-088)
 
-Status: S2 and S3 implemented (behaviour-neutral, branch `feature/11f-aslr-s23`, section 7); S0 and S1
-implemented, `aslr=on` the default (branch `feature/11f-aslr-s01`, section 8); S4 implemented behind the boot option
-`aslr.arena=fixed|identity`, `fixed` the default (branch `feature/11f-aslr-s4`, section 9); S5 implemented,
-`aslr.arena=random` the default, BUG-088 closed (branch `feature/11f-aslr-s5`, section 10); S6 implemented, image, heap
-and stack segments at bases of their own, `aslr.split=on` the default (branch `feature/11f-aslr-s6`, section 11); S7 and
-S8 are design only. Written against `feature/app-control` @ `e4b8ba4`;
+Status: S0 to S6 implemented and merged on this branch, `aslr=on` the default, BUG-088 closed (S5); S7 (documentation,
+tracker, release notes and the check of the merge with the BUG-380 fix) done; S8 (cleanup) open, design only. Section 12 is the
+as-built summary; sections 7 to 11 are the notes of each step. Branches: S2 and S3 `feature/11f-aslr-s23` (section 7), S0 and
+S1 `feature/11f-aslr-s01` (section 8), S4 `feature/11f-aslr-s4` (section 9, boot option `aslr.arena=fixed|identity`), S5
+`feature/11f-aslr-s5` (section 10, `aslr.arena=random` the default), S6 `feature/11f-aslr-s6` (section 11, image, heap and stack
+segments at bases of their own, `aslr.split=on` the default), S7 `feature/11f-aslr-s7` (section 12). Sections 0 to 6 are the
+design as it was written before the work; where it differs from the code, sections 7 to 12 say so. Written against `feature/app-control` @ `e4b8ba4`;
 the sibling branches `feature/11f-keylat`, `feature/11f-mem` and `feature/11f-integ` (`7253cb1`)
 were read for what touches this (section 1.5). Line numbers are those of `e4b8ba4`.
 Earlier work: `docs/proof/kbugs-2026-11e/README.md` (commits `aa1a096`, `8c3b146`), tracker
@@ -489,7 +490,9 @@ The varying bits of the 64 starts equal the bits of the draw (30, 30, 27): every
   clock call through it (BUG-350); an exec'd child got `AT_SYSINFO_EHDR` 0. The fork child now maps it at the parent's
   address (tables from the process pool, `paging::VDSO_SLOT`). Giving the exec'd image a vDSO at its new draw (design
   2.4) made Chromium's network service abort (BUG-355), so an exec'd image still has none: the vDSO is random per
-  launch, not per exec, and `[aslr-exec]` says so.
+  launch, not per exec, and `[aslr-exec]` says so. (Historic: BUG-355 was solved in the clock itself
+  afterwards, in `feature/11f-bugs-35x`, and an exec'd image has a vDSO again, at its own draw: 27 varying bits in every exec'd
+  Chromium child, `docs/proof/11f-aslr-s5/chrome-entropy.txt`; see section 12.)
 - The vDSO was mapped user-writable in every process (BUG-353), now read-only.
 - `DEMAND_FLOOR` was global: an exec in a child moved the swap range of the browser main (BUG-354). Now per process.
 - Class C also has `interrupts.rs` (`[pf-diag]` range of plausible code pointers) and the `exit_group` diagnostics
@@ -685,3 +688,114 @@ small mmap - brk 14 bits), as designed.
 - Two test corrections after the tests-first commit: the `[robust-paging]` totals had to count the new case (31 refusals,
   7 builds), and a host-test bound on the pairs inside one segment (`<= 11` varying bits) was wrong for a difference of
   two slides (it counts up to 14 bits); it now checks the distance range. Neither touches a >= 20-bit criterion.
+
+## 12. As built (S0 to S6) and S7
+
+Branch `feature/11f-aslr-s7` (from `feature/11f-aslr-s6` `55c6e25`, with `feature/11f-bug380` merged: BUG-380 and BUG-371).
+Proof of the merge check: `docs/proof/11f-aslr-s7/`. Every number below is taken from the proof directory named next to
+it; the numbers of the tables were not measured again in S7; the S7 merge check (KVM 1/2/4 GiB, TCG matrix, gui-smoke, Chromium) is in its README: 0 markers worse, `[vdso-mono]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]` and `[arena-segs]` OK.
+
+### 12.1 Where things lie (`aslr=on`, `aslr.arena=random`, `aslr.split=on`)
+
+The cut of one draw is `euromm::layout::draw` (host tests in `crates/euromm`); the zones are the constants of
+`crates/euromm/src/layout.rs`.
+
+| Zone | Range | What lies there |
+|---|---|---|
+| kernel | 0 .. 1 TiB | identity map, supervisor only. No user page of a glibc process (userspace-driver DMA pages stay identity on purpose) |
+| arena, image segment | 8 .. 12 TiB | executable of an embedded program and ld.so, at a random 2 MiB step; page slide for the executable (9 bits) and for ld.so (9 bits, at +8 MiB) |
+| arena, heap segment | 12 .. 16 TiB | brk heap (8-bit page slide) and the small-mmap window, at a random 2 MiB step |
+| arena, stack segment | 16 .. 20 TiB | the stack, a segment of 4 MiB, at a random 2 MiB step |
+| demand | 32 .. 96 TiB | executable from disk (Chromium) at 32 TiB + a draw over 4 TiB; mmap floor (libraries, large mmaps, thread stacks) at 40 TiB + a draw over 4 TiB |
+| vDSO | 100 TiB + a draw over 512 GiB | two pages, read-only |
+
+With `aslr=legacy` the demand region and the vDSO lie in PML4 slots 2 and 3 (1 .. 2 TiB) and the arena at its physical address.
+
+The three segments are three virtual views of the one contiguous RAM piece the launched process always had (`phys + offset`
+at the segment base), so the reaper, the frees and the census, which go by RAM, did not change. The image segment ends where the
+brk heap begins (32 MiB, or a quarter of a smaller arena), the heap segment ends 4 MiB before the end of the arena, the stack
+segment is the last 4 MiB (section 11). One draw of 40 bytes from the kernel DRBG (`entropy::draw_wait`) is taken per launch and
+per exec; a fork child that does not exec keeps the layout of its parent by design (`[aslr-fork]`). An exec in a fork child
+(every Chromium child) moves its arena to the segments of its new draw (`lazy_arena_rebase`, section 10) and gets a vDSO at its
+new draw (BUG-355 solved in the clock, `feature/11f-bugs-35x`).
+
+Native (Euro-profile, musl) programs and userspace drivers keep the 2 MiB arena at its physical address (A12, section 6.3).
+
+### 12.2 Entropy (varying address bits)
+
+KVM boots at 2 GiB with 2 vCPU; `[aslr]` = 64 starts of the embedded probe `gaslrx` per boot; "per boot" is the figure `[aslr]`
+prints. Chromium: 20 starts, the launched browser and every exec'd child (`[aslr-layout]` lines). Sources: S6 state (the final
+one) `docs/proof/11f-aslr-s6/README.md`, `entropy.txt`, `chrome-entropy.txt`; the step in which a region got its bits:
+`docs/proof/11f-aslr-s01/`, `11f-aslr-s5/`. "Linux" is the default of a 64-bit Linux as listed in section 2.2.
+
+| Region | Before S1 (`3a51bc6`) | `aslr=on` as built (S6, `831894f`) | Linux |
+|---|---|---|---|
+| embedded program (PIE) | 0 | 30 | 28 |
+| ld.so | 0 | 30 | 28 |
+| stack | 8 | 29 | 22 |
+| brk heap | 8 | 29 | 13 (relative to the executable) |
+| small mmap (4 KiB) | 9 | 30 | 28 |
+| mmap 1 MiB, libc (mmap floor) | 19 (S1 proof; 20 in `11f-aslr-s5`) | 30 | 28 |
+| vDSO | 0 | 27 | (with mmap) |
+| Chromium executable from disk (launch and every exec) | 0 | 30 | 28 |
+| Chromium arena: image, heap and stack segment base (launch and exec) | - | 21 each | |
+
+Which step gave which value: demand zone, executable from disk, mmap floor and vDSO in S1 (`11f-aslr-s01`); embedded executable,
+ld.so, stack, brk and small mmap in S5 (`11f-aslr-s5`); independent segments in S6 (`11f-aslr-s6`). The tracker entry BUG-088
+has the figures from before `8c3b146` (brk 4, mmap 5).
+
+Distance between two regions (what one leaked address tells about another), varying bits, 21 boots per image (`[aslr-ind]`):
+
+| distance | before S6 (`7b2eea6`) | as built (S6) |
+|---|---|---|
+| exe - brk | 14 | 31 |
+| brk - stack | 10 | 31 |
+| exe - stack | 10 | 32 |
+| exe - small mmap | 15 | 31 |
+| stack - small mmap | 10 | 31 |
+| stack - ld.so | 10 | 32 |
+| exe - mmap 1 MiB | 34 | 34 |
+| exe - vDSO | 30 | 31 |
+| inside one segment: ld.so - exe, small mmap - brk | 12, 14 | 12, 14 (page slides only, by design) |
+| Chromium ld.so - brk, brk - stack, ld.so - stack | 12, 10, 10 | 31, 31, 32 (launch and exec) |
+
+`[aslr]` OK in 21 of 21 boots (S6 proof); `[aslr-ind]` FAILED in 21 of 21 before S6 and OK in 21 of 21 after it. Of 185 exec'd
+Chromium children none kept an address of the launched browser in any region (exe, ld.so, the three segments, brk, stack, floor,
+vDSO). `aslr=off`: 0 varying bits everywhere (image 8 TiB, heap 12 TiB, stack 16 TiB); `aslr=legacy`: the layout from before S1
+(exe, ld.so and vDSO 0 bits, floor 20, brk and stack 8; `11f-aslr-s5/chrome-entropy.txt`).
+
+### 12.3 Boot options
+
+| Option | Values | Default | Effect |
+|---|---|---|---|
+| `aslr` | `on`, `off`, `legacy` | `on` | `on` draws every region; `off` is the same layout with every draw 0 (repeatable addresses); `legacy` is the layout from before S1 (identity arena, demand region in PML4 slot 2) |
+| `aslr.arena` | `random`, `fixed`, `identity` | `random` | `random`: the segments above; `fixed`: one piece at 8 TiB; `identity`: the arena at its physical address (as before S4). `aslr=legacy` always means `identity` |
+| `aslr.split` | `on`, `off` | `on` | with `random`: three segments (`on`) or one piece at one drawn base in 8 .. 12 TiB (`off`, the S5 layout). `fixed` and `identity` are always one piece |
+
+The log lines `[bootopt] aslr=`, `[bootopt] aslr.arena=` and `[bootopt] aslr.split=` show what is in use (`aslr.split` shows `off`
+when the placement is not `random`). User text: `docs/BOOT-OPTIONS.md` and `docs/SECURITY-ASLR.md`.
+
+### 12.4 Limits
+
+- The stack segment is 4 MiB; a stack that grows past it faults in ring 3 and ends the program (before S6 the stack could run on
+  into an unused part of the mmap window). The small-mmap window is 1 .. 2 MiB smaller than before S6.
+- Inside one segment only the page slides separate two regions: ld.so - exe 12 bits, small mmap - brk 14 bits.
+- Not random: the kernel (no KASLR, section 6.3), native Euro-profile programs and userspace drivers (A12). Mmap hint addresses
+  are not honoured (section 6.3), and a fork child that does not exec keeps the layout of its parent.
+- The serial console prints addresses (`[glibc] spawned ... rsp@`, tombstones): it is the operator's console, not a channel a
+  process can read (section 4).
+- `aslr=legacy` and the identity builders are still in the kernel (S8).
+
+### 12.5 What S8 would do (not done)
+
+Remove `aslr=legacy` and the identity builders for glibc; share PML4[0] with the boot PDPT; give the launched process a lazy arena
+instead of one contiguous RAM piece (then the "pinned" rule of the copy-on-write code goes). Exit criterion in section 5.
+
+### 12.6 Corrections to the design text found while writing this section
+
+- Section 8 says an exec'd image has no vDSO; since the clock fix (BUG-355, `feature/11f-bugs-35x`) it has one at its own draw.
+- Section 2.1 gives the arena as 8 .. 12 TiB; with S6 the arena zone is 8 .. 20 TiB (three windows of 4 TiB; the table already
+  mentions it).
+- Section 4 foresees a shell command `aslr` that shows and sets the mode; there is none (`kernel/src/shell.rs`). The mode is a boot
+  option only.
+- Sections 0 to 5 describe the state before the work ("today", "target"); sections 7 to 11 are what was built.

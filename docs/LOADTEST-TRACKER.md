@@ -1797,6 +1797,10 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   the anchor TSC, interrupts off. `[vdso-mono]` strict (any step back, stalled reads, AP readers, cross-CPU): FAILED in
   12 of 12 base legs -> OK everywhere (TCG matrix 10/10, 30/30 loaded KVM boots). Found: BUG-400 (the tick count runs
   slow against the host). Proof `docs/proof/11f-bug380/`.
+- **2026-11-17 (`feature/11f-aslr-s7`, S7):** S6 merged with the BUG-380 fix (`4599d0e`); documentation: design section 12 (as built),
+  `docs/SECURITY-ASLR.md`, boot options checked, release notes in `docs/UPDATES.md`. Merge check: KVM 1/2/4 GiB 0 markers worse against
+  `55c6e25` and `19f7586`, `[vdso-mono]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]`, `[arena-segs]` OK; TCG matrix 10/10 with
+  `[vdso-mono]` OK in every leg; gui-smoke 67/67; Chromium 5/5 starts and a sites round 14/14. Proof `docs/proof/11f-aslr-s7/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise

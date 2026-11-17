@@ -1,0 +1,34 @@
+# TCG matrix, 10 legs, merge image (4599d0e), q35, qemu64,+smep,+smap, e1000e restrict=on, two lanes pinned 4,5,24,25 and 6,26
+user-smp1-iommu done 11:57:15 after 421s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 11:57:36 after 442s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 12:04:11 after 417s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 12:05:02 after 446s desktop=1 wd=0 nmi=0
+kernel-smp1 done 12:11:08 after 416s desktop=1 wd=0 nmi=0
+kernel-smp4 done 12:12:23 after 441s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 12:17:29 after 381s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 12:19:04 after 401s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 12:24:20 after 411s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 12:26:15 after 431s desktop=1 wd=0 nmi=0
+
+## user-smp4-iommu: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (273575 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (687616 reads, 1343 stalled): steps back 0 tim; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## user-smp4-noiommu: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (250622 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (681472 reads, 1331 stalled): steps back 0 tim; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## kernel-smp4: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (296855 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (686592 reads, 1341 stalled): steps back 0 tim; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## storage-smp4-iommu-1g: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (322552 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (684623 reads, 1337 stalled): steps back 0 tim; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## combined-smp4-iommu-1g: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (265084 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (689152 reads, 1346 stalled): steps back 0 tim; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## user-smp1-iommu: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (617064 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max ; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## user-smp1-noiommu: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (733952 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max ; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## kernel-smp1: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (782628 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max ; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## storage-smp1-iommu-1g: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (786216 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max ; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+## combined-smp1-iommu-1g: [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (663393 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max ; crash=0 aslr=0/FAILED aslr-ind-FAILED=0
+
+## [vdso-mono] verdict (end of the full line) per leg
+user-smp4-iommu: the probe cannot exec) → OK ✓
+user-smp4-noiommu: the probe cannot exec) → OK ✓
+kernel-smp4: the probe cannot exec) → OK ✓
+storage-smp4-iommu-1g: the probe cannot exec) → OK ✓
+combined-smp4-iommu-1g: the probe cannot exec) → OK ✓
+user-smp1-iommu: the probe cannot exec) → OK ✓
+user-smp1-noiommu: the probe cannot exec) → OK ✓
+kernel-smp1: the probe cannot exec) → OK ✓
+storage-smp1-iommu-1g: the probe cannot exec) → OK ✓
+combined-smp1-iommu-1g: the probe cannot exec) → OK ✓

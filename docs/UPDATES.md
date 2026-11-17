@@ -14,6 +14,43 @@ system the same date is a build version of eight digits, `20261116`: that is wha
 `euroupdate status` shows and what the update check compares. A server version is
 newer when this number is larger; an older one is refused (anti-rollback, below).
 
+## What changed for users and administrators in NEXT
+
+Version number and date: `NEXT` (not fixed yet; fill in when the release is made).
+
+- **Random addresses for programs (ASLR).** Every Linux program (the browser and every other program built for Linux) now
+  starts at addresses that differ from start to start, and every process the browser starts gets new addresses of its own.
+  The program, its libraries, its large memory areas, its heap and its stack each lie at a random place of their own; the
+  distance between them is different every time. Nothing has to be set and nothing changes in how programs are used. Three
+  boot options exist as a way back if a program misbehaves: `aslr.split`, `aslr.arena`, `aslr` (`on`, `off`, `legacy`); see
+  [SECURITY-ASLR.md](SECURITY-ASLR.md) for the order to try them in and [BOOT-OPTIONS.md](BOOT-OPTIONS.md) for the values.
+  Design, steps and measurements: [design/ASLR.md](design/ASLR.md) (section 12), tracker entry BUG-088.
+  Limits: the stack of a program has a part of 4 MiB; the kernel, native EuroOS programs and drivers are not randomised.
+- **Security fix: the vDSO pages were writable (BUG-353).** The small shared pages that give Linux programs the clock were mapped
+  writable for every program, and they are the same pages for all of them: one program could have changed code and time that
+  every other Linux program runs. They are read-only now (self-test `[vdso-ro]`). The flaw was found by reading the code while
+  preparing ASLR; it was in 2026.11.16.
+- **The clock a program reads no longer goes backwards.** The vDSO clock could step back, by up to 10 ms (BUG-355; this made
+  the browser's network service abort when its child processes had a vDSO), and by microseconds under software emulation
+  and on a busy host (BUG-371, BUG-380). The system call and the vDSO give the same time now.
+- **Fork children.** A program that forks and does not start another program had no vDSO in the child, and died on its first
+  clock call (BUG-350). A system call that writes into memory the child still shares with its parent (`getrandom`,
+  `clock_gettime`, `pipe2` and others) returned EFAULT (BUG-351). A child killed by a fault was never reported to its parent's
+  `wait4`, which waited 60 s (BUG-352). An exec in a child moved the swap range of the browser's main process (BUG-354).
+- **Open formats only** (unchanged): VP9, VP8, AV1, Opus, Vorbis.
+
+Known open points in NEXT (all in [LOADTEST-TRACKER.md](LOADTEST-TRACKER.md)):
+
+- **BUG-390 (open, under investigation):** in one of a number of one-hour browser sessions the desktop stopped answering: the browser's main thread spun with
+  interrupts off in `child_mem_swap`. Seen once, not reproduced, not fixed yet. Severity HIGH when it happens (no panic, no watchdog).
+- **BUG-400 (open, under investigation):** the kernel's tick count runs slow against the host clock (about 1 s per 15 minutes on KVM, about 1 % under software
+  emulation), and with it the clock programs read. Not fixed yet.
+- **BUG-370:** `fstat` on a pipe end answers EBADF.
+- **BUG-372:** a system call that writes into an untouched page of a writable file mapping returns EFAULT until the program has
+  written the page itself.
+- **BUG-341:** the OpenStreetMap step of the browser test sometimes ends "content still changing"; no kernel line near it, rated
+  as a test or live-site problem.
+
 ## What changed for users and administrators in 2026.11.16
 
 - **Several cores for programs.** `smpuser=off|test|on`, off by default; see
