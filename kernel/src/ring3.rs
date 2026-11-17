@@ -176,11 +176,15 @@ fn prot_none_set(start: u64, end: u64, none: bool) {
 ///
 /// BUG-351: page by page, and the NEWEST mapping of a page decides (a later
 /// MAP_FIXED, the .bss overlay of a library, lies over the flat mapping of the
-/// whole library, which stays in the list). A page of a file mapping the
-/// process already holds writable, or shares copy-on-write after a fork (only
-/// a written page is shared that way), is its own memory and takes the write.
-/// Before, any overlap with any file mapping refused it: getrandom, read,
-/// clock_gettime... into libc's .data or .bss gave EFAULT, in every fork child
+/// whole library, which stays in the list): the .bss overlay is anonymous
+/// memory. A page of a file mapping the process holds writable (it wrote it)
+/// or shares copy-on-write after a fork (only a written page is shared that
+/// way) takes the write, unless mprotect made it read-only since
+/// (`RO_FILE_RANGES`: Chromium's ProtectedMemory writes its page, makes it
+/// read-only and CHECKs that a system call writing there gives EFAULT,
+/// base::internal::CheckMemoryReadOnly; glibc's RELRO). Before, any overlap
+/// with any file mapping refused the write: getrandom, clock_gettime,
+/// socketpair... into libc's .data or .bss gave EFAULT, in every fork child
 /// at once (glibc's malloc asks getrandom for its tcache key there).
 fn demand_file_backed(ptr: u64, len: usize) -> bool {
     if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < demand_base() {
@@ -204,16 +208,60 @@ fn demand_file_backed(ptr: u64, len: usize) -> bool {
         let newest = maps.iter().rev().find(|&&(b, l, _, _, _)| a >= b && a < b + l);
         if let Some(&(_, _, fi, _, _)) = newest {
             if fi != usize::MAX {
-                let own = crate::paging::leaf_entry_in(pml4, a)
-                    .is_some_and(|e| e & (2 | crate::paging::COW) != 0);
+                let own = match crate::paging::leaf_entry_in(pml4, a) {
+                    Some(e) if e & crate::paging::COW != 0 => true,
+                    Some(e) if e & 2 != 0 => !RO_FILE_RANGES.lock().iter().any(|&(p, s, e)| p == pml4 && a >= s && a < e),
+                    _ => false,
+                };
                 if !own {
-                    return true; // a page of the file the process has not written
+                    return true; // a page of the file the process has not written, or read-only
                 }
             }
         }
         a = (a & !0xFFF) + 4096;
     }
     false
+}
+
+/// BUG-351: ranges of file mappings mprotect made read-only (not PROT_NONE),
+/// per address space (CR3). mprotect changes no page entry here, so this is
+/// the only record of it; `demand_file_backed` refuses a kernel write there.
+/// An entry of an address space that is gone only makes a write EFAULT that
+/// the rule before BUG-351 refused as well; the list is bounded.
+static RO_FILE_RANGES: Mutex<alloc::vec::Vec<(u64, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+fn ro_file_note(start: u64, end: u64, prot: u64) {
+    if end <= start {
+        return;
+    }
+    let ro = prot != 0 && prot & 2 == 0;
+    let file = ro && DEMAND_FILE_MAPS.lock().iter().any(|&(b, l, fi, _, _)| fi != usize::MAX && start < b + l && end > b);
+    let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    let mut g = RO_FILE_RANGES.lock();
+    if !file && !g.iter().any(|&(p, s, e)| p == pml4 && start < e && end > s) {
+        return; // the common case (V8 and every anonymous mapping): nothing to do
+    }
+    let mut out = alloc::vec::Vec::with_capacity(g.len() + 2);
+    for &(p, s, e) in g.iter() {
+        if p != pml4 || e <= start || s >= end {
+            out.push((p, s, e));
+            continue;
+        }
+        if s < start {
+            out.push((p, s, start));
+        }
+        if e > end {
+            out.push((p, end, e));
+        }
+    }
+    if file {
+        out.push((pml4, start, end));
+    }
+    if out.len() > 2048 {
+        let cut = out.len() - 2048;
+        out.drain(..cut);
+    }
+    *g = out;
 }
 
 /// Does [ptr,ptr+len) touch any PROT_NONE (inaccessible) range?
@@ -19752,6 +19800,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let addr = a1 & !0xFFF;
             let end = addr.saturating_add((a2 + 0xFFF) & !0xFFF);
             prot_none_set(addr, end, a3 == 0);
+            ro_file_note(addr, end, a3); // BUG-351
             0
         }
         13 => {

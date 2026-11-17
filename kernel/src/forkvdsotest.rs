@@ -203,8 +203,10 @@ fn settle(pml4: u64, p: &Page) -> Result<(), &'static str> {
             r = Err("parent's bytes changed");
         }
     }
-    if e & crate::paging::COW == 0 && e & 2 != 0 && !ring3::copy_to_user(p.va + OFF, &p.copy[OFF as usize..]) {
-        r = Err("restore refused");
+    if e & crate::paging::COW == 0 && e & 2 != 0 {
+        // SAFETY: the child's own writable copy, in this address space, inside
+        // a system call (RFLAGS.AC set: user pages reachable).
+        unsafe { core::ptr::copy_nonoverlapping(p.copy[OFF as usize..].as_ptr(), (p.va + OFF) as *mut u8, 4096 - OFF as usize) };
     }
     r
 }
