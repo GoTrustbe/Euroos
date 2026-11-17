@@ -121,6 +121,54 @@ const ARENA_SPAN: u64 = 2 * 1024 * 1024;
 /// (e.g. the DOOM port, [[eurokernel-project]]) raises it so that user-pointer
 /// validation covers its whole arena instead of clamping at 2 MiB.
 static ARENA_SPAN_DYN: AtomicU64 = AtomicU64::new(ARENA_SPAN);
+/// ASLR S6: the heap and stack segments of a glibc arena cut in three
+/// (`euromm::layout::Segs`): virtual base and arena offset of each, 0 for an
+/// arena in one piece. They belong to the arena whose image segment is at
+/// `ARENA_SEGS_KEY`: the native paths that swap `ARENA_BASE` to an arena of
+/// their own (bg dispatch, the pointer self-test) leave these alone, and with
+/// another base the arena is one piece again (`arena_segs_now`).
+static ARENA_HEAP_VIRT: AtomicU64 = AtomicU64::new(0);
+static ARENA_HEAP_OFF: AtomicU64 = AtomicU64::new(0);
+static ARENA_STACK_VIRT: AtomicU64 = AtomicU64::new(0);
+static ARENA_STACK_OFF: AtomicU64 = AtomicU64::new(0);
+static ARENA_SEGS_KEY: AtomicU64 = AtomicU64::new(0);
+
+/// ASLR S6: the segments of the arena of the running process.
+fn arena_segs_now() -> euromm::layout::Segs {
+    use euromm::layout::{Seg, Segs};
+    let base = ARENA_BASE.load(Ordering::Relaxed);
+    let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+    let hv = ARENA_HEAP_VIRT.load(Ordering::Relaxed);
+    if hv == 0 || ARENA_SEGS_KEY.load(Ordering::Relaxed) != base {
+        return Segs::one(base, span);
+    }
+    let (ho, sv, so) = (ARENA_HEAP_OFF.load(Ordering::Relaxed), ARENA_STACK_VIRT.load(Ordering::Relaxed), ARENA_STACK_OFF.load(Ordering::Relaxed));
+    Segs::three([
+        Seg { virt: base, off: 0, len: ho },
+        Seg { virt: hv, off: ho, len: so.saturating_sub(ho) },
+        Seg { virt: sv, off: so, len: span.saturating_sub(so) },
+    ])
+    .unwrap_or(Segs::one(base, span))
+}
+
+/// ASLR S6: the virtual base of segment `i` of `segs` (0: none; the logs).
+fn seg_virt(segs: &euromm::layout::Segs, i: usize) -> u64 {
+    segs.list().get(i).map(|s| s.virt).unwrap_or(0)
+}
+
+/// ASLR S6: make `segs` the arena of the running process (`ARENA_BASE` is the
+/// image segment, `ARENA_SPAN_DYN` the whole span).
+fn arena_segs_set(segs: &euromm::layout::Segs) {
+    let x = segs.list();
+    let (hv, ho, sv, so) = if segs.split() { (x[1].virt, x[1].off, x[2].virt, x[2].off) } else { (0, 0, 0, 0) };
+    ARENA_HEAP_VIRT.store(hv, Ordering::Relaxed);
+    ARENA_HEAP_OFF.store(ho, Ordering::Relaxed);
+    ARENA_STACK_VIRT.store(sv, Ordering::Relaxed);
+    ARENA_STACK_OFF.store(so, Ordering::Relaxed);
+    ARENA_SEGS_KEY.store(segs.base(), Ordering::Relaxed);
+    ARENA_BASE.store(segs.base(), Ordering::Relaxed);
+    ARENA_SPAN_DYN.store(segs.span(), Ordering::Relaxed);
+}
 
 /// Does `[ptr, ptr+len)` lie entirely within the arena of the running process?
 /// (Overflow-safe. If no arena has been set yet — a purely kernel-internal call —
@@ -299,11 +347,9 @@ pub(crate) fn in_user_arena(ptr: u64, len: usize) -> bool {
             None => false,
         };
     }
-    let top = base + ARENA_SPAN_DYN.load(Ordering::Relaxed);
-    match ptr.checked_add(len as u64) {
-        Some(end) => ptr >= base && end <= top,
-        None => false,
-    }
+    // ASLR S6: inside one segment of the arena (a range across the gap
+    // between two segments is not memory of the process).
+    arena_segs_now().contains(ptr, len as u64)
 }
 
 /// `-EFAULT`: returned by a syscall when a supplied user pointer does not lie
@@ -5538,14 +5584,20 @@ fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5
 /// then a crash; one of them wedged the scheduler lock). An arena too small for
 /// any layout gets empty brk and mmap regions (every allocation ENOMEM), which
 /// the launchers never hand out (their floor is 64 MiB).
-fn glibc_arena_layout(arena: u64, span: u64, lay: &euromm::layout::Layout) -> (u64, u64, u64) {
+///
+/// ASLR S6: the arena is a list of segments; the result is (brk start, mmap
+/// window start, mmap window end = `HEAP_END`, stack top), each seen through
+/// its segment (`euromm::arena::glibc_layout_segs`). In one piece the window
+/// ends 1 MiB below the stack top, as before; in three it ends with the heap
+/// segment.
+fn glibc_arena_layout(segs: &euromm::layout::Segs, lay: &euromm::layout::Layout) -> (u64, u64, u64, u64) {
     let s = euromm::arena::Slides { brk: lay.brk, mmap: lay.mmap, stack: lay.stack };
-    match euromm::arena::glibc_layout(arena, span, s) {
-        Some(l) => (l.brk_start, l.mmap_start, l.stack_top),
+    match euromm::arena::glibc_layout_segs(segs, s) {
+        Some(l) => (l.brk_start, l.mmap_start, l.heap_end, l.stack_top),
         None => {
-            crate::serial_println!("[glibc] arena of {} MiB: no layout fits, brk and mmap refused", span >> 20);
-            let top = arena + span;
-            (top - 0x0020_0000, top - 0x0020_0000, top - 0x0010_0000)
+            crate::serial_println!("[glibc] arena of {} MiB: no layout fits, brk and mmap refused", segs.span() >> 20);
+            let top = segs.virt(segs.span());
+            (top - 0x0020_0000, top - 0x0020_0000, top - 0x0020_0000, top - 0x0010_0000)
         }
     }
 }
@@ -9973,8 +10025,9 @@ pub(crate) fn test_read_as_parent(va: u64, out: &mut [u8; 4096]) -> bool {
     });
     true
 }
-pub(crate) fn test_arena() -> (u64, u64) {
-    (ARENA_BASE.load(Ordering::Relaxed), ARENA_SPAN_DYN.load(Ordering::Relaxed))
+/// ASLR S6: the segments of the arena of the running process.
+pub(crate) fn test_arena() -> euromm::layout::Segs {
+    arena_segs_now()
 }
 pub(crate) fn test_vdso_frame() -> u64 {
     VDSO_TIME_FRAME.load(Ordering::Relaxed)
@@ -11070,6 +11123,12 @@ struct ChildMem {
     vdso: u64,
     arena_base: u64,
     arena_span: u64,
+    // ASLR S6: the heap and stack segments (`arena_segs_now`).
+    seg_heap_virt: u64,
+    seg_heap_off: u64,
+    seg_stack_virt: u64,
+    seg_stack_off: u64,
+    seg_key: u64,
     brk_cur: u64,
     brk_end: u64,
     heap_break: u64,
@@ -11094,6 +11153,11 @@ fn child_mem_snapshot(task: usize) {
         vdso: VDSO_CUR.load(Ordering::Relaxed),
         arena_base: ARENA_BASE.load(Ordering::Relaxed),
         arena_span: ARENA_SPAN_DYN.load(Ordering::Relaxed),
+        seg_heap_virt: ARENA_HEAP_VIRT.load(Ordering::Relaxed),
+        seg_heap_off: ARENA_HEAP_OFF.load(Ordering::Relaxed),
+        seg_stack_virt: ARENA_STACK_VIRT.load(Ordering::Relaxed),
+        seg_stack_off: ARENA_STACK_OFF.load(Ordering::Relaxed),
+        seg_key: ARENA_SEGS_KEY.load(Ordering::Relaxed),
         brk_cur: BRK_CUR.load(Ordering::Relaxed),
         brk_end: BRK_END.load(Ordering::Relaxed),
         heap_break: HEAP_BREAK.load(Ordering::Relaxed),
@@ -11219,6 +11283,11 @@ fn child_mem_swap(task: usize) -> bool {
     swp!(VDSO_CUR, cm.vdso);
     swp!(ARENA_BASE, cm.arena_base);
     swp!(ARENA_SPAN_DYN, cm.arena_span);
+    swp!(ARENA_HEAP_VIRT, cm.seg_heap_virt);
+    swp!(ARENA_HEAP_OFF, cm.seg_heap_off);
+    swp!(ARENA_STACK_VIRT, cm.seg_stack_virt);
+    swp!(ARENA_STACK_OFF, cm.seg_stack_off);
+    swp!(ARENA_SEGS_KEY, cm.seg_key);
     swp!(BRK_CUR, cm.brk_cur);
     swp!(BRK_END, cm.brk_end);
     swp!(HEAP_BREAK, cm.heap_break);
@@ -11427,8 +11496,9 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     if arena == 0 || span == 0 {
         return (-8i64) as u64;
     }
-    let nblocks = span >> 21;
-    let frames = (nblocks * 512) as usize;
+    // ASLR S6: the segments of the arena of the child (one piece, or image,
+    // heap and stack at bases of their own); every walk below goes by them.
+    let old_segs = arena_segs_now();
 
     // POSIX: close-on-exec descriptors are gone the moment the new image starts
     // (and not when the exec is refused above: the caller then still has them).
@@ -11480,13 +11550,16 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         if lazy {
             // BUG-156: the arena of a fork child is single frames. They go
             // back to the pool; the new image gets a frame for what it touches.
-            let n = crate::paging::lazy_arena_discard(cr3, &crate::paging::Segs::one(arena, span));
+            let n = crate::paging::lazy_arena_discard(cr3, &old_segs);
             static SAID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
             if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
                 crate::serial_println!("[execve] task {}: {} KiB of arena pages back to the process pool", crate::sched::current(), n * 4);
             }
         } else {
-            unsafe { arena_fill(arena, None, frames * 4096); }
+            // ASLR S6: segment by segment (the gaps between them are not mapped).
+            for s in old_segs.list() {
+                unsafe { arena_fill(s.virt, None, s.len as usize); }
+            }
         }
     }
     let t_wipe = unsafe { core::arch::x86_64::_rdtsc() };
@@ -11511,21 +11584,22 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // ASLR S5 (design 2.4, order): the pages at the old base went back above
     // (lazy_arena_discard), now the old table chain goes and the arena is
     // built at the base of the new draw. A contiguous or identity arena stays.
-    let ap = exec_arena(arena, nblocks * (1 << 21), lazy, &lay);
-    let arena = if ap.virt != arena {
+    // S6: all three segments of a split arena move (each to a base of its own).
+    let ap = exec_arena(&old_segs, lazy, &lay);
+    let arena = if ap.segs != old_segs {
         use x86_64::registers::control::Cr3;
         let cr3 = Cr3::read().0.start_address().as_u64();
-        let ok = crate::paging::lazy_arena_rebase(cr3, &crate::paging::Segs::one(arena, span), &crate::paging::Segs::one(ap.virt, span));
+        let ok = crate::paging::lazy_arena_rebase(cr3, &old_segs, &ap.segs);
         crate::paging::flush_tlb_all();
         if !ok {
             // The old chain is gone and the new one could not be built: the
             // image is wiped already, so the child cannot go on.
-            crate::serial_println!("[execve] task {}: no frames for the arena tables at {:#x}: ENOMEM", crate::sched::current(), ap.virt);
-            ARENA_BASE.store(ap.virt, Ordering::Relaxed);
+            crate::serial_println!("[execve] task {}: no frames for the arena tables at {:#x}: ENOMEM", crate::sched::current(), ap.base());
+            arena_segs_set(&ap.segs);
             return (-12i64) as u64;
         }
-        ARENA_BASE.store(ap.virt, Ordering::Relaxed);
-        ap.virt
+        arena_segs_set(&ap.segs);
+        ap.base()
     } else {
         arena
     };
@@ -11538,14 +11612,14 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     SHARED_MAPS.lock().clear();
 
     let ldso_base = ap.ldso();
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21), &lay);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     // The mmap arena runs from mmap_start up to just below the stack — same as
     // glibc_disk_launch. Setting HEAP_END = HEAP_BREAK (the earlier bug) left
     // zero bytes for small arena mmaps, so ld.so's libc.so.6 mmap got ENOMEM.
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
     let exe_base = lay.exe_base;
@@ -11575,8 +11649,8 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     };
     let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base, vdso) };
     crate::serial_println!(
-        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} arena {arena:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso {vdso:#x} (aslr={}, arena {})",
-        crate::sched::current(), aslr_mode().name(), arena_mode_name()
+        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} arena {arena:#x} hseg {:#x} sseg {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso {vdso:#x} (aslr={}, arena {}, split {})",
+        crate::sched::current(), seg_virt(&ap.segs, 1), seg_virt(&ap.segs, 2), aslr_mode().name(), arena_mode_name(), arena_split_name()
     );
 
     crate::serial_println!(
@@ -11741,7 +11815,9 @@ fn do_glibc_fork() -> u64 {
             return (-12i64) as u64;
         }
     };
-    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, &crate::paging::Segs::one(arena, span)) {
+    // ASLR S6: the child gets the segments of the parent, bit for bit.
+    let segs = arena_segs_now();
+    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, &segs) {
         let n = crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
         crate::serial_println!("[fork] arena alloc FAILED (no frame for the page tables of a {} MiB arena, {n} given back, pool has {} MiB)",
@@ -11786,7 +11862,7 @@ fn do_glibc_fork() -> u64 {
     // Share the pages of the parent arena that hold something (ld.so, libc,
     // heap, stacks) copy-on-write, 2 MiB at a time with a window for the
     // timer (BUG-128). The forking thread stands in this syscall.
-    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, &crate::paging::Segs::one(arena, span), FORK_POOL_RESERVE, &mut irq_window) else {
+    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, &segs, FORK_POOL_RESERVE, &mut irq_window) else {
         crate::serial_println!("[fork] arena alloc FAILED ({} MiB arena, pool has {} MiB)",
             span >> 20, crate::procpool::free_frames() / 256);
         undo_fork("no memory for the copy of the arena");
@@ -11988,51 +12064,90 @@ pub fn arena_fixed() -> bool {
 pub fn arena_random() -> bool {
     arena_fixed() && ARENA_MODE.load(Ordering::Relaxed) == 2
 }
+/// ASLR S6, boot option `aslr.split=on|off` (default `on`): with `random`
+/// the arena is cut into three segments (image, heap, stack) at bases of
+/// their own; `off` keeps it in one piece at one drawn base (the S5 layout).
+/// `fixed` and `identity` are always one piece.
+static ARENA_SPLIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+pub fn arena_split_parse(v: &str) -> Option<bool> {
+    match v.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+pub fn arena_split_set(on: bool) {
+    ARENA_SPLIT.store(on, Ordering::Relaxed);
+}
+pub fn arena_split_on() -> bool {
+    ARENA_SPLIT.load(Ordering::Relaxed)
+}
+/// The value of `aslr.split` in use (`[bootopt]`): `off` when the placement
+/// is not `random` (one piece whatever the option says).
+pub fn arena_split_name() -> &'static str {
+    if arena_split_on() && arena_random() { "on" } else { "off" }
+}
 /// The name of the placement in use (`[bootopt]`, `[aslr-layout]`).
 pub fn arena_mode_name() -> &'static str {
     if arena_random() { "random" } else if arena_fixed() { "fixed" } else { "identity" }
 }
 /// Where an image puts its arena (ASLR S5): the virtual base and the page
-/// slides of the embedded executable and of ld.so inside it.
+/// slides of the embedded executable and of ld.so inside it. S6: the arena is
+/// a list of segments (`segs`); the executable and ld.so lie in the first.
 #[derive(Clone, Copy, Debug)]
 pub struct ArenaPlace {
-    pub virt: u64,
+    pub segs: euromm::layout::Segs,
     pub exe_slide: u64,
     pub ldso_slide: u64,
 }
 impl ArenaPlace {
+    /// The virtual base of the image segment (`ARENA_BASE`).
+    pub fn base(&self) -> u64 {
+        self.segs.base()
+    }
     /// Where ld.so is loaded: +8 MiB and its slide.
     pub fn ldso(&self) -> u64 {
-        self.virt + euromm::layout::LDSO_OFF + self.ldso_slide
+        self.base() + euromm::layout::LDSO_OFF + self.ldso_slide
     }
     /// Where an embedded executable of `exe_bytes` is loaded: the start of the
     /// arena and its slide, as far as the program still ends below ld.so.
     pub fn exe(&self, exe_bytes: u64) -> u64 {
         let room = euromm::layout::LDSO_OFF.saturating_sub((exe_bytes + 0xFFF) & !0xFFF);
-        self.virt + self.exe_slide.min(room & !0xFFF)
+        self.base() + self.exe_slide.min(room & !0xFFF)
+    }
+    /// ASLR S6: where the kernel reaches the arena address `va` of a launched
+    /// process whose RAM starts at `phys` (through the identity map): the RAM
+    /// at the arena offset of `va`, whatever segment it lies in.
+    pub fn kern(&self, va: u64, phys: u64) -> u64 {
+        phys + self.segs.off(va).unwrap_or(va.wrapping_sub(self.base()))
     }
 }
 /// The arena of an image whose RAM is at `phys` (`span` bytes) with the draw
 /// `lay`: `identity` at `phys`, `fixed` at 8 TiB, `random` at the drawn base
 /// (`euromm::layout::arena_base`) with the drawn slides.
 fn arena_place(phys: u64, span: u64, lay: &euromm::layout::Layout) -> ArenaPlace {
+    use euromm::layout::Segs;
     if arena_random() {
-        ArenaPlace { virt: euromm::layout::arena_base(lay, span), exe_slide: lay.exe_slide, ldso_slide: lay.ldso_slide }
+        // ASLR S6: three segments (image, heap, stack) at bases of their own,
+        // unless `aslr.split=off` (the S5 layout: one piece at the drawn base).
+        let one = || Segs::one(euromm::layout::arena_base(lay, span), span);
+        let segs = if arena_split_on() { euromm::layout::split_segs(lay, span).unwrap_or_else(one) } else { one() };
+        ArenaPlace { segs, exe_slide: lay.exe_slide, ldso_slide: lay.ldso_slide }
     } else if arena_fixed() {
-        ArenaPlace { virt: crate::paging::ARENA_ZONE_BASE, exe_slide: 0, ldso_slide: 0 }
+        ArenaPlace { segs: Segs::one(crate::paging::ARENA_ZONE_BASE, span), exe_slide: 0, ldso_slide: 0 }
     } else {
-        ArenaPlace { virt: phys, exe_slide: 0, ldso_slide: 0 }
+        ArenaPlace { segs: Segs::one(phys, span), exe_slide: 0, ldso_slide: 0 }
     }
 }
 /// ASLR S5: the arena base of the image an exec in a fork child starts, with
 /// the arena now at `old` (`span` bytes, `lazy`: single frames, BUG-156). A
 /// lazy arena in the zone moves to the base of the new draw (design 2.4); an
 /// arena of contiguous RAM or the identity one stays where it is.
-fn exec_arena(old: u64, span: u64, lazy: bool, lay: &euromm::layout::Layout) -> ArenaPlace {
-    if lazy && old >= crate::paging::ARENA_ZONE_BASE && arena_random() {
-        arena_place(old, span, lay)
+fn exec_arena(old: &euromm::layout::Segs, lazy: bool, lay: &euromm::layout::Layout) -> ArenaPlace {
+    if lazy && old.base() >= crate::paging::ARENA_ZONE_BASE && arena_random() {
+        arena_place(old.base(), old.span(), lay)
     } else {
-        ArenaPlace { virt: old, exe_slide: 0, ldso_slide: if arena_random() { lay.ldso_slide } else { 0 } }
+        ArenaPlace { segs: *old, exe_slide: 0, ldso_slide: if arena_random() { lay.ldso_slide } else { 0 } }
     }
 }
 /// The RAM of the arena of the launched process (0 = none): the frames the
@@ -12066,8 +12181,8 @@ pub struct Placed {
 /// draw `lay`. A program from disk has its executable at the exe base, an
 /// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
 /// (a launch, and an exec in a fork child since BUG-350).
-fn place(ap: &ArenaPlace, span: u64, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
-    let (brk, mmap, stack) = glibc_arena_layout(ap.virt, span, lay);
+fn place(ap: &ArenaPlace, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
+    let (brk, mmap, _, stack) = glibc_arena_layout(&ap.segs, lay);
     Placed {
         exe: if from_disk { lay.exe_base } else { ap.exe(0) },
         ldso: ap.ldso(),
@@ -12090,13 +12205,13 @@ pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
     let (es, ea) = (200 << 20, 4096);
     let pl = image_layout(es, ea);
     let pa = arena_place(ram, SPAN, &pl);
-    let parent = place(&pa, SPAN, &pl, true, true);
+    let parent = place(&pa, &pl, true, true);
     let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
     for _ in 0..8 {
         // The child's arena is lazy (a fork child, BUG-156), at the parent's base.
         let cl = image_layout(es, ea);
-        let ca = exec_arena(pa.virt, SPAN, true, &cl);
-        let c = place(&ca, SPAN, &cl, true, true);
+        let ca = exec_arena(&pa.segs, true, &cl);
+        let c = place(&ca, &cl, true, true);
         let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
         for (k, (a, b)) in pairs.iter().enumerate() {
             if a == b || *b == 0 {
@@ -13203,20 +13318,18 @@ pub fn spawn_glibc_persistent(
     // S5: the base and the slides of the exe and ld.so come from the draw.
     let lay = image_layout(0, 0);
     let ap = arena_place(arena, nblocks * MIB2, &lay);
-    let av = ap.virt;
-    let kern = |va: u64| va - av + arena;
+    let kern = |va: u64| ap.kern(va, arena);
     let exe_base = ap.exe(program_span_pages(exe) as u64 * 4096);
     let ldso_base = ap.ldso();
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
-    ARENA_BASE.store(av, Ordering::Relaxed);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
     LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // BUG-053: from here on the arena is held; every refusal gives it back.
     let (Some(exe_info), Some(ld_info)) = (
@@ -13235,11 +13348,11 @@ pub fn spawn_glibc_persistent(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -13896,17 +14009,16 @@ fn glibc_disk_launch(
     // ASLR S4: av virtual, arena the RAM the kernel fills (see run_glibc).
     // S5: the base and the ld.so slide come from the draw of this launch.
     let ap = arena_place(arena, nblocks * MIB2, &lay);
-    let av = ap.virt;
-    let kern = |va: u64| va - av + arena;
+    let av = ap.base();
+    let kern = |va: u64| ap.kern(va, arena);
     let ldso_base = ap.ldso(); // ld-linux at +8 MiB and its slide
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
-    ARENA_BASE.store(av, Ordering::Relaxed);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
     LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     let ld_info = match load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)) {
         Some(i) => i,
@@ -13922,11 +14034,11 @@ fn glibc_disk_launch(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -13952,8 +14064,8 @@ fn glibc_disk_launch(
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     let demand_floor = lay.mmap_floor;
     crate::serial_println!(
-        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} arena {av:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={}, arena {})",
-        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), aslr_mode().name(), arena_mode_name()
+        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} arena {av:#x} hseg {:#x} sseg {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={}, arena {}, split {})",
+        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), seg_virt(&ap.segs, 1), seg_virt(&ap.segs, 2), aslr_mode().name(), arena_mode_name(), arena_split_name()
     );
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
@@ -15282,22 +15394,20 @@ pub fn run_glibc(
     // S5: one draw gives the arena base and the page slides of exe and ld.so.
     let lay = image_layout(0, 0);
     let ap = arena_place(arena, nblocks * MIB2, &lay);
-    let av = ap.virt;
-    let kern = |va: u64| va - av + arena;
+    let kern = |va: u64| ap.kern(va, arena);
     let exe_base = ap.exe(program_span_pages(exe) as u64 * 4096); // PIE exe: first PT_LOAD has p_vaddr 0
     let ldso_base = ap.ldso(); // ld-linux at +8 MiB and its slide
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
     EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
     EXE_END.store(lay.exe_end, Ordering::Relaxed);
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(av, nblocks * (1 << 21), &lay);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
 
-    ARENA_BASE.store(av, Ordering::Relaxed);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
     LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // load_elf64 places PT_LOAD at base+p_vaddr and applies R_X86_64_RELATIVE
     // (idempotent: ld.so also self-relocates).
@@ -15323,11 +15433,11 @@ pub fn run_glibc(
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &crate::paging::Segs::one(av, nblocks * MIB2), arena) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, &crate::paging::Segs::one(av, nblocks * MIB2));
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -16358,7 +16468,11 @@ fn demand_addr_origin(addr: u64) -> String {
     if addr >= demand_base() {
         alloc::format!("anon (demand+{:#x})", addr - demand_base())
     } else {
-        alloc::format!("arena+{:#x}", addr.wrapping_sub(ARENA_BASE.load(Ordering::Relaxed)))
+        // ASLR S6: the arena offset through the segment the address lies in.
+        match arena_segs_now().off(addr) {
+            Some(o) => alloc::format!("arena+{o:#x}"),
+            None => alloc::format!("not arena ({addr:#x})"),
+        }
     }
 }
 
@@ -16665,7 +16779,7 @@ fn mm_fail(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, r: u64) {
     crate::serial_println!(
         "[mm-fail] #{n} t{cur} {:?} process {}: {call} = {} | arena mmap window {} KiB left of {} MiB, brk {} KiB left | demand addresses {} of {} GiB handed out | demand pool {} MiB free, process pool {} MiB free | kernel heap {} MiB used {} MiB free, big blocks {bu}/{bf} MiB",
         thread_name(cur), fork_child_owner(cur).unwrap_or(0), r as i64,
-        win_end.saturating_sub(win) / 1024, win_end.saturating_sub(ARENA_BASE.load(Ordering::Relaxed)) >> 20,
+        win_end.saturating_sub(win) / 1024, arena_segs_now().off(win_end.saturating_sub(1)).map_or(0, |o| o + 1) >> 20,
         brk_end.saturating_sub(brk) / 1024,
         DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(demand_base()) >> 30, demand_size() >> 30,
         crate::procpool::demand_free_frames() / 256, crate::procpool::free_frames() / 256,

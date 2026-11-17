@@ -146,15 +146,17 @@ fn cow_pages(pml4: u64) -> (Vec<u64>, Vec<u64>) {
         }
     });
     let mut ar = Vec::new();
-    let (base, span) = ring3::test_arena();
-    let mut va = base;
-    while va < base + span && ar.len() < 16 {
-        if let Some(e) = crate::paging::leaf_entry_in(pml4, va) {
-            if e & cow != 0 && e & 0x80 == 0 {
-                ar.push(va);
+    // ASLR S6: every segment of the arena (the gaps between them are not mapped).
+    for s in ring3::test_arena().list() {
+        let mut va = s.virt;
+        while va < s.end() && ar.len() < 16 {
+            if let Some(e) = crate::paging::leaf_entry_in(pml4, va) {
+                if e & cow != 0 && e & 0x80 == 0 {
+                    ar.push(va);
+                }
             }
+            va += 4096;
         }
-        va += 4096;
     }
     (dz, ar)
 }

@@ -50,6 +50,11 @@
 //!   8..12 TiB, drawn per launch and per exec (`random`, default, ASLR step S5;
 //!   with `aslr=off` the draw is 0), always at 8 TiB (`fixed`, step S4) or at its
 //!   physical address (`identity`, as before S4). `aslr=legacy` keeps `identity`.
+//!   Since S6 the zone is 8..20 TiB: with `random` the arena is cut into three
+//!   segments, each at a random 2 MiB step of a window of its own.
+//! - `aslr.split=on|off`: with `aslr.arena=random`, cut the arena into image,
+//!   heap and stack segments at bases of their own (`on`, default, ASLR step S6)
+//!   or keep it in one piece at one drawn base (`off`, the layout of S5).
 //! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
 //!   programs (docs/design/ASLR.md, euromm::layout). `on` is the default (ring3::ASLR_DEFAULT);
 //!   `legacy` is the layout of before (demand region in PML4 slot 2); `on` places
@@ -129,6 +134,10 @@ fn apply(text: &str) {
                     Some(m) => crate::ring3::arena_set_mode(m),
                     None => crate::serial_println!("[bootopt] aslr.arena={v} is not random, fixed or identity: ignored"),
                 },
+                ("aslr.split", v) => match crate::ring3::arena_split_parse(v) {
+                    Some(on) => crate::ring3::arena_split_set(on),
+                    None => crate::serial_println!("[bootopt] aslr.split={v} is not on or off: ignored"),
+                },
                 ("aslr", v) => match euromm::layout::Mode::parse(v) {
                     Some(m) => crate::ring3::aslr_set_mode(m),
                     None => crate::serial_println!("[bootopt] aslr={v} is not on, off or legacy: ignored"),
@@ -176,6 +185,7 @@ pub fn capture() {
     );
     crate::serial_println!("[bootopt] aslr={}", crate::ring3::aslr_mode().name());
     crate::serial_println!("[bootopt] aslr.arena={}", crate::ring3::arena_mode_name());
+    crate::serial_println!("[bootopt] aslr.split={}", crate::ring3::arena_split_name());
 }
 
 /// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?

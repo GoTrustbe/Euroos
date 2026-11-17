@@ -290,8 +290,16 @@ pub fn seg_cuts(span: u64) -> (u64, u64) {
 /// None for an arena too small to cut (below 32 MiB; the launchers take 64 MiB
 /// at least).
 pub fn split_segs(l: &Layout, span: u64) -> Option<Segs> {
-    let _ = (l, span);
-    None // tests first: not cut yet
+    let span = span & !(ARENA_STEP - 1);
+    if span < 32 * MIB || span - STACK_SEG > SEG_WINDOW {
+        return None;
+    }
+    let (h, s) = seg_cuts(span);
+    Segs::three([
+        Seg { virt: window_base(IMAGE_ZONE.start, l.arena, h), off: 0, len: h },
+        Seg { virt: window_base(HEAP_ZONE.start, l.heap_seg, s - h), off: h, len: s - h },
+        Seg { virt: window_base(STACK_ZONE.start, l.stack_seg, STACK_SEG), off: s, len: STACK_SEG },
+    ])
 }
 
 /// ASLR S5: the virtual base of an arena of `span` bytes for the draw `l`:
@@ -377,7 +385,8 @@ pub fn draw(r: &[u8; DRAW_BYTES], mode: Mode, exe_span: u64, exe_align: u64) -> 
             let ldso_slide = ((w2 >> 51) & 0x1FF) * PAGE;
             // ASLR S6: the heap and stack segments: 21 bits of 2 MiB steps
             // each, from the fifth word (bits 0..20 and 21..41).
-            let (heap_seg, stack_seg) = (0, 0); // tests first: not drawn yet
+            let w4 = word(r, 4);
+            let (heap_seg, stack_seg) = ((w4 & 0x1F_FFFF) * ARENA_STEP, ((w4 >> 21) & 0x1F_FFFF) * ARENA_STEP);
             Layout { exe_base, exe_end: exe_base + window, mmap_floor, vdso: VDSO_ZONE + v, brk, mmap, stack, arena, exe_slide, ldso_slide, heap_seg, stack_seg }
         }
     }
@@ -646,7 +655,11 @@ mod tests {
         }
         assert_eq!((col(0), col(1)), (30, 30));
         assert!(col(2) >= 29 && col(3) >= 30 && col(4) >= 29);
-        assert!(d(1, 0) <= 11 && d(3, 2) <= 11, "inside a segment only the slides differ");
+        // Inside a segment only the page slides (below 2 MiB) differ.
+        for v in &rows {
+            assert!(v[1] - v[0] > LDSO_OFF - SLIDE_WINDOW && v[1] - v[0] < LDSO_OFF + SLIDE_WINDOW);
+            assert!(v[3] - v[2] > 32 * MIB - MIB && v[3] - v[2] < 32 * MIB + SLIDE_WINDOW);
+        }
     }
 
     /// ASLR S6: `off` puts the segments at the start of their windows; `legacy`

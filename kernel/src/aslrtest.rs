@@ -225,7 +225,7 @@ fn report_ind(mode: Mode, seen: &[[u64; 8]]) {
     } else if low.is_empty() {
         String::from("OK ✓")
     } else {
-        alloc::format!("FAILED (not yet: {} move with one arena base until step S6)", low.join(", "))
+        alloc::format!("FAILED ({} move with one arena base: aslr.split=off, or aslr.arena other than random)", low.join(", "))
     };
     crate::serial_println!(
         "[aslr-ind] {} starts: varying bits of the distance stack-mmap {sm}, exe-stack {es}, exe-mmap {em}, stack-ldso {sl}, exe-brk {eb}, brk-stack {bs} (want >= {IND_BITS}); libc-exe {lb}, vDSO-mmap1MiB {vb}, mmap1MiB-exe {eb1}, vDSO-exe {ev}; same segment: ldso-exe {el}, mmap-brk {bm} → {verdict}",

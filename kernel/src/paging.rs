@@ -22,11 +22,13 @@ const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const SWAPPED_PTE: u64 = 1 << 9;
 
 /// ASLR (docs/design/ASLR.md, section 2.1): the zone above the kernel's
-/// identity map where the arena of a process can lie, PML4 slots 16..23
-/// (8..12 TiB). Nothing is placed there yet (step S4); the arena functions
-/// and the page-fault dispatch already handle it (step S2).
+/// identity map where the arena of a process can lie (step S2; the launched
+/// process lies there since S4). PML4 slots 16..39 (8..20 TiB) since S6: the
+/// windows of the image (8..12 TiB), heap (12..16) and stack segment (16..20,
+/// `euromm::layout::*_ZONE`); a one-piece arena lies in the first.
 pub const ARENA_ZONE_BASE: u64 = 8 << 40;
-pub const ARENA_ZONE_END: u64 = 12 << 40;
+pub const ARENA_ZONE_END: u64 = 20 << 40;
+const _: () = assert!(ARENA_ZONE_BASE == euromm::layout::ARENA_ZONE.start && ARENA_ZONE_END == euromm::layout::ARENA_ZONE.end);
 
 /// ASLR S6: an arena is a list of segments over one span of arena offsets
 /// (one piece, or image + heap + stack at bases of their own). Every function
@@ -2655,9 +2657,9 @@ pub fn robust_selftest() -> bool {
     unsafe { dealloc(buf as *mut u8, layout) };
     crate::serial_println!(
         "[robust-paging] process page tables at 0..n free frames: {refused} refusals (OutOfFrames, 0 frames kept), {built} builds (freed again) → {}",
-        if ok && refused == 23 && built == 6 { "OK ✓" } else { "FAILED ✗" }
+        if ok && refused == 31 && built == 7 { "OK ✓" } else { "FAILED ✗" }
     );
-    ok && refused == 23 && built == 6
+    ok && refused == 31 && built == 7 // S6: + arena_segs (8 refusals, 1 build)
 }
 
 // -- ASLR S2: an arena above the kernel's identity map ([arena-hi]) -----------
