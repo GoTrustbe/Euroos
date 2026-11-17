@@ -1,0 +1,2 @@
+# cargo test (default-members), .16, -j 4, nice 10, tree of 9692f11
+188 suites, 1396 passed, 0 failed, 1 ignored (S6 55c6e25: 188 suites, 1396 passed, 0 failed, 1 ignored; no host test added: the test is the kernel self-test [swap-irq])

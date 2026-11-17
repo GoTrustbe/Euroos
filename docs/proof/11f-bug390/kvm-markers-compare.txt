@@ -1,0 +1,34 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -cpu host, no NIC, to "interactive loop started". fix = tree of 9692f11, base = 55c6e25 (S6). CPUs 14,15 (fix) and 16,17 (base) side by side.
+kvm/fix-st/k-1G: k-1G end=marker after 233s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+kvm/fix-st/k-2G: k-2G end=marker after 228s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/fix-st/k-4G: k-4G end=marker after 313s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/fix-st/k-8G: k-8G end=marker after 254s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/s6-st/k-1G: k-1G end=marker after 211s swapirq= failed-lines=2 crash-lines=0 nmi=0
+kvm/s6-st/k-2G: k-2G end=marker after 216s swapirq= failed-lines=0 crash-lines=0 nmi=0
+kvm/s6-st/k-4G: k-4G end=marker after 232s swapirq= failed-lines=0 crash-lines=0 nmi=0
+kvm/s6-st/k-8G: k-8G end=marker after 217s swapirq= failed-lines=0 crash-lines=0 nmi=0
+== kvm/s6-st/k-1G.log  vs  kvm/fix-st/k-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/s6-st/k-2G.log  vs  kvm/fix-st/k-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/s6-st/k-4G.log  vs  kvm/fix-st/k-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/s6-st/k-8G.log  vs  kvm/fix-st/k-8G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+# the 2 FAILED lines at 1 GiB in both: GBIG malloc(200 MiB) on a 1 GiB machine (not a marker verdict)

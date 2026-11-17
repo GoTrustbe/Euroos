@@ -211,6 +211,12 @@ Two refinements, each behind its own measurement:
   the balancer is written without it; (c) `futex_wake` holding `FUTEX_QUEUE` while taking `SCHED` is unchanged
   (`SCHED` is `Mode::Plain`). Add to `lockstress.rs`: BSP offload against AP bounce on the same task, 10^6 rounds,
   0 inversions.
+- **A lock that system calls or faults take (IF=0) is never held with interrupts on.** Ring-0 code runs on the
+  BSP only: a holder the timer preempted cannot run again while a task with interrupts off spins on its lock,
+  and the machine stops (BUG-007 family; BUG-390: the desktop loop held `DEMAND_FILE_MAPS` in its heartbeat
+  census, the browser spun in `child_mem_swap`). The locks of the swapped demand state (`CHILD_MEM`, the five
+  lists `child_mem_swap` swaps, `GLIBC_FORK_CHILDREN`, `CHILD_THREADS`) are `irqlock::IrqLock`s: interrupts off
+  while held, whoever takes them; a wait of 2 s prints an `[irqlock]` line with the last holder and its place.
 - `census_nolock`, `current_lockfree` (BUG-144/157): keep reading through the init-time pointer; add the CPU
   column from `RUNCTX.cpu` and `CUR_ON`. BUG-202 (scan bound of the NMI probe) is independent and should be fixed
   first, because the probe will now also land on AP entry stacks.

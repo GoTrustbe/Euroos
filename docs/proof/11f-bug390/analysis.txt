@@ -1,0 +1,28 @@
+# BUG-390: where child_mem_swap+0x1ab of the 7b2eea6 public build spins
+# 7b2eea6 rebuilt on .16 with cargo kbuild-image (SOURCE_DATE_EPOCH of 7b2eea6, /Brepro): its link map gives the same addresses as
+# /opt/euroos/wt-11f-aslr5/target/kernel.map (child_mem_swap 0x1400df466, yield_reacquire 0x1400e54ea, ensure_globals_for_current 0x1400febf0).
+# child_mem_swap+0x1ab = 0x1400df611. objdump -d of child_mem_swap, the lock acquisitions:
+  11:   1400df470:	call   0x1400e784f
+  16:   1400df483:	lock cmpxchg %cl,0x331dcad(%rip)        # 0x1433fd138
+  79:   1400df603:	lock cmpxchg %dl,0x330b81d(%rip)        # 0x1433eae28
+  99:   1400df655:	lock cmpxchg %dl,0x330b843(%rip)        # 0x1433eaea0
+  119:   1400df6a7:	lock cmpxchg %dl,0x330a689(%rip)        # 0x1433e9d38
+  139:   1400df6f9:	lock cmpxchg %dl,0x32d2157(%rip)        # 0x1433b1858
+  159:   1400df74b:	lock cmpxchg %dl,0x32d1fe5(%rip)        # 0x1433b1738
+# the spin at +0x1ab:
+     1400df5ff:	mov    $0x1,%dl
+     1400df601:	xor    %eax,%eax
+     1400df603:	lock cmpxchg %dl,0x330b81d(%rip)        # 0x1433eae28
+     1400df60b:	jne    0x1400df611
+     1400df60d:	jmp    0x1400df61d
+     1400df60f:	pause
+     1400df611:	mov    0x330b811(%rip),%al        # 0x1433eae28
+     1400df617:	test   %al,%al
+     1400df619:	je     0x1400df601
+     1400df61b:	jmp    0x1400df60f
+     1400df61d:	mov    $0x1,%eax
+# the lock words, from the link map:
+  0x1433fd138 ring3::CHILD_MEM (taken first, line 16)
+  0x1433eae28 ring3::DEMAND_FILE_MAPS  <- +0x1ab spins here
+  0x1433eaea0 ring3::PROT_NONE_RANGES, 0x1433e9d38 ring3::SHARED_ALIASES, 0x1433b1858 ring3::SHARED_MAPS, 0x1433b1738 ring3::DEMAND_FREE
+  call 0x1400e784f = fork_child_owner (its locks were free a moment before in ensure_globals_inner, same IF=0 window)
