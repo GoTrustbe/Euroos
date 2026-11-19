@@ -1,0 +1,6 @@
+# loadtest soak 1 h, s6-st (831894f), KVM 4 vCPU 16 GiB, e1000e restrict, hammer 4, 32 procs, churn proc 8 (CPUs 4-7)
+  [ 5850/?] ✓ ok            37ms t= 3897.6s  ltstat
+[loadtest] completed clean · results → /srv/euroos/aslr6-runs/soak-lt/w/loadtest-results.csv · ltstat samples → /srv/euroos/aslr6-runs/soak-lt/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 376973, "err": 0, "p50_ms": 5.9, "p99_ms": 434.8, "max_ms": 8033.0, "busy_windows": 188, "busy_s": 1671, "busy": {"ok": 171143, "err": 0, "p50_ms": 6.0, "p99_ms": 426.1, "max_ms": 2046.7}, "idle": {"ok": 205830, "err": 0, "p50_ms": 5.8, "p99_ms": 440.5, "max_ms": 8033.0}}
+[loadtest] host HTTP server served 676 request(s)
+## commands 5864, status ok 5864; crash/watchdog lines 0; [churn-proc] lines 4324, FAILED 0; [oom] 3 (the [memt] self-test)

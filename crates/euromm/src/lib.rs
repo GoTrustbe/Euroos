@@ -13,6 +13,7 @@ pub mod arena;
 pub mod bulk;
 pub mod cow;
 pub mod frame;
+pub mod layout;
 pub mod oom;
 pub mod pagecache;
 pub mod ramfile;

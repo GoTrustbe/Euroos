@@ -1,0 +1,9 @@
+# vDSO clock (uptime over the serial console every 20 s, host clocks at the arrival of the line) over 12 min after the console was ready. A = a6b81a8 (7b2eea6 clock), B = f426198. KVM 2 vCPU 2 GiB (A pins 16,17; B 18,19), TCG 1 vCPU 2 GiB (A pin 36, B pin 38), all four at once, -nic none. vdrift.py.
+kvm-a: samples 36 over 703.0 s host: MONOTONIC -1145.3 ppm (-0.805 s), REALTIME -1145.3 ppm (-0.805 s), host wall vs host mono +0.000 s; largest offset from the line 0.068 s
+   the tick count (ticks x 10 ms) over the same samples: -1145.0 ppm; vDSO MONOTONIC -1145.3 ppm
+kvm-b: samples 36 over 702.4 s host: MONOTONIC -808.7 ppm (-0.568 s), REALTIME -808.7 ppm (-0.568 s), host wall vs host mono +0.000 s; largest offset from the line 0.027 s
+   the tick count (ticks x 10 ms) over the same samples: -808.4 ppm; vDSO MONOTONIC -808.7 ppm
+tcg-a: samples 36 over 699.6 s host: MONOTONIC -9705.0 ppm (-6.790 s), REALTIME -9705.1 ppm (-6.790 s), host wall vs host mono +0.000 s; largest offset from the line 0.023 s
+   the tick count (ticks x 10 ms) over the same samples: -9700.1 ppm; vDSO MONOTONIC -9705.0 ppm
+tcg-b: samples 36 over 701.5 s host: MONOTONIC -8670.5 ppm (-6.082 s), REALTIME -8670.5 ppm (-6.082 s), host wall vs host mono +0.000 s; largest offset from the line 0.019 s
+   the tick count (ticks x 10 ms) over the same samples: -8667.4 ppm; vDSO MONOTONIC -8670.5 ppm

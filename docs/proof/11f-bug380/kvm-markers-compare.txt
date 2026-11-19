@@ -1,0 +1,78 @@
+# KVM self-test boots to the desktop, -cpu host, -nic none, HD-Audio, quiet lanes (no busy loops). B = f426198, base = 7b2eea6 (self-test image of each). 1/2/4 GiB x 1/2/4 vCPU.
+b-1G-1 end=marker after 203s failed-lines=3 crash-lines=0
+b-1G-2 end=marker after 194s failed-lines=3 crash-lines=0
+b-1G-4 end=marker after 196s failed-lines=3 crash-lines=0
+b-2G-1 end=marker after 252s failed-lines=1 crash-lines=0
+b-2G-2 end=marker after 204s failed-lines=1 crash-lines=0
+b-2G-4 end=marker after 205s failed-lines=1 crash-lines=0
+b-4G-1 end=marker after 262s failed-lines=1 crash-lines=0
+b-4G-2 end=marker after 209s failed-lines=1 crash-lines=0
+b-4G-4 end=marker after 207s failed-lines=1 crash-lines=0
+base-1G-1 end=marker after 188s failed-lines=3 crash-lines=0
+base-1G-2 end=marker after 204s failed-lines=3 crash-lines=0
+base-1G-4 end=marker after 195s failed-lines=3 crash-lines=0
+base-2G-1 end=marker after 198s failed-lines=1 crash-lines=0
+base-2G-2 end=marker after 251s failed-lines=1 crash-lines=0
+base-2G-4 end=marker after 202s failed-lines=1 crash-lines=0
+base-4G-1 end=marker after 197s failed-lines=1 crash-lines=0
+base-4G-2 end=marker after 257s failed-lines=1 crash-lines=0
+base-4G-4 end=marker after 205s failed-lines=1 crash-lines=0
+## markers-compare base -> B, 1G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 1G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 1G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## [vdso-mono] in B
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+steps back mono 0 ns, boot 0 ns, real 0 ns (0 times)	OK ✓
+## FAILED lines (B, all sizes)
+      9 [aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, 
+      3 [glibc]   GBIG: malloc(209715200) FAILED
+      3 [linux-abi] GBIG: malloc(209715200) FAILED

@@ -1,0 +1,18 @@
+# Chromium, merge public image + ui.tour=off;update.check=off (m-br.img), KVM smp 2, user-net, no hostfwd, update.check=off
+## 5 starts (pinned 12,32, before the CPU range was narrowed)
+[chrome-smoke] start 1/5: PASS
+[chrome-smoke] start 2/5: PASS
+[chrome-smoke] start 3/5: PASS
+[chrome-smoke] start 4/5: PASS
+[chrome-smoke] start 5/5: PASS
+[chrome-smoke] starts: 5/5 PASS
+## one sites round (14 steps; first try pinned 13,33 was stopped by PID when the CPU range changed, output kept as sites-aborted-cpu-move.out; rerun pinned 3,23)
+[chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/a7/sites
+[gui-smoke] ok   consent euro-os: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent wikipedia: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent github: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', Fal
+[gui-smoke] ok   consent openstreetmap: no banner button found: find-in-page matched none of 17 labels
+## health
+starts: logs=10 aborts=0 ring0/panic/watchdog=0 FROZEN=0 oom=0 exec-lines=48
+sites: logs=2 aborts=0 ring0/panic/watchdog=0 FROZEN=0 oom=0 exec-lines=23

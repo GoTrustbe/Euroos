@@ -1,0 +1,81 @@
+# Host tests first: euromm layout tests at 35d7bab (tests, arena_base and the slides not implemented)
+test arena::tests::large_arenas_keep_their_layout ... ok
+test layout::tests::off_is_fixed ... ok
+test layout::tests::arena_off_and_legacy ... ok
+test layout::tests::legacy_is_the_layout_of_before ... ok
+test layout::tests::on_arena_entropy ... FAILED
+test layout::tests::parse_values ... ok
+test layout::tests::zones_and_slots ... ok
+test layout::tests::on_entropy_per_region ... ok
+test layout::tests::on_every_region_in_its_zone ... ok
+test layout::tests::on_arena_in_its_zone ... ok
+thread 'layout::tests::on_arena_entropy' (3154358) panicked at crates/euromm/src/layout.rs:394:9:
+assertion `left == right` failed
+  left: 0
+ right: 21
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.01s
+
+# The same tests at e9b488d
+test layout::tests::window_checks ... ok
+test layout::tests::regions_do_not_overlap_and_fit ... ok
+test layout::tests::arena_off_and_legacy ... ok
+test layout::tests::parse_values ... ok
+test layout::tests::legacy_is_the_layout_of_before ... ok
+test layout::tests::off_is_fixed ... ok
+test layout::tests::on_arena_entropy ... ok
+test layout::tests::zones_and_slots ... ok
+test layout::tests::on_arena_in_its_zone ... ok
+test layout::tests::on_entropy_per_region ... ok
+test layout::tests::on_every_region_in_its_zone ... ok
+test layout::tests::block_fills_containing_width ... ok
+test layout::tests::blocks_stack_vertically ... ok
+test layout::tests::display_none_removes_box ... ok
+test layout::tests::explicit_height_respected ... ok
+test layout::tests::padding_and_margin_offset_content ... ok
+test layout::tests::single_line_text_one_line ... ok
+test layout::tests::text_wraps_into_multiple_lines ... ok
+test layout::tests::parent_height_sums_children ... ok
+
+# Tests first: image 35d7bab (tests, no fix) and e9b488d (S5), KVM 2 GiB, 2 vCPU
+## tf
+[bootopt] aslr=on
+[bootopt] aslr.arena=fixed
+[arena-move] fork child of a lazy arena at 0x87fffc00000 execs and moves to 0xb0000600000: lazy_arena_rebase refused the move; teardown 24 frames, pool 73728 -> 73728 -> FAILED ✗
+[aslr]   exe      first 0x080000001460  varying bits  0  distinct 1/64
+[aslr]   ldso     first 0x080000800000  varying bits  0  distinct 1/64
+[aslr]   libc     first 0x28f7f1830100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x080017ebdd1c  varying bits  8  distinct 57/64
+[aslr]   brk      first 0x08000200a000  varying bits  8  distinct 57/64
+[aslr]   mmap     first 0x08000409a000  varying bits  9  distinct 61/64
+[aslr]   mmapbig  first 0x28f7f19e2000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x642923d1b000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 9 (4 KiB 9, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 9 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31 → FAILED (not yet: stack-mmap, exe-stack, exe-mmap move with one arena base until step S6)
+[aslr-fork] 8 fork children: every region (exe, ld.so, libc, stack, brk, mmap 4 KiB and 1 MiB, vDSO) at the address of the parent → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 8/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → FAILED (not yet: ld.so (the arena base stays until S5))
+## s5
+[bootopt] aslr=on
+[bootopt] aslr.arena=random
+[arena-move] fork child of a lazy arena at 0x87fffc00000 (PML4 16-17) execs: pages discarded, tables moved to 0xb0000600000 (PML4 22) and once more by 2 MiB (overlapping); old base empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 1; teardown 23 frames, pool 73728 -> 73728 -> OK ✓
+[aslr]   exe      first 0x0aaeb4e7f460  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x0aaeb56e6000  varying bits 30  distinct 64/64
+[aslr]   libc     first 0x2afaeb5ec100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x0aaeccc53d1c  varying bits 29  distinct 64/64
+[aslr]   brk      first 0x0aaeb6e0a000  varying bits 29  distinct 64/64
+[aslr]   mmap     first 0x0aaeb8e26000  varying bits 30  distinct 64/64
+[aslr]   mmapbig  first 0x2afaeb79e000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x6478f4f89000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, exe-mmap 15 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31 → FAILED (not yet: stack-mmap, exe-stack, exe-mmap move with one arena base until step S6)
+[aslr-fork] 8 fork children: every region (exe, ld.so, libc, stack, brk, mmap 4 KiB and 1 MiB, vDSO) at the address of the parent → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+## markers-compare merge 417f6b9 -> e9b488d (2 GiB)
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1

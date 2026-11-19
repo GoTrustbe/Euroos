@@ -1,0 +1,53 @@
+# TCG matrix, restrict=on, -cpu qemu64,+smep,+smap; on = aslr.arena=fixed (added to the boot options of the leg), off = default identity; same image
+user-smp4-iommu done 23:38:57 after 211s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 23:38:57 after 211s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 23:42:22 after 205s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 23:42:22 after 205s desktop=1 wd=0 nmi=0
+kernel-smp1 done 23:45:58 after 216s desktop=1 wd=0 nmi=0
+kernel-smp4 done 23:46:03 after 221s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 23:52:39 after 401s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 23:53:09 after 426s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 00:00:05 after 446s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 00:01:05 after 476s desktop=1 wd=0 nmi=0
+matrix on done 00:01:05
+user-smp1-iommu done 23:39:02 after 216s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 23:39:07 after 221s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 23:42:27 after 205s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 23:42:42 after 215s desktop=1 wd=0 nmi=0
+kernel-smp4 done 23:46:33 after 231s desktop=1 wd=0 nmi=0
+kernel-smp1 done 23:47:08 after 281s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 23:53:49 after 401s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 23:56:14 after 581s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 00:03:05 after 556s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 00:05:36 after 562s desktop=1 wd=0 nmi=0
+matrix off done 00:05:36
+## combined-smp1-iommu-1g off -> on: -- WORSE: 0 -- CHANGED (not worse): 1     aslr-phys: base FAILx1 | new OKx1
+   crash lines on/off: 0/0
+## combined-smp4-iommu-1g off -> on: -- WORSE: 0 -- CHANGED (not worse): 1     aslr-phys: base FAILx1 | new OKx1
+   crash lines on/off: 0/0
+## kernel-smp1 off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## kernel-smp4 off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## storage-smp1-iommu-1g off -> on: -- WORSE: 0 -- CHANGED (not worse): 1     aslr-phys: base FAILx1 | new OKx1
+   crash lines on/off: 0/0
+## storage-smp4-iommu-1g off -> on: -- WORSE: 0 -- CHANGED (not worse): 1     aslr-phys: base FAILx1 | new OKx1
+   crash lines on/off: 0/0
+## user-smp1-iommu off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## user-smp1-noiommu off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## user-smp4-iommu off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## user-smp4-noiommu off -> on: -- WORSE: 0 -- CHANGED (not worse): 0  -- only in base: 0
+   crash lines on/off: 0/0
+## IOMMU (intel-iommu, the *-iommu legs, on): fault records seen
+      6 [iommu] ACPI DMAR: 1 VT-d remapping unit(s), host-addr-width=48 bits, interrupt-remap=false
+      2 [iommu] no ACPI DMAR — NO hardware IOMMU. Device DMA is UNRESTRICTED: a malicious/buggy NVMe/USB/NIC can DMA over any physical memory, bypassing capabilities. (GitHub #11)
+      2 [mr-dma] malicious megaraidd: DCMD data buffer aimed at kernel canary 0x194000 (completed, status 0x0) -> IOMMU fault records 1, canary intact=true; frame address = kernel page 0x195000 -> fault recor
+      2 [udrv-blk-dma] malicious nvmed: READ of LBA 0 aimed at kernel canary 0x19a000 · driver report=true (device error=false, status 0x0) · IOMMU fault records 1 · canary changed=false · disk still works=tr
+      2 [udrv-blk-dma] malicious nvmed: READ of LBA 0 aimed at kernel canary 0x217000 · driver report=true (device error=false, status 0x0) · IOMMU fault records 1 · canary changed=false · disk still works=tr
+      6 [udrv-dma] malicious e1000d: RX slot 4 aimed at kernel canary 0x1fa000, TX from kernel page 0x1fb000 (driver saw tx done) · IOMMU fault records: TX read 1, RX write 1 (total 2) · canary changed=false 
+## extra IOMMU boots with fixed before the matrix (tcg/iommu-fix): combined-smp1-iommu-1g, user-smp4-iommu
+user-smp4-iommu done 23:29:11 after 205s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 23:32:27 after 401s desktop=1 wd=0 nmi=0

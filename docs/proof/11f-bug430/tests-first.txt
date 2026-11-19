@@ -1,0 +1,35 @@
+# tests first: image of acd65ba (the [swap-irq] part 4 test; the glibc_threads_* functions take the lock without IfOffGuard), KVM, 4 GiB, no NIC, up to the [swap-irq] line (120 s without serial output = stop, then an NMI probe). 1 vCPU x 2, 2 vCPU x 2, 4 vCPU x 1. Pinned cores.
+s1-1 end=silent after 373s swapirq= failed-lines=0 crash-lines=0 nmi=2
+s1-2 end=silent after 370s swapirq= failed-lines=0 crash-lines=0 nmi=2
+s2-1 end=silent after 374s swapirq= failed-lines=0 crash-lines=0 nmi=2
+s2-2 end=silent after 363s swapirq= failed-lines=0 crash-lines=0 nmi=2
+s4-1 end=silent after 376s swapirq= failed-lines=0 crash-lines=0 nmi=2
+
+# NMI probe of every boot, symbolised with the link map of the image (scripts/nmisym.py): CPU 0, RFLAGS=0x2 (IF=0), RIP in swap_irq_selftest (the test task, inside its part 4 loop), no [swap-irq] verdict line printed
+## s1-1: [nmi] interrupted RIP=0x000000007000d959 CS=0x8 RSP=0x000000007fe79aa0 RFLAGS=0x2
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x7000d959  cO7IBlcXu1_10eurokernel5ring317swap_irq_selftest+0xd14
+## s1-2: [nmi] interrupted RIP=0x000000007000d959 CS=0x8 RSP=0x000000007fe79aa0 RFLAGS=0x2
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x7000d959  cO7IBlcXu1_10eurokernel5ring317swap_irq_selftest+0xd14
+## s2-1: [nmi] interrupted RIP=0x000000006fffd959 CS=0x8 RSP=0x000000007fe68aa0 RFLAGS=0x2
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x6fffd959  cO7IBlcXu1_10eurokernel5ring317swap_irq_selftest+0xd14
+## s2-2: [nmi] interrupted RIP=0x000000006fffd95f CS=0x8 RSP=0x000000007fe68aa0 RFLAGS=0x2
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x6fffd95f  cO7IBlcXu1_10eurokernel5ring317swap_irq_selftest+0xd1a
+## s4-1: [nmi] interrupted RIP=0x000000006ffdd959 CS=0x8 RSP=0x000000007fe46aa0 RFLAGS=0x2
+probe 1: CS=0x8 IF=0 task ?  last-syscall=?
+   RIP 0x6ffdd959  cO7IBlcXu1_10eurokernel5ring317swap_irq_selftest+0xd14
+
+# what the instruction at the RIP is (objdump of the image, swap_irq_selftest+0xd14 = 0x140113959):
+   14011394a:	f0 44 0f b0 35 d5 b5 	lock cmpxchg BYTE PTR [rip+0x405b5d5],r14b        # 0x14416ef28
+   140113951:	05 04 
+   140113953:	74 24                	je     0x140113979
+   140113955:	eb 02                	jmp    0x140113959
+   140113957:	f3 90                	pause
+   140113959:	8a 05 c9 b5 05 04    	mov    al,BYTE PTR [rip+0x405b5c9]        # 0x14416ef28
+   14011395f:	84 c0                	test   al,al
+   140113961:	74 e5                	je     0x140113948
+   140113963:	eb f2                	jmp    0x140113957
+# the lock byte of that spin loop, 0x14416ef28, in the link map: _RNvNtCs2cO7IBlcXu1_10eurokernel5ring313GLIBC_THREADS

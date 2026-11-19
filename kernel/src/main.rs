@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod allocator;
+mod irqlock;
 mod audit;
 mod compositor;
 mod lockscreen;
@@ -103,6 +104,9 @@ mod entropy;
 mod linuxrand;
 mod renametest;
 mod aslrtest;
+mod forkvdsotest;
+mod clockdrift;
+mod timebase;
 mod nts;
 mod verity;
 mod euroattr;
@@ -4347,6 +4351,16 @@ fn main() -> Status {
         ring3::fdsem_selftest(&mut allocator);
         // BUG-150 to BUG-155: memory that comes back, and running out of it ([memt]).
         ring3::memt_selftest(&mut allocator);
+        // ASLR S2 and S3 (docs/design/ASLR.md): an arena above the identity map ([arena-hi]),
+        // the ELF loader with a virtual base and a kernel-side address ([elf-bias]).
+        paging::arena_hi_selftest();
+        // ASLR S5: an exec in a fork child moves its arena ([arena-move]).
+        paging::arena_move_selftest();
+        // ASLR S6: an arena in three segments through fork, copy-on-write and exec ([arena-segs]).
+        paging::arena_segs_selftest();
+        ring3::elf_bias_selftest();
+        // ASLR S1: the demand region over many PML4 slots ([demand-slots]).
+        ring3::demand_slots_selftest(&mut allocator);
         // S3: a glibc process with a worker on every AP ([ap-user]; SMP scheduler design).
         schedstat::apuser_test(&mut allocator, "apuser 1 10000 1000");
         // BUG-080: what a Linux program gets as random bytes ([linux-rand]).
@@ -4357,11 +4371,17 @@ fn main() -> Status {
         renametest::disk_selftest(&mut allocator, &mut vfs);
         // BUG-088: how many address bits of a Linux program change per start ([aslr]).
         aslrtest::selftest(&mut allocator);
+        // BUG-351, BUG-352, BUG-355 ([fork-cow-write], [fork-fault-wait], [vdso-mono]).
+        forkvdsotest::selftest(&mut allocator);
+        // BUG-400: the clock and the tick count against the HPET ([clock-drift]).
+        clockdrift::selftest();
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);
         // BUG-140: the scheduler slots of the tasks of ended fork children ([churn-forkthreads]).
         churn::fork_thread_churn(&mut allocator);
+        // BUG-390: the locks of the swapped demand state and a holder with interrupts on ([swap-irq]).
+        { let l = ring3::swap_irq_selftest(&mut allocator, 1); serial_println!("{l}"); }
         // BUG-170: the sync socket of Chromium's audio stream ([syncsock]).
         churn::sync_socket_test(&mut allocator);
         // BUG-181: the ALSA device with 6, 1 and 2 channels ([pcmch]).

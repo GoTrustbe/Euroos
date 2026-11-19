@@ -1,0 +1,75 @@
+# 30 TCG boots, combined-smp1-iommu-1g (1 GiB, smp 1, intel-iommu, nvme + megasas, e1000e restrict=on), -cpu qemu64,+smep,+smap, AFTER=30 s, fin-st (215534d); slots CPU 18, 19 (8 each), 38, 39 (7 each)
+boots 30, desktop 30, watchdog 0, NMI 0, crash logs 0
+[arena-hi] OK 30/30, [elf-bias] OK 30/30, [fuzz]/[eurofuzz]/[churn*] FAILED lines 0
+## markers-compare against one TCG boot of base 00a6459 (same script, CPU 39): WORSE per boot
+base-1 done 17:58:12 after 346s desktop=1 wd=0 nmi=0
+c18-1: -- WORSE: 0
+c18-2: -- WORSE: 0
+c18-3: -- WORSE: 0
+c18-4: -- WORSE: 0
+c18-5: -- WORSE: 0
+c18-6: -- WORSE: 0
+c18-7: -- WORSE: 0
+c18-8: -- WORSE: 0
+c19-1: -- WORSE: 0
+c19-2: -- WORSE: 0
+c19-3: -- WORSE: 0
+c19-4: -- WORSE: 0
+c19-5: -- WORSE: 0
+c19-6: -- WORSE: 0
+c19-7: -- WORSE: 0
+c19-8: -- WORSE: 0
+c38-1: -- WORSE: 0
+c38-2: -- WORSE: 0
+c38-3: -- WORSE: 0
+c38-4: -- WORSE: 0
+c38-5: -- WORSE: 0
+c38-6: -- WORSE: 0
+c38-7: -- WORSE: 0
+c39-1: -- WORSE: 0
+c39-2: -- WORSE: 0
+c39-3: -- WORSE: 0
+c39-4: -- WORSE: 0
+c39-5: -- WORSE: 0
+c39-6: -- WORSE: 0
+c39-7: -- WORSE: 0
+## FAILED lines of the base boot (restrict=on: no DNS, no HTTP; 1 GiB: GBIG)
+[udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HTTP: tx 8 rx 4 frames → FAILED
+[udrv-crash] e1000d pid 131072 killed by a real fault (memory isolation: access 0x1000 denied); kern
+[conn] TCP handshake FAILED to 172.66.147.243:80
+[conn] TCP handshake FAILED to 172.66.147.243:80
+[udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking sockets) over e1000d in 25 tick
+[linux-abi] GBIG: malloc(209715200) FAILED
+[glibc]   GBIG: malloc(209715200) FAILED
+[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 20), stack 8, PIE base 0, brk 8
+## queue
+c39-1 done 17:03:46 after 411s desktop=1 wd=0 nmi=0
+c19-1 done 17:03:46 after 411s desktop=1 wd=0 nmi=0
+c38-1 done 17:03:51 after 416s desktop=1 wd=0 nmi=0
+c18-1 done 17:03:51 after 416s desktop=1 wd=0 nmi=0
+c39-2 done 17:10:42 after 416s desktop=1 wd=0 nmi=0
+c19-2 done 17:10:42 after 416s desktop=1 wd=0 nmi=0
+c18-2 done 17:10:52 after 421s desktop=1 wd=0 nmi=0
+c38-2 done 17:10:57 after 426s desktop=1 wd=0 nmi=0
+c19-3 done 17:17:39 after 417s desktop=1 wd=0 nmi=0
+c39-3 done 17:17:49 after 427s desktop=1 wd=0 nmi=0
+c18-3 done 17:18:04 after 432s desktop=1 wd=0 nmi=0
+c38-3 done 17:18:04 after 427s desktop=1 wd=0 nmi=0
+c19-4 done 17:24:35 after 416s desktop=1 wd=0 nmi=0
+c39-4 done 17:24:45 after 416s desktop=1 wd=0 nmi=0
+c18-4 done 17:25:10 after 426s desktop=1 wd=0 nmi=0
+c38-4 done 17:25:10 after 426s desktop=1 wd=0 nmi=0
+c19-5 done 17:31:31 after 416s desktop=1 wd=0 nmi=0
+c39-5 done 17:31:41 after 416s desktop=1 wd=0 nmi=0
+c38-5 done 17:32:21 after 431s desktop=1 wd=0 nmi=0
+c18-5 done 17:32:26 after 436s desktop=1 wd=0 nmi=0
+c19-6 done 17:38:23 after 412s desktop=1 wd=0 nmi=0
+c39-6 done 17:38:38 after 417s desktop=1 wd=0 nmi=0
+c38-6 done 17:39:23 after 422s desktop=1 wd=0 nmi=0
+c18-6 done 17:39:38 after 432s desktop=1 wd=0 nmi=0
+c19-7 done 17:45:14 after 411s desktop=1 wd=0 nmi=0
+c39-7 done 17:45:29 after 411s desktop=1 wd=0 nmi=0
+c38-7 done 17:46:24 after 421s desktop=1 wd=0 nmi=0
+c18-7 done 17:46:34 after 416s desktop=1 wd=0 nmi=0
+c19-8 done 17:50:40 after 326s desktop=1 wd=0 nmi=0
+c18-8 done 17:51:50 after 316s desktop=1 wd=0 nmi=0

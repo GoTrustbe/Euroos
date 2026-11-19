@@ -1,0 +1,48 @@
+== soak 1 (beside other lanes) m
+[loadtest] completed clean · results → /srv/euroos/val-runs/g/soak/m/w/loadtest-results.csv · ltstat samples → /srv/euroos/val-runs/g/soak/m/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 370633, "err": 0, "p50_ms": 6.1, "p99_ms": 435.6, "max_ms": 7288.1, "busy_windows": 175, "busy_s": 1676, "busy": {"ok": 167839, "err": 0, "p50_ms": 6.2, "p99_ms": 426.3, "max_ms": 1724.6}, "idle": {"ok": 202794, "err": 0, "p50_ms": 6.0, "p99_ms": 445.3, "max_ms": 7288.1}}
+[loadtest] host HTTP server served 630 request(s)
+== soak 1 (beside other lanes) b0
+[loadtest] completed clean · results → /srv/euroos/val-runs/g/soak/b0/w/loadtest-results.csv · ltstat samples → /srv/euroos/val-runs/g/soak/b0/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 383426, "err": 0, "p50_ms": 5.8, "p99_ms": 434.7, "max_ms": 8535.6, "busy_windows": 194, "busy_s": 1632, "busy": {"ok": 171820, "err": 0, "p50_ms": 6.0, "p99_ms": 425.9, "max_ms": 1446.5}, "idle": {"ok": 211606, "err": 0, "p50_ms": 5.7, "p99_ms": 441.4, "max_ms": 8535.6}}
+[loadtest] host HTTP server served 700 request(s)
+cand: 5468 commands over 65.0 min = 5045 per hour; by status {'ok': 5468}
+   churn proc    n= 700  median     1424 ms  mean     1399 ms  p10      840  p90     1852  max     2878
+   spawn worker  n= 525  median      494 ms  mean      483 ms  p10      392  p90      544  max      588
+   churn fs      n= 175  median     9638 ms  mean     9574 ms  p10     8788  p90    10316  max    10845
+   churn net     n= 175  median      140 ms  mean      145 ms  p10      103  p90      183  max      367
+   sha256sum     n= 525  median      461 ms  mean      457 ms  p10      403  p90      502  max      762
+   fetch         n= 525  median      300 ms  mean      286 ms  p10      129  p90      444  max      553
+ref: 6072 commands over 65.0 min = 5601 per hour; by status {'ok': 6072}
+   churn proc    n= 778  median     1298 ms  mean     1247 ms  p10      754  p90     1547  max     2262
+   spawn worker  n= 583  median      474 ms  mean      468 ms  p10      392  p90      530  max      684
+   churn fs      n= 194  median     8144 ms  mean     8411 ms  p10     7663  p90     9438  max    10468
+   churn net     n= 194  median      138 ms  mean      174 ms  p10      111  p90      182  max     1031
+   sha256sum     n= 583  median      420 ms  mean      414 ms  p10      342  p90      473  max     1234
+   fetch         n= 583  median      280 ms  mean      275 ms  p10      123  p90      434  max      523
+
+#### side by side (soak2), same time, same load
+== soak2 m
+[loadtest] completed clean · results → /srv/euroos/val-runs/g/soak2/m/w/loadtest-results.csv · ltstat samples → /srv/euroos/val-runs/g/soak2/m/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 385406, "err": 0, "p50_ms": 5.8, "p99_ms": 434.8, "max_ms": 6961.1, "busy_windows": 188, "busy_s": 1655, "busy": {"ok": 175092, "err": 0, "p50_ms": 5.8, "p99_ms": 425.1, "max_ms": 1796.7}, "idle": {"ok": 210314, "err": 0, "p50_ms": 5.8, "p99_ms": 442.7, "max_ms": 6961.1}}
+[loadtest] host HTTP server served 676 request(s)
+== soak2 b0
+[loadtest] completed clean · results → /srv/euroos/val-runs/g/soak2/b0/w/loadtest-results.csv · ltstat samples → /srv/euroos/val-runs/g/soak2/b0/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 379966, "err": 0, "p50_ms": 6.0, "p99_ms": 433.5, "max_ms": 7136.8, "busy_windows": 184, "busy_s": 1688, "busy": {"ok": 174407, "err": 0, "p50_ms": 6.0, "p99_ms": 425.2, "max_ms": 1713.1}, "idle": {"ok": 205559, "err": 0, "p50_ms": 5.9, "p99_ms": 438.8, "max_ms": 7136.8}}
+[loadtest] host HTTP server served 662 request(s)
+cand: 5864 commands over 65.2 min = 5398 per hour; by status {'ok': 5864}
+   churn proc    n= 751  median     1341 ms  mean     1290 ms  p10      809  p90     1617  max     2358
+   spawn worker  n= 563  median      479 ms  mean      472 ms  p10      382  p90      544  max      687
+   churn fs      n= 188  median     8489 ms  mean     8803 ms  p10     7847  p90     9832  max    23451
+   churn net     n= 187  median      144 ms  mean      164 ms  p10      107  p90      185  max     1070
+   sha256sum     n= 563  median      431 ms  mean      428 ms  p10      354  p90      491  max     1552
+   fetch         n= 563  median      272 ms  mean      272 ms  p10      103  p90      441  max      664
+ref: 5740 commands over 65.1 min = 5293 per hour; by status {'ok': 5740}
+   churn proc    n= 735  median     1314 ms  mean     1279 ms  p10      759  p90     1777  max     2940
+   spawn worker  n= 551  median      491 ms  mean      482 ms  p10      386  p90      546  max      597
+   churn fs      n= 184  median     8577 ms  mean     9175 ms  p10     8056  p90    10086  max    28243
+   churn net     n= 183  median      148 ms  mean      181 ms  p10      116  p90      190  max      966
+   sha256sum     n= 551  median      440 ms  mean      436 ms  p10      381  p90      491  max      631
+   fetch         n= 551  median      263 ms  mean      276 ms  p10      113  p90      452  max      544
+== serial m soak2: crash=0 watchdog=0 irqlock=0
+== serial b0 soak2: crash=0 watchdog=0 irqlock=0

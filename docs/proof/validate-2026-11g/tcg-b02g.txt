@@ -1,0 +1,13 @@
+# TCG b02g: per leg
+kernel-smp4 desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=2
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [aslr] 64 starts of a glibc PIE: varying bits mmap 16 (4 KiB 16, 1 MiB
+user-smp4-iommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=6
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+    [aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2
+user-smp4-iommu done 13:34:59 after 461s desktop=1 wd=0 nmi=0
+kernel-smp4 done 13:42:20 after 441s desktop=1 wd=0 nmi=0

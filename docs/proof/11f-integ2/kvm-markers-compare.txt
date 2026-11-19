@@ -1,0 +1,152 @@
+# KVM self-test boots, -cpu host, no NIC, HD-Audio, to "interactive loop started", 1/2/4 GiB x 1/2/4 vCPU. merge = b3eda20 (m-st). Bases: 79891a2 (b410-st: ASLR S0-S7 + BUG-390 + BUG-410) and 249cbf9 (b400-st: BUG-400 branch). Every image booted 9 times on its own pinned cores.
+## m-st
+smp1-1G: s1-1G end=marker after 241s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp1-2G: s1-2G end=marker after 252s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp1-4G: s1-4G end=marker after 254s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-1G: s2-1G end=marker after 246s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp2-2G: s2-2G end=marker after 256s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-4G: s2-4G end=marker after 258s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-1G: s4-1G end=marker after 233s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp4-2G: s4-2G end=marker after 250s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-4G: s4-4G end=marker after 262s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+## b410-st
+smp1-1G: s1-1G end=marker after 225s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp1-2G: s1-2G end=marker after 233s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp1-4G: s1-4G end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-1G: s2-1G end=marker after 229s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp2-2G: s2-2G end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-4G: s2-4G end=marker after 244s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-1G: s4-1G end=marker after 229s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp4-2G: s4-2G end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-4G: s4-4G end=marker after 245s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+## b400-st
+smp1-1G: s1-1G end=marker after 220s swapirq= failed-lines=3 crash-lines=0 nmi=0
+smp1-2G: s1-2G end=marker after 227s swapirq= failed-lines=1 crash-lines=0 nmi=0
+smp1-4G: s1-4G end=marker after 231s swapirq= failed-lines=1 crash-lines=0 nmi=0
+smp2-1G: s2-1G end=marker after 226s swapirq= failed-lines=3 crash-lines=0 nmi=0
+smp2-2G: s2-2G end=marker after 233s swapirq= failed-lines=1 crash-lines=0 nmi=0
+smp2-4G: s2-4G end=marker after 235s swapirq= failed-lines=1 crash-lines=0 nmi=0
+smp4-1G: s4-1G end=marker after 209s swapirq= failed-lines=3 crash-lines=0 nmi=0
+smp4-2G: s4-2G end=marker after 230s swapirq= failed-lines=1 crash-lines=0 nmi=0
+smp4-4G: s4-4G end=marker after 237s swapirq= failed-lines=1 crash-lines=0 nmi=0
+
+# markers-compare, merge against 79891a2 (WORSE 0 in 9 of 9; [clock-drift] says "-> OK" in ASCII, which markers-compare does not count: BUG-421)
+== kvm/b410-st/s1-1G.log  vs  kvm/m-st/s1-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s1-2G.log  vs  kvm/m-st/s1-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s1-4G.log  vs  kvm/m-st/s1-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s2-1G.log  vs  kvm/m-st/s2-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s2-2G.log  vs  kvm/m-st/s2-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s2-4G.log  vs  kvm/m-st/s2-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s4-1G.log  vs  kvm/m-st/s4-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s4-2G.log  vs  kvm/m-st/s4-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/b410-st/s4-4G.log  vs  kvm/m-st/s4-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+# markers-compare, merge against 249cbf9
+== kvm/b400-st/s1-1G.log  vs  kvm/m-st/s1-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s1-2G.log  vs  kvm/m-st/s1-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s1-4G.log  vs  kvm/m-st/s1-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s2-1G.log  vs  kvm/m-st/s2-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s2-2G.log  vs  kvm/m-st/s2-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s2-4G.log  vs  kvm/m-st/s2-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s4-1G.log  vs  kvm/m-st/s4-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s4-2G.log  vs  kvm/m-st/s4-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1
+== kvm/b400-st/s4-4G.log  vs  kvm/m-st/s4-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 2
+   arena-segs: OKx1
+   swap-irq: OKx1

@@ -1,0 +1,111 @@
+user-smp1-iommu done 10:53:47 after 486s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 10:54:12 after 511s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 11:01:48 after 481s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 11:02:29 after 497s desktop=1 wd=0 nmi=0
+kernel-smp1 done 11:10:00 after 492s desktop=1 wd=0 nmi=0
+kernel-smp4 done 11:10:55 after 506s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 11:17:06 after 426s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 11:18:26 after 451s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 11:24:37 after 451s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 11:26:22 after 476s desktop=1 wd=0 nmi=0
+
+## user-smp1-iommu
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (772198 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max 
+[clock-drift] rest: 10009 ms of HPET time: clock +0 ppm (+0 us), tick count +7 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2200384 kHz by the 10 ms calibration (+187 ppm); timer interrupts 1001 of 1000 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6057 ms of HPET time: clock +0 ppm (+0 us), tick count +441 ppm (+2 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2200384 kHz by the 10 ms calibration (+187 ppm); timer interrupts 522 of 605 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 241 samples (0 refused, 0 restarts), offset from it now -3 us, largest 187 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3456 lookups 2217674; FILES: 600000 takes with interrupts off beside 43671 heap-watch sums with interrupts on -> OK ✓
+## user-smp1-noiommu
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (706018 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max 
+[clock-drift] rest: 10005 ms of HPET time: clock +0 ppm (+2 us), tick count +409 ppm (+4 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2206222 kHz by the 10 ms calibration (+2840 ppm); timer interrupts 998 of 997 the calibrated period predicts (-1 missing); ticks added for late ones 3, by forced advances 0
+[clock-drift] late: 6033 ms of HPET time: clock +0 ppm (+0 us), tick count +1140 ppm (+6 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2206222 kHz by the 10 ms calibration (+2840 ppm); timer interrupts 518 of 601 the calibrated period predicts (83 missing); ticks added for late ones 86, by forced advances 0
+[clock-drift]   time base: reference HPET, 237 samples (0 refused, 0 restarts), offset from it now -1 us, largest 2840 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3310 lookups 2150555; FILES: 596000 takes with interrupts off beside 39863 heap-watch sums with interrupts on -> OK ✓
+## kernel-smp1
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (783257 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max 
+[clock-drift] rest: 10000 ms of HPET time: clock +0 ppm (+1 us), tick count -19 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2200437 kHz by the 10 ms calibration (+210 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6067 ms of HPET time: clock +0 ppm (+0 us), tick count +393 ppm (+2 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2200437 kHz by the 10 ms calibration (+210 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 228 samples (0 refused, 0 restarts), offset from it now -2 us, largest 210 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3184 lookups 2205584; FILES: 600000 takes with interrupts off beside 43982 heap-watch sums with interrupts on -> OK ✓
+## storage-smp1-iommu-1g
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (818332 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max 
+[clock-drift] rest: 10029 ms of HPET time: clock +0 ppm (+1 us), tick count +17 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2200299 kHz by the 10 ms calibration (+147 ppm); timer interrupts 1003 of 1002 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6077 ms of HPET time: clock +0 ppm (+0 us), tick count +451 ppm (+2 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2200299 kHz by the 10 ms calibration (+147 ppm); timer interrupts 524 of 607 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 215 samples (0 refused, 0 restarts), offset from it now -2 us, largest 147 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3244 lookups 1824778; FILES: 600000 takes with interrupts off beside 39946 heap-watch sums with interrupts on -> OK ✓
+## combined-smp1-iommu-1g
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (846078 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 0 of 0 APs read along (0 reads, 0 stalled): steps back 0 times (max 
+[clock-drift] rest: 10009 ms of HPET time: clock +0 ppm (+0 us), tick count +26 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2200222 kHz by the 10 ms calibration (+112 ppm); timer interrupts 1001 of 1000 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6076 ms of HPET time: clock +0 ppm (+0 us), tick count +532 ppm (+3 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2200222 kHz by the 10 ms calibration (+112 ppm); timer interrupts 524 of 607 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 238 samples (0 refused, 0 restarts), offset from it now -2 us, largest 112 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3232 lookups 1765804; FILES: 600000 takes with interrupts off beside 46594 heap-watch sums with interrupts on -> OK ✓
+## user-smp4-iommu
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (274958 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (704000 reads, 1375 stalled): steps back 0 tim
+[clock-drift] rest: 10003 ms of HPET time: clock +0 ppm (+0 us), tick count -337 ppm (-3 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2202797 kHz by the 10 ms calibration (+1284 ppm); timer interrupts 999 of 999 the calibrated period predicts (0 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6074 ms of HPET time: clock +0 ppm (+0 us), tick count +894 ppm (+5 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2202797 kHz by the 10 ms calibration (+1284 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift]   time base: reference HPET, 265 samples (0 refused, 0 restarts), offset from it now -3 us, largest 1283 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3414 lookups 1977648; FILES: 598000 takes with interrupts off beside 37914 heap-watch sums with interrupts on -> OK ✓
+## user-smp4-noiommu
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (310695 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (712192 reads, 1391 stalled): steps back 0 tim
+[clock-drift] rest: 10017 ms of HPET time: clock +0 ppm (+1 us), tick count +1274 ppm (+12 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2201050 kHz by the 10 ms calibration (+489 ppm); timer interrupts 1002 of 1001 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6079 ms of HPET time: clock +0 ppm (+0 us), tick count +76 ppm (+0 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2201050 kHz by the 10 ms calibration (+489 ppm); timer interrupts 524 of 607 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 255 samples (0 refused, 0 restarts), offset from it now -2 us, largest 489 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3436 lookups 2047002; FILES: 600000 takes with interrupts off beside 38566 heap-watch sums with interrupts on -> OK ✓
+## kernel-smp4
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (316125 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (714752 reads, 1396 stalled): steps back 0 tim
+[clock-drift] rest: 10017 ms of HPET time: clock +0 ppm (+0 us), tick count +1246 ppm (+12 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2200624 kHz by the 10 ms calibration (+295 ppm); timer interrupts 1002 of 1001 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6069 ms of HPET time: clock +0 ppm (+0 us), tick count +64 ppm (+0 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2200624 kHz by the 10 ms calibration (+295 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 249 samples (0 refused, 0 restarts), offset from it now -3 us, largest 298 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3104 lookups 1999558; FILES: 600000 takes with interrupts off beside 42272 heap-watch sums with interrupts on -> OK ✓
+## storage-smp4-iommu-1g
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (267162 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (682496 reads, 1333 stalled): steps back 0 tim
+[clock-drift] rest: 10001 ms of HPET time: clock +0 ppm (+0 us), tick count +885 ppm (+8 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2201530 kHz by the 10 ms calibration (+707 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6051 ms of HPET time: clock +0 ppm (+0 us), tick count -223 ppm (-1 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2201530 kHz by the 10 ms calibration (+707 ppm); timer interrupts 521 of 604 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 235 samples (0 refused, 0 restarts), offset from it now -3 us, largest 707 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3272 lookups 1710537; FILES: 596000 takes with interrupts off beside 42723 heap-watch sums with interrupts on -> OK ✓
+## combined-smp4-iommu-1g
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (297275 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 3 of 3 APs read along (716061 reads, 1398 stalled): steps back 0 tim
+[clock-drift] rest: 10003 ms of HPET time: clock +0 ppm (+0 us), tick count +685 ppm (+6 ms) -> OK
+[clock-drift]   rest diag: TSC 2199973 kHz by the HPET, 2200511 kHz by the 10 ms calibration (+244 ppm); timer interrupts 1000 of 1000 the calibrated period predicts (0 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6067 ms of HPET time: clock +0 ppm (+0 us), tick count +382 ppm (+2 ms) -> OK
+[clock-drift]   late diag: TSC 2199974 kHz by the HPET, 2200511 kHz by the 10 ms calibration (+244 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 261 samples (0 refused, 0 restarts), offset from it now -3 us, largest 246 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3204 lookups 1703963; FILES: 600000 takes with interrupts off beside 42326 heap-watch sums with interrupts on -> OK ✓

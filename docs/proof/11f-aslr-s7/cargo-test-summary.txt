@@ -1,0 +1,2 @@
+# cargo test (workspace default-members) on .16, tree of 4599d0e (the merge), cargo test -j 6, nice 10, own target dir
+188 suites, 1396 passed, 0 failed, 1 ignored  (S6 831894f: 188 suites, 1396 passed; the kernel crate is not a default member)

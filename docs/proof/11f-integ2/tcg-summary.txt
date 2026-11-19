@@ -1,0 +1,11 @@
+# per leg (tcgsum.sh): desktop, watchdog, NMI, crash lines, [vdso-mono] verdicts, [clock-drift] OK lines, FAILED marker lines
+user-smp1-iommu: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=5 swap-irq=1
+user-smp1-noiommu: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=5 swap-irq=1
+kernel-smp1: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=1 swap-irq=1
+storage-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=7 swap-irq=1
+combined-smp1-iommu-1g: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=7 swap-irq=1
+user-smp4-iommu: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=5 swap-irq=1
+user-smp4-noiommu: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=5 swap-irq=1
+kernel-smp4: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=1 swap-irq=1
+storage-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=7 swap-irq=1
+combined-smp4-iommu-1g: desktop=1 watchdog=0 nmi=0 crash=0 vdso-mono=1 clock-drift-ok=3 clock-drift-failed=0 failed-lines=7 swap-irq=1

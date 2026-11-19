@@ -1,0 +1,108 @@
+# TCG m: per leg
+combined-smp1-iommu-1g desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=7
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+    [linux-abi] GBIG: malloc(209715200) FAILED
+    [glibc]   GBIG: malloc(209715200) FAILED
+combined-smp4-iommu-1g desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=7
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+    [linux-abi] GBIG: malloc(209715200) FAILED
+    [glibc]   GBIG: malloc(209715200) FAILED
+kernel-smp1 desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=8
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (646641 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+kernel-smp4 desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=9
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BS
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (171935 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+storage-smp1-iommu-1g desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=7
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+    [linux-abi] GBIG: malloc(209715200) FAILED
+    [glibc]   GBIG: malloc(209715200) FAILED
+storage-smp4-iommu-1g desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=7
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+    [linux-abi] GBIG: malloc(209715200) FAILED
+    [glibc]   GBIG: malloc(209715200) FAILED
+user-smp1-iommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=10
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (294139 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+user-smp1-noiommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=10
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (239917 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+user-smp4-iommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=11
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BS
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (257261 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+user-smp4-noiommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=1 clock-drift-failed=0 failed-lines=11
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [app] EuroApps SDK: unknown-key-refused=true · key-enrolled=true · sig
+    [churn-proc] 16 glibc processes (gtiny) run + reaped: clean-exits=0/16
+    [ap-user] 3 worker thread(s) pinned to 3 AP(s): result equal to the BS
+    [vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (184262 rounds), 1
+    [churn-thread] 60 cycles × 4 pthreads create+join in one process: exit
+    [churn-fork] 6 fork/exit/wait cycles: exit=18446744073709551615 (want 
+    [swap-irq] locks of the swapped state held with interrupts on: none; g
+    [app-policy] a Linux program under a policy from the outside: no-polic
+user-smp4-iommu done 12:47:02 after 236s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 12:47:47 after 281s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 12:51:02 after 240s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 12:52:33 after 286s desktop=1 wd=0 nmi=0
+kernel-smp4 done 12:55:13 after 251s desktop=1 wd=0 nmi=0
+kernel-smp1 done 12:56:48 after 255s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 13:04:54 after 581s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 13:04:54 after 486s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 13:13:06 after 492s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 13:15:56 after 662s desktop=1 wd=0 nmi=0

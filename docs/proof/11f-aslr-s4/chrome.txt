@@ -1,0 +1,23 @@
+# Chromium (chrome-pack2.img, nss-pack-vid.img), browser image (public + ui.tour=off update.check=off), smp 2, KVM; on = + aslr.arena=fixed on CPUs 0-1, off = default identity on CPUs 2-3 (siblings 20-23 idle)
+## starts20-on: [chrome-smoke] starts: 20/20 PASS | arena=fixed aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=184
+## starts20-off: [chrome-smoke] starts: 20/20 PASS | arena=identity aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=182
+## sites-on: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/s | arena=fixed aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=43
+## sites-off:  | arena=identity aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=44
+## sites-off2: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/s | arena=identity aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=43
+## interact-on: [chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/s | arena=fixed aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=12
+## interact-off: [chrome-smoke] PASS - 18/18 steps ok, report and screenshots in /dev/s | arena=identity aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=12
+## soak-on: [chrome-mem-soak] PASS: 6 rounds in 4004 s | arena=fixed aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=80
+## soak-off: [chrome-mem-soak] PASS: 6 rounds in 4014 s | arena=identity aborts=0 ring0=0 FROZEN=0 oom=0 refused-forks=0 execs=80
+## sites-off (first run) failed step, under host load (120 TCG short boots on CPUs 4-15/24-35 at the same time):
+[gui-smoke] FAIL site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 2.4 s, load finished 16.5 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 1023 ms; fds: 13 processes, 710 descriptors
+## consent banners (YouTube, round 1)
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels tha
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels tha
+## local VP9+Opus video with sound (inside the 1 h soaks, one clip a round)
+on: rounds 6, windows:       6 12 of 12 ; picture:       6 28 of 28 
+[chrome-mem-soak] round 6 done after 4004 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 41); files 43 MiB; demand 2489 MiB free
+off: rounds 6, windows:       6 12 of 12 ; picture:       6 28 of 28 
+[chrome-mem-soak] round 6 done after 4014 s: heap 124 MiB used, 387 MiB free; big 38/473 MiB (peak 45); files 43 MiB; demand 2482 MiB free
+## launch layout with fixed
+[aslr-layout] launch /pack/chrome: exe 0x226975879000 (span 323 MiB, align 0x1000) floor 0x282ab737f000 vdso 0x644914a34000 ld.so 0x80000800000 brk 0x800020ba000 stack 0x80007e43000 (aslr=on, arena fixed)
+Note: chrome-smoke --only localvideo needs h264.mp4 next to vp9.webm; with a vp9-only directory it refused to start (both modes). The VP9+Opus clip is covered by the soaks above.

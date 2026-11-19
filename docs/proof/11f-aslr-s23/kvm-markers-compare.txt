@@ -1,0 +1,56 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -nic none, pins 18,38 / 19,39 (two at a time)
+# base = 00a6459 (feature/11f-integ, self-test image of the validation team), fin = 215534d
+base-1g end=marker after 238s failed-lines=3 crash-lines=0
+base-2g end=marker after 196s failed-lines=1 crash-lines=0
+base-4g end=marker after 202s failed-lines=1 crash-lines=0
+base-8g end=marker after 261s failed-lines=1 crash-lines=0
+fin-1g end=marker after 184s failed-lines=3 crash-lines=0
+fin-2g end=marker after 192s failed-lines=1 crash-lines=0
+fin-4g end=marker after 198s failed-lines=1 crash-lines=0
+fin-8g end=marker after 198s failed-lines=1 crash-lines=0
+## markers-compare base -> fin, 1 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   arena-hi: OKx1
+   elf-bias: OKx1
+## markers-compare base -> fin, 2 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   arena-hi: OKx1
+   elf-bias: OKx1
+## markers-compare base -> fin, 4 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   arena-hi: OKx1
+   elf-bias: OKx1
+## markers-compare base -> fin, 8 GiB
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 2
+   arena-hi: OKx1
+   elf-bias: OKx1
+## [arena-hi] and [elf-bias], fin
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write Some((5, 0, 0)), one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown 27 frames, pool 40960 -> 40960 -> OK ✓
+[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses (2 cases: next to each other, and at 0x80000000000+): entry, PHDR, base virtual, 10 relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write Some((5, 0, 0)), one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown 27 frames, pool 73728 -> 73728 -> OK ✓
+[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses (2 cases: next to each other, and at 0x80000000000+): entry, PHDR, base virtual, 10 relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write Some((5, 0, 0)), one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown 27 frames, pool 427008 -> 427008 -> OK ✓
+[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses (2 cases: next to each other, and at 0x80000000000+): entry, PHDR, base virtual, 10 relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write Some((5, 0, 0)), one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown 27 frames, pool 887296 -> 887296 -> OK ✓
+[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses (2 cases: next to each other, and at 0x80000000000+): entry, PHDR, base virtual, 10 relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓
+## FAILED lines (same in base and fin)
+base-1g: [linux-abi] GBIG: malloc(209715200) FAILED|[glibc]   GBIG: malloc(209715200) FAILED|[aslr] 64 starts of a glibc PIE: varying bits mmap 17 (4 KiB 17, 1 MiB|
+base-2g: [aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2|
+base-4g: [aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2|
+base-8g: [aslr] 64 starts of a glibc PIE: varying bits mmap 11 (4 KiB 11, 1 MiB|
+fin-1g: [linux-abi] GBIG: malloc(209715200) FAILED|[glibc]   GBIG: malloc(209715200) FAILED|[aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2|
+fin-2g: [aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2|
+fin-4g: [aslr] 64 starts of a glibc PIE: varying bits mmap 10 (4 KiB 10, 1 MiB|
+fin-8g: [aslr] 64 starts of a glibc PIE: varying bits mmap 9 (4 KiB 9, 1 MiB 2|

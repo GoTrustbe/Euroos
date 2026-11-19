@@ -1,0 +1,34 @@
+# 30 KVM boots of B (f487cc7 self-test image) with busy loops on the siblings: 10 x 1 vCPU (pin 18, busy 38), 10 x 2 vCPU (pin 18,19, busy 38,39), 10 x 4 vCPU (pin 18,19,38,39, busy 38,39). Until [clock-drift] has its verdict.
+l1-10 end=marker after 186s failed-lines=1 crash-lines=0
+l1-1 end=marker after 196s failed-lines=1 crash-lines=0
+l1-2 end=marker after 195s failed-lines=1 crash-lines=0
+l1-3 end=marker after 195s failed-lines=1 crash-lines=0
+l1-4 end=marker after 196s failed-lines=1 crash-lines=0
+l1-5 end=marker after 191s failed-lines=1 crash-lines=0
+l1-6 end=marker after 187s failed-lines=1 crash-lines=0
+l1-7 end=marker after 188s failed-lines=1 crash-lines=0
+l1-8 end=marker after 188s failed-lines=1 crash-lines=0
+l1-9 end=marker after 186s failed-lines=1 crash-lines=0
+l2-10 end=marker after 190s failed-lines=1 crash-lines=0
+l2-1 end=marker after 187s failed-lines=1 crash-lines=0
+l2-2 end=marker after 186s failed-lines=1 crash-lines=0
+l2-3 end=marker after 189s failed-lines=1 crash-lines=0
+l2-4 end=marker after 187s failed-lines=1 crash-lines=0
+l2-5 end=marker after 187s failed-lines=1 crash-lines=0
+l2-6 end=marker after 185s failed-lines=1 crash-lines=0
+l2-7 end=marker after 197s failed-lines=1 crash-lines=0
+l2-8 end=marker after 187s failed-lines=1 crash-lines=0
+l2-9 end=marker after 187s failed-lines=1 crash-lines=0
+l4-10 end=marker after 188s failed-lines=1 crash-lines=0
+l4-1 end=marker after 189s failed-lines=1 crash-lines=0
+l4-2 end=marker after 187s failed-lines=1 crash-lines=0
+l4-3 end=marker after 188s failed-lines=1 crash-lines=0
+l4-4 end=marker after 191s failed-lines=1 crash-lines=0
+l4-5 end=marker after 188s failed-lines=1 crash-lines=0
+l4-6 end=marker after 187s failed-lines=1 crash-lines=0
+l4-7 end=marker after 187s failed-lines=1 crash-lines=0
+l4-8 end=marker after 189s failed-lines=1 crash-lines=0
+l4-9 end=marker after 189s failed-lines=1 crash-lines=0
+## [clock-drift] verdicts: 30 OK of 30; phases:  60 clock +0 ppm
+## time base:  30 (0 refused, 0 restarts), largest offset largest 1952 us
+## [vdso-mono] OK: 30 of 30

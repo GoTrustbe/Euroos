@@ -1,0 +1,34 @@
+# Chromium, image B (f426198) public + euroos-boot.conf (update.check=off, ui.tour=off), chrome-pack2.img, nss-pack-vid.img, smp 2, 6 GiB, KVM, user-net without hostfwd. Pins: 20 starts 18,38; 3-round session 19,39 (beside gui-smoke on 16,17,36,37); sessions s1-s3 on 16,36 / 17,37 / 18,38, then s4-s6 on the same pins
+## 20 starts: 20 PASS, 0 FAIL
+start-01 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-02 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-03 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-04 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-05 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-06 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-07 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-08 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-09 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-10 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-11 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-12 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-13 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-14 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-15 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-16 | aborts 0, network service 0 | execs with vDSO 9/9 | crash/oom/frozen 0 | ended by signal 0
+start-17 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-18 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-19 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+start-20 | aborts 0, network service 0 | execs with vDSO 10/10 | crash/oom/frozen 0 | ended by signal 0
+## sites, 3 rounds in one session: [chrome-smoke] PASS - 36/36 steps ok, re | aborts 0, network service 0 | execs with vDSO 43/43 | crash/oom/frozen 0 | ended by signal 0
+## 6 sessions, one round each
+s1 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0 | ended by signal 0
+s2 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0 | ended by signal 0
+s3 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 24/24 | crash/oom/frozen 0 | ended by signal 0
+s4 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 25/25 | crash/oom/frozen 0 | ended by signal 0
+s5 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0 | ended by signal 0
+s6 | [chrome-smoke] PASS - 14/14 steps ok, report  | aborts 0, network service 0 | execs with vDSO 23/23 | crash/oom/frozen 0 | ended by signal 0
+## consent lines
+      1 [gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject 
+      1 [gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (534, 640), banner gone; full reject lab
+      5 [gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject lab

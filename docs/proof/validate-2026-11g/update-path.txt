@@ -1,0 +1,21 @@
+[inst] OK up=True done=True install 3s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=true; EuroFS root formatted + 5 steps provisioned, after remount hostname='euro-test'=true user='tester'=true euroid-store=true → OK (bootable + provisioned installation from own media; boots st
+partition 0 EFI System Partition 2048 526335
+partition 1 EuroOS-A 919552 7717485
+partition 2 EuroSlot-A 526336 722943
+partition 3 EuroSlot-B 722944 919551
+partition 4 EuroSwap 7717486 8388573
+slot EuroSlot-A: 54699520 B image, header sha256 6d05eef9349e859f
+== base
+[rename-persist] ok   phase 3: no fault line on the serial log
+[rename-persist] 23/23 checks ok
+[loader] kernel image from the slot partition (header + sha256 + Ed25519 verified)
+[loader] kernel image loaded — LoadImage + StartImage...
+[euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261117
+[euroupdate] slot A confirmed GOOD (boot succeeded)
+== upd
+[rename-persist] ok   phase 3: no fault line on the serial log
+[rename-persist] 23/23 checks ok
+[loader] kernel image from the slot partition (header + sha256 + Ed25519 verified)
+[loader] kernel image loaded — LoadImage + StartImage...
+[euroupdate] boot from slot A (gen 1, 0 attempt(s) left, A=Good B=Empty), running version 20261119
+[euroupdate] slot A confirmed GOOD (boot succeeded)

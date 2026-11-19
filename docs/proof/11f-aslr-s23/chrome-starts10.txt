@@ -1,0 +1,13 @@
+# chrome-smoke --starts 10 --smp 2, browser image (ui.tour=off;update.check=off) of 215534d, pin 18,19
+[chrome-smoke] start 1/10: PASS
+[chrome-smoke] start 2/10: PASS
+[chrome-smoke] start 3/10: PASS
+[chrome-smoke] start 4/10: PASS
+[chrome-smoke] start 5/10: PASS
+[chrome-smoke] start 6/10: PASS
+[chrome-smoke] start 7/10: PASS
+[chrome-smoke] start 8/10: PASS
+[chrome-smoke] start 9/10: PASS
+[chrome-smoke] start 10/10: PASS
+[chrome-smoke] starts: 10/10 PASS
+FROZEN lines: 0

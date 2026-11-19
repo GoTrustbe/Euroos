@@ -121,6 +121,54 @@ const ARENA_SPAN: u64 = 2 * 1024 * 1024;
 /// (e.g. the DOOM port, [[eurokernel-project]]) raises it so that user-pointer
 /// validation covers its whole arena instead of clamping at 2 MiB.
 static ARENA_SPAN_DYN: AtomicU64 = AtomicU64::new(ARENA_SPAN);
+/// ASLR S6: the heap and stack segments of a glibc arena cut in three
+/// (`euromm::layout::Segs`): virtual base and arena offset of each, 0 for an
+/// arena in one piece. They belong to the arena whose image segment is at
+/// `ARENA_SEGS_KEY`: the native paths that swap `ARENA_BASE` to an arena of
+/// their own (bg dispatch, the pointer self-test) leave these alone, and with
+/// another base the arena is one piece again (`arena_segs_now`).
+static ARENA_HEAP_VIRT: AtomicU64 = AtomicU64::new(0);
+static ARENA_HEAP_OFF: AtomicU64 = AtomicU64::new(0);
+static ARENA_STACK_VIRT: AtomicU64 = AtomicU64::new(0);
+static ARENA_STACK_OFF: AtomicU64 = AtomicU64::new(0);
+static ARENA_SEGS_KEY: AtomicU64 = AtomicU64::new(0);
+
+/// ASLR S6: the segments of the arena of the running process.
+fn arena_segs_now() -> euromm::layout::Segs {
+    use euromm::layout::{Seg, Segs};
+    let base = ARENA_BASE.load(Ordering::Relaxed);
+    let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
+    let hv = ARENA_HEAP_VIRT.load(Ordering::Relaxed);
+    if hv == 0 || ARENA_SEGS_KEY.load(Ordering::Relaxed) != base {
+        return Segs::one(base, span);
+    }
+    let (ho, sv, so) = (ARENA_HEAP_OFF.load(Ordering::Relaxed), ARENA_STACK_VIRT.load(Ordering::Relaxed), ARENA_STACK_OFF.load(Ordering::Relaxed));
+    Segs::three([
+        Seg { virt: base, off: 0, len: ho },
+        Seg { virt: hv, off: ho, len: so.saturating_sub(ho) },
+        Seg { virt: sv, off: so, len: span.saturating_sub(so) },
+    ])
+    .unwrap_or(Segs::one(base, span))
+}
+
+/// ASLR S6: the virtual base of segment `i` of `segs` (0: none; the logs).
+fn seg_virt(segs: &euromm::layout::Segs, i: usize) -> u64 {
+    segs.list().get(i).map(|s| s.virt).unwrap_or(0)
+}
+
+/// ASLR S6: make `segs` the arena of the running process (`ARENA_BASE` is the
+/// image segment, `ARENA_SPAN_DYN` the whole span).
+fn arena_segs_set(segs: &euromm::layout::Segs) {
+    let x = segs.list();
+    let (hv, ho, sv, so) = if segs.split() { (x[1].virt, x[1].off, x[2].virt, x[2].off) } else { (0, 0, 0, 0) };
+    ARENA_HEAP_VIRT.store(hv, Ordering::Relaxed);
+    ARENA_HEAP_OFF.store(ho, Ordering::Relaxed);
+    ARENA_STACK_VIRT.store(sv, Ordering::Relaxed);
+    ARENA_STACK_OFF.store(so, Ordering::Relaxed);
+    ARENA_SEGS_KEY.store(segs.base(), Ordering::Relaxed);
+    ARENA_BASE.store(segs.base(), Ordering::Relaxed);
+    ARENA_SPAN_DYN.store(segs.span(), Ordering::Relaxed);
+}
 
 /// Does `[ptr, ptr+len)` lie entirely within the arena of the running process?
 /// (Overflow-safe. If no arena has been set yet — a purely kernel-internal call —
@@ -148,7 +196,8 @@ unsafe fn recover_mmap_offset() -> u64 {
 /// -> the program CHECK-crashed (fontations/Rust stack-guard probe). We now record
 /// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
 /// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
-static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static PROT_NONE_RANGES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "PROT_NONE_RANGES");
 /// Audio diagnostics: the renderer's AudioOutputDevice thread and the browser's
 /// AudioThread (resolved by name at each heartbeat); their next syscalls are logged
 /// as [audio-sys] so the two ends of the audio sync socketpair become visible.
@@ -173,8 +222,21 @@ fn prot_none_set(start: u64, end: u64, none: bool) {
 /// Is [ptr,ptr+len) inside a file-backed (hence read-only) demand mapping? Such an
 /// address is readable but a write to it must EFAULT. `fi == usize::MAX` entries are
 /// zero-fill .bss (anonymous, writable) — excluded.
+///
+/// BUG-351: page by page, and the NEWEST mapping of a page decides (a later
+/// MAP_FIXED, the .bss overlay of a library, lies over the flat mapping of the
+/// whole library, which stays in the list): the .bss overlay is anonymous
+/// memory. A page of a file mapping the process holds writable (it wrote it)
+/// or shares copy-on-write after a fork (only a written page is shared that
+/// way) takes the write, unless mprotect made it read-only since
+/// (`RO_FILE_RANGES`: Chromium's ProtectedMemory writes its page, makes it
+/// read-only and CHECKs that a system call writing there gives EFAULT,
+/// base::internal::CheckMemoryReadOnly; glibc's RELRO). Before, any overlap
+/// with any file mapping refused the write: getrandom, clock_gettime,
+/// socketpair... into libc's .data or .bss gave EFAULT, in every fork child
+/// at once (glibc's malloc asks getrandom for its tcache key there).
 fn demand_file_backed(ptr: u64, len: usize) -> bool {
-    if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < DEMAND_BASE {
+    if !DEMAND_FILE_ENABLED.load(Ordering::Relaxed) || ptr < demand_base() {
         return false; // fast path: not a demand-region pointer
     }
     let end = ptr.saturating_add(len as u64);
@@ -185,10 +247,70 @@ fn demand_file_backed(ptr: u64, len: usize) -> bool {
     {
         return false;
     }
-    DEMAND_FILE_MAPS
-        .lock()
-        .iter()
-        .any(|&(b, l, fi, _, _)| fi != usize::MAX && ptr < b + l && end > b)
+    let maps = DEMAND_FILE_MAPS.lock();
+    if !maps.iter().any(|&(b, l, fi, _, _)| fi != usize::MAX && ptr < b + l && end > b) {
+        return false;
+    }
+    let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    let mut a = ptr;
+    while a < end {
+        let newest = maps.iter().rev().find(|&&(b, l, _, _, _)| a >= b && a < b + l);
+        if let Some(&(_, _, fi, _, _)) = newest {
+            if fi != usize::MAX {
+                let own = match crate::paging::leaf_entry_in(pml4, a) {
+                    Some(e) if e & crate::paging::COW != 0 => true,
+                    Some(e) if e & 2 != 0 => !RO_FILE_RANGES.lock().iter().any(|&(p, s, e)| p == pml4 && a >= s && a < e),
+                    _ => false,
+                };
+                if !own {
+                    return true; // a page of the file the process has not written, or read-only
+                }
+            }
+        }
+        a = (a & !0xFFF) + 4096;
+    }
+    false
+}
+
+/// BUG-351: ranges of file mappings mprotect made read-only (not PROT_NONE),
+/// per address space (CR3). mprotect changes no page entry here, so this is
+/// the only record of it; `demand_file_backed` refuses a kernel write there.
+/// An entry of an address space that is gone only makes a write EFAULT that
+/// the rule before BUG-351 refused as well; the list is bounded.
+static RO_FILE_RANGES: Mutex<alloc::vec::Vec<(u64, u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+
+fn ro_file_note(start: u64, end: u64, prot: u64) {
+    if end <= start {
+        return;
+    }
+    let ro = prot != 0 && prot & 2 == 0;
+    let file = ro && DEMAND_FILE_MAPS.lock().iter().any(|&(b, l, fi, _, _)| fi != usize::MAX && start < b + l && end > b);
+    let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    let mut g = RO_FILE_RANGES.lock();
+    if !file && !g.iter().any(|&(p, s, e)| p == pml4 && start < e && end > s) {
+        return; // the common case (V8 and every anonymous mapping): nothing to do
+    }
+    let mut out = alloc::vec::Vec::with_capacity(g.len() + 2);
+    for &(p, s, e) in g.iter() {
+        if p != pml4 || e <= start || s >= end {
+            out.push((p, s, e));
+            continue;
+        }
+        if s < start {
+            out.push((p, s, start));
+        }
+        if e > end {
+            out.push((p, end, e));
+        }
+    }
+    if file {
+        out.push((pml4, start, end));
+    }
+    if out.len() > 2048 {
+        let cut = out.len() - 2048;
+        out.drain(..cut);
+    }
+    *g = out;
 }
 
 /// Does [ptr,ptr+len) touch any PROT_NONE (inaccessible) range?
@@ -214,23 +336,21 @@ pub(crate) fn in_user_arena(ptr: u64, len: usize) -> bool {
     // above the arena (own PML4 slot); accepting it lets copy_to/from_user validate
     // demand-region pointers. Un-committed pages fault in on kernel touch (ring-0
     // demand fault), so it is safe to hand the kernel these addresses.
-    if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= DEMAND_BASE {
+    if DEMAND_ENABLED.load(Ordering::Relaxed) && ptr >= demand_base() {
         // Bound by THIS process's bump pointer, not just by the region: an
         // address beyond it was never handed out here (it belongs to another
         // process). The demand fault handler rejects exactly that, so a kernel
         // dereference would page-fault at ring 0 and halt the machine instead
         // of returning EFAULT to the caller. Found on real hardware under KVM.
         return match ptr.checked_add(len as u64) {
-            Some(end) => end <= DEMAND_BASE + DEMAND_SIZE
+            Some(end) => end <= demand_end()
                 && end <= DEMAND_NEXT.load(Ordering::Relaxed),
             None => false,
         };
     }
-    let top = base + ARENA_SPAN_DYN.load(Ordering::Relaxed);
-    match ptr.checked_add(len as u64) {
-        Some(end) => ptr >= base && end <= top,
-        None => false,
-    }
+    // ASLR S6: inside one segment of the arena (a range across the gap
+    // between two segments is not memory of the process).
+    arena_segs_now().contains(ptr, len as u64)
 }
 
 /// `-EFAULT`: returned by a syscall when a supplied user pointer does not lie
@@ -1770,7 +1890,7 @@ fn cdp_begin_frame() {
     crate::serial_println!("[cdp] capture requested; threads now:");
     let (mn, ma, mr) = last_syscall(main);
     crate::serial_println!("  main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}", thread_name(main));
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         let (n2, a2, r2) = last_syscall(t);
         crate::serial_println!("  t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
     }
@@ -2349,7 +2469,9 @@ fn cdp_pump_inner() {
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
         // Snapshot under IF=0, print without the lock: clone/exit take GLIBC_THREADS
         // in syscalls with interrupts off, and this runs on task 0 with them on.
-        let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
+        // (The guard used to sit in a block whose tail expression held the lock
+        // temporary: the lock was released after the interrupts came back, BUG-430.)
+        let threads = glibc_threads_snapshot();
         for &t in threads.iter() {
             let (n, a, r) = last_syscall(t);
             crate::serial_println!("  thread t{t} {:?}: last={n}(a1={a:#x})->{r:#x} dead={}",
@@ -2727,8 +2849,13 @@ fn pipe_create2(user_fds: u64, flags: u64) -> u64 {
     // are the numbers the program gets.
     match fdtab::install_pair(got[0] as u64, got[1] as u64) {
         Ok((rd, wr)) => {
-            let _ = write_user(user_fds, rd as i32);
-            let _ = write_user(user_fds + 4, wr as i32);
+            // BUG-351: a refused write is EFAULT (as on Linux), not success
+            // with two descriptor numbers the caller never sees.
+            if !write_user(user_fds, rd as i32) || !write_user(user_fds + 4, wr as i32) {
+                let _ = close_fd_now(rd as u64);
+                let _ = close_fd_now(wr as u64);
+                return EFAULT;
+            }
             0
         }
         Err(e) => {
@@ -4204,7 +4331,7 @@ pub fn pcache_reclaim(want: usize) -> usize {
         if n > hi - lo { None } else { Some(((n / 64) as usize, 1u64 << (n % 64))) }
     };
     for &pml4 in spaces.iter() {
-        crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, true, &mut |frame, accessed| {
+        dz_scan_ro(pml4, true, &mut |frame, accessed| {
             if let Some((w, b)) = bit(frame) {
                 mapped[w] |= b;
                 if accessed {
@@ -4233,7 +4360,7 @@ pub fn pcache_reclaim(want: usize) -> usize {
             }
         }
         for &pml4 in spaces.iter() {
-            crate::paging::scan_demand_ro(pml4, DEMAND_PML4_IDX, false, &mut |frame, _| {
+            dz_scan_ro(pml4, false, &mut |frame, _| {
                 matches!(bit(frame), Some((w, b)) if hot[w] & b != 0)
             });
         }
@@ -4289,8 +4416,8 @@ fn child_keep_list(child_pml4: u64) -> alloc::vec::Vec<u64> {
     if parent == 0 || parent == child_pml4 || !EXIT_GUARD.load(Ordering::Relaxed) {
         return keep;
     }
-    let pv = crate::paging::demand_phys_sorted(parent, DEMAND_PML4_IDX);
-    let cv = crate::paging::demand_phys_sorted(child_pml4, DEMAND_PML4_IDX);
+    let pv = dz_phys_sorted(parent);
+    let cv = dz_phys_sorted(child_pml4);
     let mut n = 0usize;
     let mut first = [0u64; 4];
     for &f in &cv {
@@ -4974,9 +5101,61 @@ pub fn thread_kstacks_used() -> usize {
     THREAD_KSTACK_USED.iter().filter(|b| b.load(Ordering::Relaxed)).count()
 }
 
+/// Bytes the table of files holds (names and contents): the heap watch of
+/// `run_glibc_disk` prints it, from task 0 with interrupts on (BUG-410).
+/// System calls and faults take FILES with interrupts off: held here with
+/// interrupts on, a tick inside the sum parks this task for good and the next
+/// task that wants FILES spins (kernel code runs on the BSP only).
+fn files_heap_bytes() -> usize {
+    let _g = crate::sched::IfOffGuard::new();
+    // A statement of its own: the lock is released before `_g` restores interrupts
+    // (a temporary of a tail expression would outlive `_g`).
+    let n = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+    n
+}
+
 /// Entries in the global file table (the [churn-proc] leak counter).
 pub fn files_count() -> usize {
     FILES.lock().len()
+}
+
+// -- BUG-430: GLIBC_THREADS from the launchers and the CDP frame --
+//
+// System calls (clone, exit, exit_group, prctl, seccomp), `retire_task` and the
+// fault handler take GLIBC_THREADS with interrupts off. The launcher code of task 0
+// (`run_glibc`, `run_glibc_disk`, `glibc_disk_launch`, `spawn_glibc_persistent`,
+// `kill_persistent_glibc`, `kill_glibc_group`) and `cdp_begin_frame` take it with
+// interrupts on: a tick inside such a critical section parks the holder for good
+// and the next task that wants the lock spins (kernel code runs on the BSP only).
+// All of those go through these four functions: interrupts off before the lock,
+// back on after it is released, the critical section a copy and nothing else (the
+// caller works on the copy). Each lock is a statement of its own: a temporary of
+// a tail expression would outlive the guard and be released with interrupts on.
+
+/// A copy of the list of worker tasks of the running glibc program.
+fn glibc_threads_snapshot() -> alloc::vec::Vec<usize> {
+    let _g = crate::sched::IfOffGuard::new();
+    let v = GLIBC_THREADS.lock().clone();
+    v
+}
+
+/// How many worker tasks the running glibc program has.
+fn glibc_threads_len() -> usize {
+    let _g = crate::sched::IfOffGuard::new();
+    let n = GLIBC_THREADS.lock().len();
+    n
+}
+
+/// Forget all worker tasks (a launch starts, or the persistent program ended).
+fn glibc_threads_clear() {
+    let _g = crate::sched::IfOffGuard::new();
+    GLIBC_THREADS.lock().clear();
+}
+
+/// Forget one worker task (its slot is retired).
+fn glibc_threads_forget(t: usize) {
+    let _g = crate::sched::IfOffGuard::new();
+    GLIBC_THREADS.lock().retain(|&x| x != t);
 }
 
 pub fn reap_dead(falloc: &mut FrameAllocator) {
@@ -5244,7 +5423,7 @@ fn retire_task(t: usize) {
     // which tasks the end of the run kills, GLIBC_CTIDS where an exiting thread
     // writes its zero (in another address space by then), THREAD_NAMES what the
     // diagnostics call it.
-    GLIBC_THREADS.lock().retain(|&x| x != t);
+    glibc_threads_forget(t);
     GLIBC_CTIDS.lock().retain(|&(x, _)| x != t);
     THREAD_NAMES.lock().retain(|(x, _)| *x != t);
     if t < crate::sched::MAX_TASKS && crate::sched::is_dead(t) {
@@ -5452,7 +5631,6 @@ fn seccomp_evaluate(cur: usize, num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5
 /// Address-space layout randomisation for a fresh image: page-granular slides
 /// for the brk base, the mmap bump base and the stack top inside the arena, and
 /// a 2 MiB-granular slide of the demand pool. Entropy from the kernel CSPRNG.
-struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
 /// BUG-136: brk start, mmap window start and stack top of a glibc arena of
 /// `span` bytes at `arena`, every region inside it (euromm::arena, host-tested).
 /// The launchers fall back to 64 MiB arenas on fragmented RAM; with the fixed
@@ -5461,32 +5639,24 @@ struct Slides { brk: u64, mmap: u64, stack: u64, demand: u64 }
 /// then a crash; one of them wedged the scheduler lock). An arena too small for
 /// any layout gets empty brk and mmap regions (every allocation ENOMEM), which
 /// the launchers never hand out (their floor is 64 MiB).
-fn glibc_arena_layout(arena: u64, span: u64) -> (u64, u64, u64) {
-    let sl = aslr_slides();
-    let s = euromm::arena::Slides { brk: sl.brk, mmap: sl.mmap, stack: sl.stack };
-    match euromm::arena::glibc_layout(arena, span, s) {
-        Some(l) => (l.brk_start, l.mmap_start, l.stack_top),
+///
+/// ASLR S6: the arena is a list of segments; the result is (brk start, mmap
+/// window start, mmap window end = `HEAP_END`, stack top), each seen through
+/// its segment (`euromm::arena::glibc_layout_segs`). In one piece the window
+/// ends 1 MiB below the stack top, as before; in three it ends with the heap
+/// segment.
+fn glibc_arena_layout(segs: &euromm::layout::Segs, lay: &euromm::layout::Layout) -> (u64, u64, u64, u64) {
+    let s = euromm::arena::Slides { brk: lay.brk, mmap: lay.mmap, stack: lay.stack };
+    match euromm::arena::glibc_layout_segs(segs, s) {
+        Some(l) => (l.brk_start, l.mmap_start, l.heap_end, l.stack_top),
         None => {
-            crate::serial_println!("[glibc] arena of {} MiB: no layout fits, brk and mmap refused", span >> 20);
-            let top = arena + span;
-            (top - 0x0020_0000, top - 0x0020_0000, top - 0x0010_0000)
+            crate::serial_println!("[glibc] arena of {} MiB: no layout fits, brk and mmap refused", segs.span() >> 20);
+            let top = segs.virt(segs.span());
+            (top - 0x0020_0000, top - 0x0020_0000, top - 0x0020_0000, top - 0x0010_0000)
         }
     }
 }
 
-fn aslr_slides() -> Slides {
-    let r = u64::from_le_bytes(crate::entropy::draw_wait::<8>());
-    // BUG-088: every slide in pages (4 KiB), over the same ranges as before:
-    // brk 4 -> 8 bits, mmap window 5 -> 9, demand pool 10 -> 19. The ranges
-    // are what the identity-mapped arena and the one PML4 slot of the demand
-    // pool leave; the Linux level (28 bits) needs a virtual arena.
-    Slides {
-        brk: (r & 0xFF) << 12,              // 0..1 MiB in 4 KiB steps
-        mmap: ((r >> 8) & 0x1FF) << 12,     // 0..2 MiB in 4 KiB steps
-        stack: ((r >> 17) & 0xFF) << 12,    // 0..1 MiB in 4 KiB steps
-        demand: ((r >> 25) & 0x7FFFF) << 12, // 0..2 GiB in 4 KiB steps
-    }
-}
 
 /// Apply `p` to the whole process of task `cur`: its main task and every thread
 /// that shares its address space (the main group, or one fork child's group).
@@ -5526,6 +5696,9 @@ fn set_process_profile(cur: usize, p: eurosandbox::Profile) {
 /// renderer-thread crash does not take the whole browser down. Returns true if a
 /// group was terminated.
 pub fn fault_kill_group(cur: usize, signal: u8) -> bool {
+    if fork_child_fault_kill(cur, signal) {
+        return true;
+    }
     let main = GLIBC_MAIN_TASK.load(Ordering::Relaxed);
     if main == usize::MAX || PERSIST_PML4.load(Ordering::Relaxed) != 0 {
         return false;
@@ -9575,6 +9748,7 @@ pub fn program_sig(path: &str) -> Option<&'static [u8]> {
         "/bin/grenprobe" => include_bytes!("../../userland/glibc/grenprobe.sig"),
         "/bin/grandprobe" => include_bytes!("../../userland/glibc/grandprobe.sig"),
         "/bin/gaslr" => include_bytes!("../../userland/glibc/gaslr.sig"),
+        "/bin/gaslrx" => include_bytes!("../../userland/glibc/gaslrx.sig"),
         "/bin/muslfile" => include_bytes!("../../userland/muslfile.elf.sig"),
         "/bin/fbtest" => include_bytes!("../../userland/fbtest.elf.sig"),
         "/bin/doom" => include_bytes!("../../userland/doom.elf.sig"),
@@ -9697,7 +9871,6 @@ static GVDSO_ELF: &[u8] = include_bytes!("../../userland/glibc/gvdso");
 pub fn gvdso_bytes() -> &'static [u8] { GVDSO_ELF }
 /// Where the vDSO lands in every glibc address space. Above the demand region's
 /// growth so DEMAND_NEXT can never collide with it.
-const VDSO_BASE: u64 = 0x1F0_0000_0000;
 /// VA-page offset of the clock data page: ONE page past the single-load image
 /// (vdso.lds keeps the whole image under a page; the code reads the page via
 /// `__ehdr_start + 4096`, PC-relative, no relocation).
@@ -9710,6 +9883,16 @@ static VDSO_IMAGE_FRAMES: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::V
 /// Refresh the vDSO clock page. Called from the timer tick: seq goes odd, the
 /// monotonic and real clocks are written, seq goes even — readers retry on odd.
 pub fn vdso_tick() {
+    // BUG-380: one writer at a time. The timer tick calls this with interrupts
+    // off; the callers in task context (forced tick advances, tickless idle)
+    // could be interrupted by the tick halfway through an update, and the tick
+    // would then publish a page the outer writer overwrites with its older
+    // anchor. Kernel code runs on the BSP only, so interrupts off suffices.
+    x86_64::instructions::interrupts::without_interrupts(vdso_tick_one);
+}
+
+fn vdso_tick_one() {
+    let _w = VdsoWriter::enter();
     let frame = VDSO_TIME_FRAME.load(Ordering::Relaxed);
     if frame == 0 {
         return;
@@ -9730,6 +9913,25 @@ pub fn vdso_tick() {
     // chrome's delay-until-deadline math). [1]=mono_ns [3]=real_ns [5]=anchor tsc
     // [6]=ns-per-tsc <<20. Calibration: measured tsc delta across REAL timer ticks
     // (forced advances would poison the rate, so those pass ticks==last and skip).
+    let d = frame as *mut u64;
+    // BUG-380: the sequence goes odd BEFORE the TSC of the new anchor is read
+    // (mfence; lfence; rdtsc: after the store is visible to every CPU). A
+    // reader that still gets the old page made its final sequence check before
+    // that, and it reads the TSC before that check (vdso.c: lfence; rdtsc;
+    // lfence inside the seqlock), so its TSC is below this one: the old
+    // formula at this anchor is at least what any reader of the old page saw,
+    // and the new anchor starts there. Before, the TSC was read first and the
+    // vDSO read its TSC after the check: a read that got the old page and its
+    // TSC after this tick (the tick landed between the two, a vCPU the host did
+    // not run) went on at the old rate past the new anchor, and a slower new
+    // rate put the next reads below it (up to 28 us under TCG).
+    // SAFETY: the identity-mapped clock frame; only this function writes it,
+    // with interrupts off, on the BSP.
+    let odd = unsafe { d.read_volatile() }.wrapping_add(1) | 1;
+    unsafe {
+        d.write_volatile(odd); // odd: update in progress
+        core::arch::asm!("mfence", "lfence", options(nostack, preserves_flags));
+    }
     let tsc = unsafe { core::arch::x86_64::_rdtsc() };
     let last_tick = VDSO_CAL_TICK.load(Ordering::Relaxed);
     if ticks > last_tick {
@@ -9749,17 +9951,149 @@ pub fn vdso_tick() {
         VDSO_CAL_TICK.store(ticks, Ordering::Relaxed);
         VDSO_CAL_TSC.store(tsc, Ordering::Relaxed);
     }
-    let mono_ns = ticks * 10_000_000;
-    let real_ns = base * 1_000_000_000 + ticks.saturating_sub(base_ticks) * 10_000_000;
-    let d = frame as *mut u64;
+    // BUG-355: the new anchor is never below what a reader of the page saw a
+    // moment ago. A reader adds up to two ticks of rdtsc time to the anchor;
+    // the tick count does not follow a late tick (one period lost when the
+    // gap is under two, LAPIC jitter, a vCPU that was not running), so
+    // `ticks * 10 ms` was often below that and the vDSO clock stepped back,
+    // up to 10 ms ([vdso-mono]). Now the clock stays continuous: the anchor is
+    // the larger of the tick time and the time readers see now, and while it
+    // runs ahead of the ticks it runs slower (1/8, or 3/4 from 5 ms) until
+    // the ticks caught up. REALTIME is the same clock plus the boot epoch.
+    // BUG-400: the target is the time base (TSC time held to the HPET) plus
+    // the forced tick advances, no longer `ticks x 10 ms`: the tick count
+    // follows the time base to within half a period, and a forced advance
+    // (tickless idle, a frozen-clock poll) still moves the clock with it.
+    let tb = crate::timebase::running();
+    let target = if tb {
+        crate::timebase::ns_at(tsc) + ticks.saturating_sub(crate::sched::real_ticks()) * 10_000_000
+    } else {
+        ticks * 10_000_000
+    };
+    // SAFETY: as above; the old anchor is still on the page.
+    let seen = unsafe { vdso_interp(d.add(1).read_volatile(), d.add(5).read_volatile(), d.add(6).read_volatile(), tsc) };
+    let mono_ns = if seen > target {
+        VDSO_BEHIND.fetch_add(1, Ordering::Relaxed);
+        VDSO_BEHIND_MAX.fetch_max(seen - target, Ordering::Relaxed);
+        seen
+    } else {
+        target
+    };
+    let cal = if tb { crate::timebase::rate_shift20() } else { VDSO_NS_PER_TSC.load(Ordering::Relaxed) };
+    let ahead = mono_ns - target;
+    // BUG-400: a lead under 1 ms (the time base changed its rate a little) is
+    // taken out over one period; 7/8 for a lead of 1 ns was a 1.25 ms lag at
+    // the next tick and a jump forward there.
+    let rate = if ahead == 0 {
+        cal
+    } else if ahead < 1_000_000 {
+        cal - ((cal as u128 * ahead as u128) / 10_000_000) as u64
+    } else if ahead < 5_000_000 {
+        cal - cal / 8
+    } else {
+        cal / 4
+    };
+    let real_ns = mono_ns + (base * 1_000_000_000).saturating_sub(base_ticks * 10_000_000);
+    if tsc < unsafe { d.add(5).read_volatile() } {
+        VDSO_TSC_BACK.fetch_add(1, Ordering::Relaxed);
+    }
     unsafe {
-        let seq = d.read_volatile().wrapping_add(1);
-        d.write_volatile(seq); // odd: update in progress
         d.add(1).write_volatile(mono_ns);
         d.add(3).write_volatile(real_ns);
         d.add(5).write_volatile(tsc);
-        d.add(6).write_volatile(VDSO_NS_PER_TSC.load(Ordering::Relaxed));
-        d.write_volatile(seq.wrapping_add(1)); // even: stable
+        d.add(6).write_volatile(rate);
+        d.write_volatile(odd.wrapping_add(1)); // even: stable
+    }
+}
+
+/// BUG-355: how often the tick anchor was below the clock readers saw, and
+/// the largest difference (ns): each one was a step back before the fix.
+static VDSO_BEHIND: AtomicU64 = AtomicU64::new(0);
+static VDSO_BEHIND_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// BUG-380 (`[vdso-mono]` diagnosis): writers of the clock page that began
+/// while another was still writing (a task-context caller interrupted by the
+/// timer tick), writers on an AP, and anchors older than the one before.
+static VDSO_WRITERS: AtomicU64 = AtomicU64::new(0);
+static VDSO_NESTED: AtomicU64 = AtomicU64::new(0);
+static VDSO_TICK_AP: AtomicU64 = AtomicU64::new(0);
+static VDSO_TSC_BACK: AtomicU64 = AtomicU64::new(0);
+
+struct VdsoWriter;
+
+impl VdsoWriter {
+    fn enter() -> Self {
+        if VDSO_WRITERS.fetch_add(1, Ordering::SeqCst) != 0 {
+            VDSO_NESTED.fetch_add(1, Ordering::Relaxed);
+        }
+        if (crate::apic::lapic_id() & 0xff) as u8 != crate::percpu::bsp_apic_id() {
+            VDSO_TICK_AP.fetch_add(1, Ordering::Relaxed);
+        }
+        VdsoWriter
+    }
+}
+
+impl Drop for VdsoWriter {
+    fn drop(&mut self) {
+        VDSO_WRITERS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The vDSO's interpolation (`userland/glibc/vdso.c` `read_clock`): the anchor
+/// plus the rdtsc time since it, at most two ticks.
+fn vdso_interp(anchor: u64, tsc0: u64, rate: u64, now: u64) -> u64 {
+    if rate == 0 {
+        return anchor;
+    }
+    let dt = now.wrapping_sub(tsc0);
+    // A TSC below the anchor's (another CPU a little behind): no time yet. A
+    // very old anchor: the two-tick cap (it was 0 before BUG-380, a step back
+    // to the anchor itself).
+    if dt as i64 <= 0 {
+        return anchor;
+    }
+    let ns = ((dt.min(1 << 40) as u128 * rate as u128) >> 20) as u64;
+    anchor + ns.min(20_000_000)
+}
+
+/// lfence; rdtsc; lfence (Linux `rdtsc_ordered`): the TSC read after the
+/// loads before it and before the loads after it (BUG-371, BUG-380).
+#[inline(always)]
+fn vdso_rdtsc() -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: lfence and rdtsc only read the TSC and order instructions.
+    unsafe { core::arch::asm!("lfence", "rdtsc", "lfence", out("eax") lo, out("edx") hi, options(nostack, preserves_flags)) };
+    (hi as u64) << 32 | lo as u64
+}
+
+/// The clock of the vDSO page as a process reads it (None: no page yet).
+fn vdso_clock(real: bool) -> Option<u64> {
+    let f = VDSO_TIME_FRAME.load(Ordering::Relaxed);
+    if f == 0 {
+        return None;
+    }
+    let d = f as *const u64;
+    // SAFETY: the identity-mapped clock frame, read only; seqlock as in vdso.c,
+    // the TSC read inside it (BUG-380).
+    unsafe {
+        loop {
+            let s1 = d.read_volatile();
+            if s1 == 0 {
+                return None; // no tick has written it yet
+            }
+            if s1 & 1 != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            let base = d.add(if real { 3 } else { 1 }).read_volatile();
+            let tsc0 = d.add(5).read_volatile();
+            let rate = d.add(6).read_volatile();
+            let now = vdso_rdtsc();
+            if d.read_volatile() != s1 {
+                continue;
+            }
+            return Some(vdso_interp(base, tsc0, rate, now));
+        }
     }
 }
 
@@ -9779,7 +10113,112 @@ static PAINT_WATCH_RTC: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// sources matters more than absolute truth: the 918 ms error in a 50 ms realtime
 /// wait was pure granularity mismatch (second-grain CMOS in the futex vs
 /// nanosecond-grain gettimeofday in glibc).
+/// clock_gettime: REALTIME (0) and TAI (11) the wall clock, every other clock
+/// the uptime, in nanoseconds.
+///
+/// BUG-355: the very clock of the vDSO page (the same clocks as `vdso.c`:
+/// REALTIME, REALTIME_COARSE and TAI the wall clock), so a process with a vDSO
+/// and one without, or one call through each, never disagree.
+pub(crate) fn clock_ns(clk: u64) -> u64 {
+    let real = matches!(clk, 0 | 5 | 11);
+    if let Some(ns) = vdso_clock(real) {
+        return ns;
+    }
+    if real {
+        wall_ns()
+    } else {
+        crate::interrupts::ticks() * 10_000_000 // 100 Hz tick
+    }
+}
+
+/// `[vdso-mono]`: how often the tick anchor of the clock page was below what
+/// the vDSO readers had seen, and by how much at most (ns).
+pub(crate) fn vdso_behind_stats() -> (u64, u64) {
+    (VDSO_BEHIND.load(Ordering::Relaxed), VDSO_BEHIND_MAX.load(Ordering::Relaxed))
+}
+
+/// `[vdso-mono]` (BUG-380): writers that began while another was writing,
+/// writers on an AP, anchors with a tsc below the previous anchor.
+pub(crate) fn vdso_writer_stats() -> (u64, u64, u64) {
+    (VDSO_NESTED.load(Ordering::Relaxed), VDSO_TICK_AP.load(Ordering::Relaxed), VDSO_TSC_BACK.load(Ordering::Relaxed))
+}
+
+/// `[vdso-mono]`: the interpolation of the clock page and the vDSO image.
+pub(crate) fn test_vdso_interp(anchor: u64, tsc0: u64, rate: u64, now: u64) -> u64 {
+    vdso_interp(anchor, tsc0, rate, now)
+}
+pub(crate) fn test_vdso_so() -> &'static [u8] {
+    VDSO_SO
+}
+
+// Self-test access (forkvdsotest.rs: BUG-351, BUG-352, BUG-355).
+pub(crate) fn test_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    linux_dispatch(num, a1, a2, a3, a4, a5)
+}
+pub(crate) fn test_dz_walk(pml4: u64, f: &mut dyn FnMut(u64, u64)) {
+    let _ = dz_walk(pml4, f);
+}
+/// Why a user range is refused (diagnostics of the self-test).
+pub(crate) fn test_user_diag(ptr: u64, len: usize) -> alloc::string::String {
+    let end = ptr + len as u64;
+    let fm: alloc::vec::Vec<(u64, u64, usize)> = DEMAND_FILE_MAPS.lock().iter()
+        .filter(|&&(b, l, _, _, _)| ptr < b + l && end > b).map(|&(b, l, fi, _, _)| (b, l, fi)).collect();
+    alloc::format!("{ptr:#x}: arena-ok={} file-backed={} next={:#x} end={:#x} base={:#x} filemaps={:x?} cr0={:#x}",
+        in_user_arena(ptr, len), demand_file_backed(ptr, len), DEMAND_NEXT.load(Ordering::Relaxed),
+        demand_end(), demand_base(), fm, x86_64::registers::control::Cr0::read_raw())
+}
+/// The pid of the fork child the current task belongs to (0: none).
+pub(crate) fn test_fork_pid() -> u64 {
+    let Some(o) = fork_child_owner(crate::sched::current()) else { return 0 };
+    GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.1 == o).map(|k| k.0).unwrap_or(0)
+}
+/// Copy 4 KiB at `va` as the launched process sees it (its address space for
+/// the time of the copy, interrupts off).
+pub(crate) fn test_read_as_parent(va: u64, out: &mut [u8; 4096]) -> bool {
+    let parent = GLIBC_PML4.load(Ordering::Relaxed);
+    if parent == 0 {
+        return false;
+    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        use x86_64::registers::control::{Cr3, Cr3Flags};
+        use x86_64::structures::paging::PhysFrame;
+        let (mine, fl) = Cr3::read();
+        // SAFETY: the kernel is mapped alike in every address space; back at once.
+        unsafe {
+            Cr3::write(PhysFrame::containing_address(x86_64::PhysAddr::new(parent)), Cr3Flags::empty());
+            core::ptr::copy_nonoverlapping(va as *const u8, out.as_mut_ptr(), 4096);
+            Cr3::write(mine, fl);
+        }
+    });
+    true
+}
+/// ASLR S6: the segments of the arena of the running process.
+pub(crate) fn test_arena() -> euromm::layout::Segs {
+    arena_segs_now()
+}
+pub(crate) fn test_vdso_frame() -> u64 {
+    VDSO_TIME_FRAME.load(Ordering::Relaxed)
+}
+pub(crate) fn test_vdso_cur() -> u64 {
+    VDSO_CUR.load(Ordering::Relaxed)
+}
+/// The user return address of the system call in progress (the saved rcx of
+/// the register block `syscall_entry` pushed: 13 slots above r15).
+pub(crate) fn test_set_user_rip(rip: u64) {
+    // SAFETY: called inside a system call of the current task, before it can
+    // yield; SAVED_REGS points at its register block on its syscall stack.
+    unsafe {
+        let p = SAVED_REGS as *mut u64;
+        if !p.is_null() {
+            p.add(13).write(rip);
+        }
+    }
+}
+
 pub fn wall_ns() -> u64 {
+    if let Some(ns) = vdso_clock(true) {
+        return ns; // BUG-355: the clock of the vDSO page
+    }
     let base = VDSO_EPOCH_BASE.load(Ordering::Relaxed);
     if base == 0 {
         return crate::rtc::epoch() * 1_000_000_000; // pre-vdso boot phase
@@ -9879,7 +10318,7 @@ fn vdso_prepare(falloc: &mut FrameAllocator) -> bool {
 /// the arena chain + pml4. Every teardown path uses this; freeing only the
 /// arena chain leaked 4 frames per glibc run ([churn-proc], 2026-10-07).
 fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
-    let n = crate::paging::free_user_table_chain(falloc, pml4, (VDSO_BASE >> 39) as usize);
+    let n = crate::paging::free_user_table_chain(falloc, pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
     static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     if DIAG.fetch_add(1, Ordering::Relaxed) < 3 {
         crate::serial_println!("[glibc] teardown: vDSO table chain freed ({n} frames), then the arena chain");
@@ -9887,14 +10326,30 @@ fn free_process_space(falloc: &mut FrameAllocator, pml4: u64) {
     crate::paging::free_address_space(falloc, pml4);
 }
 
-fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64) -> bool {
+/// BUG-350: the vDSO in a fork child (at the address of its parent) or after
+/// an exec in one (a new draw), with page tables from the process pool.
+fn vdso_map_pool(pml4: u64, base: u64) -> bool {
+    let t = VDSO_TIME_FRAME.load(Ordering::Relaxed);
     let imgs = VDSO_IMAGE_FRAMES.lock();
+    if base == 0 || t == 0 || imgs.is_empty() {
+        return false;
+    }
     for (i, &f) in imgs.iter().enumerate() {
-        if !crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + (i as u64) * 4096, f) {
+        if !crate::paging::map_user_4k_pool(pml4, base + (i as u64) * 4096, f) {
             return false;
         }
     }
-    crate::paging::map_user_4k_falloc(falloc, pml4, VDSO_BASE + VDSO_DATA_VOFF,
+    crate::paging::map_user_4k_pool(pml4, base + VDSO_DATA_VOFF, t)
+}
+
+fn vdso_map_into(falloc: &mut FrameAllocator, pml4: u64, base: u64) -> bool {
+    let imgs = VDSO_IMAGE_FRAMES.lock();
+    for (i, &f) in imgs.iter().enumerate() {
+        if !crate::paging::map_user_4k_falloc(falloc, pml4, base + (i as u64) * 4096, f) {
+            return false;
+        }
+    }
+    crate::paging::map_user_4k_falloc(falloc, pml4, base + VDSO_DATA_VOFF,
                                       VDSO_TIME_FRAME.load(Ordering::Relaxed))
 }
 
@@ -9933,9 +10388,10 @@ fn mark_exec_pages(bits: &mut [u64; 8], start: u64, len: u64) {
 /// Apply R_X86_64_RELATIVE relocations: for a PIE (ET_DYN) linked at 0 and
 /// loaded at `base`, `*(base + r_offset) = base + r_addend` holds. This is exactly
 /// what musl's static-PIE self-reloc otherwise does itself — we do it in the kernel.
+/// The image is read and written at `kern_base`; the words carry `virt_base`.
 /// We read all tables from the LOADED memory (base + vaddr): file offset and
 /// vaddr diverge in a PIE, but in the loaded image vaddr is always correct.
-fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
+fn apply_relocations(elf: &[u8], virt_base: u64, kern_base: u64, limit: u64) {
     let e_phoff = rd_u64(elf, 32) as usize;
     let e_phentsize = rd_u16(elf, 54) as usize;
     let e_phnum = rd_u16(elf, 56) as usize;
@@ -9955,7 +10411,7 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         return; // no dynamic section (flat/statically-linked ELF)
     }
     // Read the dynamic entries from the loaded memory; collect the RELA table.
-    let rd_loaded = |a: u64| unsafe { ((base + a) as *const u64).read() };
+    let rd_loaded = |a: u64| unsafe { ((kern_base + a) as *const u64).read() };
     let mut rela = 0u64;
     let mut relasz = 0u64;
     let mut relaent = 24u64;
@@ -9983,13 +10439,14 @@ fn apply_relocations(elf: &[u8], base: u64, limit: u64) {
         let r_info = rd_loaded(e + 8);
         let r_addend = rd_loaded(e + 16);
         if (r_info & 0xffff_ffff) == 8 && r_offset < limit {
-            // R_X86_64_RELATIVE: *(base + r_offset) = base + r_addend
-            unsafe { ((base + r_offset) as *mut u64).write(base.wrapping_add(r_addend)) };
+            // R_X86_64_RELATIVE: *(base + r_offset) = base + r_addend, the
+            // word written where the kernel reaches it (ASLR S3)
+            unsafe { ((kern_base + r_offset) as *mut u64).write(virt_base.wrapping_add(r_addend)) };
             applied += 1;
         }
         off += relaent;
     }
-    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocations applied @ base {base:#x}");
+    crate::serial_println!("[elf] {applied} R_X86_64_RELATIVE relocations applied @ base {virt_base:#x}");
 }
 
 /// Mark pages writable in the W^X bitmap (same mechanism as exec).
@@ -10101,9 +10558,13 @@ fn apply_tls_relocs(base: u64, elf: &[u8], tlsoffset: u64) -> u32 {
     patched
 }
 
-/// Load the PT_LOAD segments of an ELF64 binary at base address `base` (position-
-/// independent; linked at vaddr 0). `pages` = size of the frame window.
-fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
+/// Load the PT_LOAD segments of an ELF64 binary (position-independent; linked at
+/// vaddr 0) for the load bias `virt_base`: the address the process sees, which
+/// relocations, entry and PHDR carry. The bytes are written at `kern_base`, the
+/// address where the kernel reaches the same memory now (ASLR S3; equal to
+/// `virt_base` for every caller until the arena leaves the identity map).
+/// `pages` = size of the frame window.
+fn load_elf64(elf: &[u8], virt_base: u64, kern_base: u64, pages: usize) -> Option<LoadInfo> {
     if elf.len() < 64 || &elf[0..4] != b"\x7fELF" || elf[4] != 2 || elf[5] != 1 {
         return None; // not a 64-bit little-endian ELF
     }
@@ -10162,7 +10623,7 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
         }
         // SAFETY: the segment fits within the assigned frame window (checked).
         unsafe {
-            let dst = (base + p_vaddr) as *mut u8;
+            let dst = (kern_base + p_vaddr) as *mut u8;
             core::ptr::copy_nonoverlapping(elf[p_offset..].as_ptr(), dst, p_filesz);
             if p_memsz > p_filesz {
                 core::ptr::write_bytes(dst.add(p_filesz), 0, p_memsz - p_filesz); // zero .bss
@@ -10170,13 +10631,13 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
         }
     }
     // Apply relocations (no-op for non-PIE/flat-static binaries).
-    apply_relocations(elf, base, limit);
+    apply_relocations(elf, virt_base, kern_base, limit);
     Some(LoadInfo {
-        entry: base + e_entry,
-        phdr: if phdr_vaddr != 0 { base + phdr_vaddr } else { 0 },
+        entry: virt_base + e_entry,
+        phdr: if phdr_vaddr != 0 { virt_base + phdr_vaddr } else { 0 },
         phent: e_phentsize as u64,
         phnum: e_phnum as u64,
-        base,
+        base: virt_base,
         exec_pages,
         writ_pages,
     })
@@ -10185,7 +10646,7 @@ fn load_elf64(elf: &[u8], base: u64, pages: usize) -> Option<LoadInfo> {
 /// Load a program (ELF or flat) at `base` (window of `pages` frames).
 fn load_program(program: &[u8], base: u64, pages: usize) -> LoadInfo {
     if program.len() >= 4 && &program[0..4] == b"\x7fELF" {
-        if let Some(info) = load_elf64(program, base, pages) {
+        if let Some(info) = load_elf64(program, base, base, pages) {
             return info;
         }
     }
@@ -10487,7 +10948,7 @@ pub fn run_dynamic(
     for (i, lib) in libs.iter().enumerate().take(2) {
         let lib_base = arena + 0x40000 + (i as u64) * 0x20000;
         let lib_pages = program_span_pages(lib);
-        if let Some(lib_info) = load_elf64(lib, lib_base, lib_pages) {
+        if let Some(lib_info) = load_elf64(lib, lib_base, lib_base, lib_pages) {
             let lib_poff = ((lib_base - arena) / 4096) as usize;
             merge_shifted(&mut info.exec_pages, &lib_info.exec_pages, lib_poff);
             merge_shifted(&mut info.writ_pages, &lib_info.writ_pages, lib_poff);
@@ -10614,11 +11075,11 @@ pub fn run_interp(
     let libc_base = arena + 0x40000;
     let interp_base = arena + 0x60000;
     let mut interp_entry = 0u64;
-    if let Some(li) = load_elf64(libc, libc_base, program_span_pages(libc)) {
+    if let Some(li) = load_elf64(libc, libc_base, libc_base, program_span_pages(libc)) {
         merge_shifted(&mut info.exec_pages, &li.exec_pages, 0x40000 / 4096);
         merge_shifted(&mut info.writ_pages, &li.writ_pages, 0x40000 / 4096);
     }
-    if let Some(ii) = load_elf64(interp, interp_base, program_span_pages(interp)) {
+    if let Some(ii) = load_elf64(interp, interp_base, interp_base, program_span_pages(interp)) {
         merge_shifted(&mut info.exec_pages, &ii.exec_pages, 0x60000 / 4096);
         merge_shifted(&mut info.writ_pages, &ii.writ_pages, 0x60000 / 4096);
         interp_entry = ii.entry;
@@ -10776,7 +11237,8 @@ static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec
 /// child_main_task). They must swap the SAME ChildMem as their child process,
 /// or a thread runs on the child's PML4 but the parent's demand-state and
 /// faults. Populated when a fork child (or one of its threads) clones.
-static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static CHILD_THREADS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_THREADS");
 
 /// The fork-child main task that owns `task`'s address space, if any.
 fn fork_child_owner(task: usize) -> Option<usize> {
@@ -10798,8 +11260,8 @@ fn current_is_fork_child() -> bool {
     fork_child_owner(crate::sched::current()).is_some()
 }
 
-static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
-    Mutex::new(alloc::vec::Vec::new());
+static GLIBC_FORK_CHILDREN: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "GLIBC_FORK_CHILDREN");
 
 /// Exited glibc fork children waiting to be reaped: (child pid, wait status).
 /// The launched main process is the only waiter, so no parent key is needed.
@@ -10822,8 +11284,19 @@ static GLIBC_CHILD_EXITS: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc:
 struct ChildMem {
     task: usize,
     demand_next: u64,
+    // ASLR S1: per process; an exec in the child redraws them.
+    demand_floor: u64,
+    exe_base: u64,
+    exe_end: u64,
+    vdso: u64,
     arena_base: u64,
     arena_span: u64,
+    // ASLR S6: the heap and stack segments (`arena_segs_now`).
+    seg_heap_virt: u64,
+    seg_heap_off: u64,
+    seg_stack_virt: u64,
+    seg_stack_off: u64,
+    seg_key: u64,
     brk_cur: u64,
     brk_end: u64,
     heap_break: u64,
@@ -10834,7 +11307,10 @@ struct ChildMem {
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
     free: euromm::FreeRanges,
 }
-static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
+// BUG-390: CHILD_MEM, the five lists `child_mem_swap` swaps, GLIBC_FORK_CHILDREN and
+// CHILD_THREADS are `IrqLock`s: held with interrupts off by every taker (see irqlock.rs).
+static CHILD_MEM: crate::irqlock::IrqLock<alloc::vec::Vec<ChildMem>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_MEM");
 
 /// Snapshot the CURRENT globals into a fresh ChildMem for a just-forked task.
 /// The child inherits the parent's mappings, so it starts as a copy.
@@ -10842,8 +11318,17 @@ fn child_mem_snapshot(task: usize) {
     let cm = ChildMem {
         task,
         demand_next: DEMAND_NEXT.load(Ordering::Relaxed),
+        demand_floor: DEMAND_FLOOR.load(Ordering::Relaxed),
+        exe_base: EXE_BASE.load(Ordering::Relaxed),
+        exe_end: EXE_END.load(Ordering::Relaxed),
+        vdso: VDSO_CUR.load(Ordering::Relaxed),
         arena_base: ARENA_BASE.load(Ordering::Relaxed),
         arena_span: ARENA_SPAN_DYN.load(Ordering::Relaxed),
+        seg_heap_virt: ARENA_HEAP_VIRT.load(Ordering::Relaxed),
+        seg_heap_off: ARENA_HEAP_OFF.load(Ordering::Relaxed),
+        seg_stack_virt: ARENA_STACK_VIRT.load(Ordering::Relaxed),
+        seg_stack_off: ARENA_STACK_OFF.load(Ordering::Relaxed),
+        seg_key: ARENA_SEGS_KEY.load(Ordering::Relaxed),
         brk_cur: BRK_CUR.load(Ordering::Relaxed),
         brk_end: BRK_END.load(Ordering::Relaxed),
         heap_break: HEAP_BREAK.load(Ordering::Relaxed),
@@ -10963,8 +11448,17 @@ fn child_mem_swap(task: usize) -> bool {
         }};
     }
     swp!(DEMAND_NEXT, cm.demand_next);
+    swp!(DEMAND_FLOOR, cm.demand_floor);
+    swp!(EXE_BASE, cm.exe_base);
+    swp!(EXE_END, cm.exe_end);
+    swp!(VDSO_CUR, cm.vdso);
     swp!(ARENA_BASE, cm.arena_base);
     swp!(ARENA_SPAN_DYN, cm.arena_span);
+    swp!(ARENA_HEAP_VIRT, cm.seg_heap_virt);
+    swp!(ARENA_HEAP_OFF, cm.seg_heap_off);
+    swp!(ARENA_STACK_VIRT, cm.seg_stack_virt);
+    swp!(ARENA_STACK_OFF, cm.seg_stack_off);
+    swp!(ARENA_SEGS_KEY, cm.seg_key);
     swp!(BRK_CUR, cm.brk_cur);
     swp!(BRK_END, cm.brk_end);
     swp!(HEAP_BREAK, cm.heap_break);
@@ -10974,7 +11468,213 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
     core::mem::swap(&mut *DEMAND_FREE.lock(), &mut cm.free);
+    CHILD_MEM_SWAPS.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// Swaps of the per-process demand state done so far (`child_mem_swap`, in or out).
+pub static CHILD_MEM_SWAPS: AtomicU64 = AtomicU64::new(0);
+
+// -- BUG-390: the locks of the swapped state and a holder with interrupts on ([swap-irq]) --
+//
+// `child_mem_swap` runs with interrupts off (every caller: the system-call and
+// fault entries, `yield_reacquire`, `irq_window`) and takes CHILD_MEM and the
+// five lists it swaps. Ring-0 code runs on the BSP only, so a holder of one of
+// those locks that the timer preempted with interrupts on can never run again
+// once a task with interrupts off spins on that lock: the machine stops. The
+// soak of BUG-390 stopped exactly there (DEMAND_FILE_MAPS, `child_mem_swap+0x1ab`
+// in the 7b2eea6 build), and the desktop loop takes DEMAND_FILE_MAPS with
+// interrupts on in the heartbeat census (`dump_rip_profile` ->
+// `demand_addr_origin`). The test below does that from a kernel task while a
+// program with fork children and threads swaps the state all the time.
+
+static SWAPHAM_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static SWAPHAM_CALLS: AtomicU64 = AtomicU64::new(0);
+/// The hammer takes FILES the way the heap watch does (`files_heap_bytes`) instead of DEMAND_FILE_MAPS (BUG-410).
+static SWAPHAM_FILES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// The hammer copies, counts and edits GLIBC_THREADS the way the launchers do (`glibc_threads_*`, BUG-430).
+static SWAPHAM_THREADS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static SWAPHAM_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
+
+/// A kernel task (interrupts on, preemptible, as the desktop loop) that does
+/// what the heartbeat census does: name the file behind demand addresses.
+extern "C" fn swap_hammer_main() -> ! {
+    loop {
+        while SWAPHAM_ON.load(Ordering::Acquire) {
+            if SWAPHAM_THREADS.load(Ordering::Relaxed) {
+                core::hint::black_box(glibc_threads_snapshot().len() + glibc_threads_len());
+                glibc_threads_forget(usize::MAX);
+                SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            if SWAPHAM_FILES.load(Ordering::Relaxed) {
+                core::hint::black_box(files_heap_bytes());
+                SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            let base = demand_base();
+            let span = DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(base).max(0x1000);
+            let n = SWAPHAM_CALLS.load(Ordering::Relaxed);
+            let s = demand_addr_origin(base + (n.wrapping_mul(0x9E37_79B9_7F4A_7C15) % span));
+            core::hint::black_box(s);
+            SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        {
+            let _g = crate::sched::IfOffGuard::new();
+            if !SWAPHAM_ON.load(Ordering::Acquire) {
+                crate::sched::block_on(SWAPHAM_CHAN);
+            }
+        }
+        crate::sched::yield_now();
+    }
+}
+
+/// `[swap-irq]`: (1) every lock that `child_mem_swap` and `fork_child_owner`
+/// take is held with interrupts off, also when the taker had them on; (2) the
+/// stress: `gslots` (40 fork children with 6 threads each, ended three ways,
+/// with threads of the parent beside them) runs while a kernel task with
+/// interrupts on takes DEMAND_FILE_MAPS without pause (`demand_addr_origin`).
+/// Before the fix (2) stops the machine (BUG-390). `rounds` runs of (2). (3) and
+/// (4) are the same shape for FILES (BUG-410) and GLIBC_THREADS (BUG-430): a
+/// kernel task takes the lock with interrupts on, this task with interrupts off.
+pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
+    let rounds = rounds.max(1);
+    let if_was = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::enable();
+    let mut bad: Vec<&str> = Vec::new();
+    macro_rules! held_irq_off {
+        ($name:literal, $l:expr) => {{
+            {
+                let _g = $l.lock();
+                if x86_64::instructions::interrupts::are_enabled() {
+                    bad.push($name);
+                }
+            }
+            if !x86_64::instructions::interrupts::are_enabled() {
+                bad.push(concat!($name, " (interrupts left off)"));
+                x86_64::instructions::interrupts::enable();
+            }
+        }};
+    }
+    held_irq_off!("CHILD_MEM", CHILD_MEM);
+    held_irq_off!("DEMAND_FILE_MAPS", DEMAND_FILE_MAPS);
+    held_irq_off!("PROT_NONE_RANGES", PROT_NONE_RANGES);
+    held_irq_off!("SHARED_ALIASES", SHARED_ALIASES);
+    held_irq_off!("SHARED_MAPS", SHARED_MAPS);
+    held_irq_off!("DEMAND_FREE", DEMAND_FREE);
+    held_irq_off!("GLIBC_FORK_CHILDREN", GLIBC_FORK_CHILDREN);
+    held_irq_off!("CHILD_THREADS", CHILD_THREADS);
+    {
+        let g = GLIBC_FORK_CHILDREN.try_lock();
+        if g.is_some() && x86_64::instructions::interrupts::are_enabled() {
+            bad.push("GLIBC_FORK_CHILDREN (try_lock)");
+        }
+    }
+    x86_64::instructions::interrupts::enable();
+    if SWAPHAM_TASK.load(Ordering::Relaxed) == usize::MAX {
+        match crate::sched::spawn_kernel(swap_hammer_main, 0) {
+            Some(t) => SWAPHAM_TASK.store(t, Ordering::Relaxed),
+            None => {
+                if !if_was {
+                    x86_64::instructions::interrupts::disable();
+                }
+                return String::from("[swap-irq] no free task slot for the kernel task: SKIPPED");
+            }
+        }
+    }
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let mut runs_ok = 0usize;
+    let mut detail = String::new();
+    for r in 0..rounds {
+        reap_dead(falloc);
+        let s0 = CHILD_MEM_SWAPS.load(Ordering::Relaxed);
+        SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+        SWAPHAM_ON.store(true, Ordering::Release);
+        crate::sched::wake(SWAPHAM_CHAN, 1);
+        let prev_deadline = GLIBC_DEADLINE_TICKS.swap(36_000, Ordering::Relaxed);
+        let (out, exit) = run_glibc(falloc, gslots_bytes(), ldlinux_bytes(), &[b"/bin/gslots"], &[b"PATH=/bin"], caps);
+        GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
+        SWAPHAM_ON.store(false, Ordering::Release);
+        reap_dead(falloc);
+        let swaps = CHILD_MEM_SWAPS.load(Ordering::Relaxed) - s0;
+        let calls = SWAPHAM_CALLS.load(Ordering::Relaxed);
+        let ok = (exit == 88 || exit == 89) && out.contains("GSLOTS:") && calls > 0 && (exit == 89 || swaps > 0);
+        if ok {
+            runs_ok += 1;
+        }
+        if r < 3 || !ok {
+            detail.push_str(&alloc::format!(" run {}: exit {} swaps {swaps} lookups {calls}{};",
+                r + 1, exit as i64, if ok { "" } else { " FAILED" }));
+        }
+    }
+    // (3) BUG-410: the heap watch of `run_glibc_disk` sums FILES from task 0 with
+    // interrupts on. A system call takes FILES with interrupts off: if the timer
+    // preempts the sum, the task that runs next spins on FILES and the holder
+    // never runs again. Here a kernel task does the sum without pause, and this
+    // task takes FILES with interrupts off (as a system call does) for 3 s.
+    SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+    SWAPHAM_FILES.store(true, Ordering::Release);
+    SWAPHAM_ON.store(true, Ordering::Release);
+    crate::sched::wake(SWAPHAM_CHAN, 1);
+    let t_end = crate::interrupts::ticks() + 300;
+    let mut taken = 0u64;
+    while crate::interrupts::ticks() < t_end {
+        crate::sched::yield_now();
+        for _ in 0..2000 {
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                core::hint::black_box(files_count());
+            });
+            taken += 1;
+        }
+    }
+    SWAPHAM_ON.store(false, Ordering::Release);
+    SWAPHAM_FILES.store(false, Ordering::Release);
+    let sums = SWAPHAM_CALLS.load(Ordering::Relaxed);
+    let files_ok = sums > 0;
+    // (4) BUG-430: the launchers and `cdp_begin_frame` copy GLIBC_THREADS from
+    // task 0 with interrupts on; clone, exit and exit_group take it with
+    // interrupts off. Same shape as (3): a kernel task copies, counts and edits
+    // the list without pause (32 entries, so the critical section is not empty),
+    // this task takes it with interrupts off for 3 s. No program runs here, so the
+    // list is ours; it is emptied again afterwards.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut g = GLIBC_THREADS.lock();
+        g.clear();
+        g.extend((0..32usize).map(|i| usize::MAX - 1 - i));
+    });
+    SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+    SWAPHAM_THREADS.store(true, Ordering::Release);
+    SWAPHAM_ON.store(true, Ordering::Release);
+    crate::sched::wake(SWAPHAM_CHAN, 1);
+    let t_end = crate::interrupts::ticks() + 300;
+    let mut taken_t = 0u64;
+    while crate::interrupts::ticks() < t_end {
+        crate::sched::yield_now();
+        for _ in 0..2000 {
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                core::hint::black_box(GLIBC_THREADS.lock().len());
+            });
+            taken_t += 1;
+        }
+    }
+    SWAPHAM_ON.store(false, Ordering::Release);
+    SWAPHAM_THREADS.store(false, Ordering::Release);
+    let copies = SWAPHAM_CALLS.load(Ordering::Relaxed);
+    let threads_ok = copies > 0;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        GLIBC_THREADS.lock().clear();
+    });
+    if !if_was {
+        x86_64::instructions::interrupts::disable();
+    }
+    let ok = bad.is_empty() && runs_ok == rounds && files_ok && threads_ok;
+    alloc::format!(
+        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} FILES: {taken} takes with interrupts off beside {sums} heap-watch sums with interrupts on{}; GLIBC_THREADS: {taken_t} takes with interrupts off beside {copies} launcher-style copies with interrupts on{} -> {}",
+        if bad.is_empty() { String::from("none") } else { bad.join(", ") },
+        if files_ok { "" } else { " (no sum ran) FAILED" },
+        if threads_ok { "" } else { " (no copy ran) FAILED" },
+        if ok { "OK ✓" } else { "FAILED" })
 }
 
 /// A fork child exited: drop its saved memory state.
@@ -11012,7 +11712,7 @@ fn fork_child_teardown(pid: u64, ctask: usize, pml4: u64, arena: u64, frames: us
     if exit_log {
         crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
     }
-    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+    dz_free_except(pml4, &child_keep_list(pml4));
     // ... and the child's own page tables under PML4[0] (pdpt, pd,
     // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
     crate::paging::free_fork_tables(pml4);
@@ -11046,7 +11746,9 @@ fn reap_orphan_fork_children() -> usize {
     // shared any more. A count left over is a fault of the copy-on-write
     // model; it is said and cleared, so the next run does not inherit it.
     {
-        let arena = ARENA_BASE.load(Ordering::Relaxed);
+        // ASLR S4: the counts are per frame: the RAM of the arena, not its
+        // virtual base (equal only with the identity arena).
+        let arena = LAUNCH_ARENA_PHYS.load(Ordering::Relaxed);
         let span = ARENA_SPAN_DYN.load(Ordering::Relaxed);
         if arena != 0 && span != 0 {
             let left = crate::paging::cow_refs().clear_range(arena, arena + span);
@@ -11171,8 +11873,9 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     if arena == 0 || span == 0 {
         return (-8i64) as u64;
     }
-    let nblocks = span >> 21;
-    let frames = (nblocks * 512) as usize;
+    // ASLR S6: the segments of the arena of the child (one piece, or image,
+    // heap and stack at bases of their own); every walk below goes by them.
+    let old_segs = arena_segs_now();
 
     // POSIX: close-on-exec descriptors are gone the moment the new image starts
     // (and not when the exec is refused above: the caller then still has them).
@@ -11209,24 +11912,31 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // Fresh image: wipe the arena, and DROP the child's inherited demand pages.
     // The child forked a COPY of the parent's already-relocated exe/heap pages;
     // ld.so must instead read the original, unrelocated image from disk, or it
-    // sees relocated phdr p_vaddrs (base + DEMAND_BASE = a slot-4 fault). Freeing
+    // sees relocated phdr p_vaddrs (base + demand_base() = a slot-4 fault). Freeing
     // the child's PML4 demand slot makes every exe page re-fault fresh.
     // In pieces with a window for the timer (BUG-128): this task is the only
     // one in its address space, nobody sees the arena half wiped.
     let t_start = unsafe { core::arch::x86_64::_rdtsc() };
+    let lazy = {
+        use x86_64::registers::control::Cr3;
+        crate::paging::arena_is_lazy(Cr3::read().0.start_address().as_u64(), arena)
+    };
     {
         use x86_64::registers::control::Cr3;
         let cr3 = Cr3::read().0.start_address().as_u64();
-        if crate::paging::arena_is_lazy(cr3, arena) {
+        if lazy {
             // BUG-156: the arena of a fork child is single frames. They go
             // back to the pool; the new image gets a frame for what it touches.
-            let n = crate::paging::lazy_arena_discard(cr3, arena, nblocks);
+            let n = crate::paging::lazy_arena_discard(cr3, &old_segs);
             static SAID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
             if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
                 crate::serial_println!("[execve] task {}: {} KiB of arena pages back to the process pool", crate::sched::current(), n * 4);
             }
         } else {
-            unsafe { arena_fill(arena, None, frames * 4096); }
+            // ASLR S6: segment by segment (the gaps between them are not mapped).
+            for s in old_segs.list() {
+                unsafe { arena_fill(s.virt, None, s.len as usize); }
+            }
         }
     }
     let t_wipe = unsafe { core::arch::x86_64::_rdtsc() };
@@ -11235,13 +11945,42 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
         let child_pml4 = Cr3::read().0.start_address().as_u64();
         let keep = shared_phys_sorted();
         irq_window();
-        crate::paging::free_demand_region_except(child_pml4, DEMAND_PML4_IDX, &keep);
+        dz_free_except(child_pml4, &keep);
         // Flush the TLB so the now-unmapped VAs re-fault (S4: also on the APs).
+        // ASLR S1: the vDSO of the new image at a new draw (BUG-350: the
+        // child has one since its fork).
+        crate::paging::free_pool_table_chain(child_pml4, euromm::layout::zone(aslr_mode()).vdso_slot);
         crate::paging::flush_tlb_all();
     }
     let t_drop = unsafe { core::arch::x86_64::_rdtsc() };
     irq_window();
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    // ASLR S1: an exec draws anew (design 2.4): exe base, mmap floor and the
+    // slides in the arena and the vDSO base. S5: the arena base too.
+    let (exe_span, exe_align) = disk_exe_geometry(diskidx);
+    let lay = image_layout(exe_span, exe_align);
+    // ASLR S5 (design 2.4, order): the pages at the old base went back above
+    // (lazy_arena_discard), now the old table chain goes and the arena is
+    // built at the base of the new draw. A contiguous or identity arena stays.
+    // S6: all three segments of a split arena move (each to a base of its own).
+    let ap = exec_arena(&old_segs, lazy, &lay);
+    let arena = if ap.segs != old_segs {
+        use x86_64::registers::control::Cr3;
+        let cr3 = Cr3::read().0.start_address().as_u64();
+        let ok = crate::paging::lazy_arena_rebase(cr3, &old_segs, &ap.segs);
+        crate::paging::flush_tlb_all();
+        if !ok {
+            // The old chain is gone and the new one could not be built: the
+            // image is wiped already, so the child cannot go on.
+            crate::serial_println!("[execve] task {}: no frames for the arena tables at {:#x}: ENOMEM", crate::sched::current(), ap.base());
+            arena_segs_set(&ap.segs);
+            return (-12i64) as u64;
+        }
+        arena_segs_set(&ap.segs);
+        ap.base()
+    } else {
+        arena
+    };
+    let demand_floor = lay.mmap_floor;
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_FILE_MAPS.lock().clear(); DEMAND_FREE.lock().clear();
@@ -11249,18 +11988,27 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     SHARED_ALIASES.lock().clear();
     SHARED_MAPS.lock().clear();
 
-    let ldso_base = arena + 0x0080_0000;
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    let ldso_base = ap.ldso();
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
     // The mmap arena runs from mmap_start up to just below the stack — same as
     // glibc_disk_launch. Setting HEAP_END = HEAP_BREAK (the earlier bug) left
     // zero bytes for small arena mmaps, so ld.so's libc.so.6 mmap got ENOMEM.
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // Re-register the exe's disk-backed segments (in the child's demand-state).
-    let exe_base = DEMAND_BASE;
+    let exe_base = lay.exe_base;
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
+    // BUG-355: a vDSO at the new draw again; its clock no longer steps back.
+    let vdso = {
+        use x86_64::registers::control::Cr3;
+        let cr3 = Cr3::read().0.start_address().as_u64();
+        if vdso_map_pool(cr3, lay.vdso) { lay.vdso } else { 0 }
+    };
+    VDSO_CUR.store(vdso, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return (-8i64) as u64,
@@ -11272,11 +12020,15 @@ fn do_child_execve(path_ptr: u64, argv_ptr: u64, envp_ptr: u64) -> u64 {
     // Load ld.so fresh into the arena and build a fresh SysV stack with the new
     // argv/envp. Both write via arena VAs mapped in the child's Cr3.
     let ldso = ldlinux_bytes();
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, ldso_base, program_span_pages(ldso)) {
         Some(i) => i,
         None => return (-8i64) as u64,
     };
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, &argv, &envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, stack_top, &argv, &envp, &exe_info, ldso_base, vdso) };
+    crate::serial_println!(
+        "[aslr-layout] exec task {}: exe {exe_base:#x} floor {demand_floor:#x} arena {arena:#x} hseg {:#x} sseg {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} vdso {vdso:#x} (aslr={}, arena {}, split {})",
+        crate::sched::current(), seg_virt(&ap.segs, 1), seg_virt(&ap.segs, 2), aslr_mode().name(), arena_mode_name(), arena_split_name()
+    );
 
     crate::serial_println!(
         "[execve] child task {} re-exec {exe_path} argv0={:?} -> ld.so entry {:#x} rsp {:#x} (arena wipe {} ms, demand pages dropped {} ms, new image {} ms)",
@@ -11384,7 +12136,7 @@ fn fork_in_flight_reclaim(task: usize) {
     mm_changed();
     let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
     if pml4 != 0 {
-        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        dz_free_except(pml4, &child_keep_list(pml4));
         crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
     }
@@ -11419,7 +12171,6 @@ fn do_glibc_fork() -> u64 {
     if census {
         FORK_CENSUS_BEFORE.store(census_unattributed_kib(), Ordering::Relaxed);
     }
-    let nblocks = span >> 21;
     // BUG-156: the child has no arena in one piece any more (128 MiB of the
     // process pool per browser process, copied whole at every fork, and the
     // 13th process did not fit a 4 GiB machine). Its arena is page tables
@@ -11441,7 +12192,9 @@ fn do_glibc_fork() -> u64 {
             return (-12i64) as u64;
         }
     };
-    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, arena, nblocks) {
+    // ASLR S6: the child gets the segments of the parent, bit for bit.
+    let segs = arena_segs_now();
+    if !crate::paging::fill_remap_tables_lazy(pml4, pdpt, pd, &segs) {
         let n = crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
         crate::serial_println!("[fork] arena alloc FAILED (no frame for the page tables of a {} MiB arena, {n} given back, pool has {} MiB)",
@@ -11450,6 +12203,14 @@ fn do_glibc_fork() -> u64 {
     }
     // The launched process looks in this address space for the children
     // that share a page it writes (copy-on-write); undone by free_fork_tables.
+    // BUG-350: the child runs the parent's code, which calls the vDSO at the
+    // parent's address (AT_SYSINFO_EHDR is in its copied memory). Without the
+    // mapping the first clock call of a fork child was an instruction fetch
+    // fault. Freed with the child's tables (free_fork_tables).
+    let vdso = VDSO_CUR.load(Ordering::Relaxed);
+    if vdso != 0 && !vdso_map_pool(pml4, vdso) {
+        crate::serial_println!("[fork] no frames for the vDSO tables of the child: it runs without one");
+    }
     if !crate::paging::cow_space_register(pml4) {
         let n = crate::paging::free_fork_tables(pml4);
         crate::procpool::free(pml4);
@@ -11468,7 +12229,7 @@ fn do_glibc_fork() -> u64 {
     let undo_fork = |why: &str| {
         fork_in_flight_done(me);
         let (d0, p0) = (crate::procpool::demand_free_frames(), crate::procpool::free_frames());
-        crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+        dz_free_except(pml4, &child_keep_list(pml4));
         crate::paging::free_fork_tables(pml4);
         crate::procpool::free_range(child_arena, arena_frames);
         crate::procpool::free(pml4);
@@ -11478,7 +12239,7 @@ fn do_glibc_fork() -> u64 {
     // Share the pages of the parent arena that hold something (ld.so, libc,
     // heap, stacks) copy-on-write, 2 MiB at a time with a window for the
     // timer (BUG-128). The forking thread stands in this syscall.
-    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, arena, nblocks, FORK_POOL_RESERVE, &mut irq_window) else {
+    let Some((arena_shared, arena_zero, arena_copied)) = crate::paging::share_arena_cow(parent_pml4, pml4, &segs, FORK_POOL_RESERVE, &mut irq_window) else {
         crate::serial_println!("[fork] arena alloc FAILED ({} MiB arena, pool has {} MiB)",
             span >> 20, crate::procpool::free_frames() / 256);
         undo_fork("no memory for the copy of the arena");
@@ -11493,7 +12254,7 @@ fn do_glibc_fork() -> u64 {
         v
     };
     let private = |va: u64| !windows.iter().any(|&(b, e)| va >= b && va < e);
-    if !crate::paging::clone_demand_region(parent_pml4, pml4, DEMAND_PML4_IDX, &mut irq_window, &private) {
+    if !dz_clone(parent_pml4, pml4, &mut irq_window, &private) {
         crate::serial_println!("[fork] clone_demand_region OOM");
         undo_fork("no memory for the copy of the demand pages");
         return (-12i64) as u64;
@@ -11591,8 +12352,21 @@ pub static GLIBC_DEADLINE_TICKS: core::sync::atomic::AtomicU64 = core::sync::ato
 // commit only touched physical. Opt-in (DEMAND_ENABLED) so it CANNOT affect the
 // default identity-arena path: with the flag off, handle_demand_fault is a no-op
 // and mmap routing is unchanged. This is the Chromium-scale-memory foundation.
-const DEMAND_PML4_IDX: usize = 2; // virtual [1 TiB, 1.5 TiB)
-const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
+// ASLR S1: with `aslr=on`/`off` the region is the zone 32..96 TiB (PML4 64..191)
+// of euromm::layout; with `aslr=legacy` the one slot of before (1 TiB, 480 GiB).
+fn demand_base() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_base
+}
+fn demand_size() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_size
+}
+fn demand_end() -> u64 {
+    euromm::layout::zone(aslr_mode()).demand_end()
+}
+/// Is `a` inside the demand region of this boot (diagnostics: plausible code pointers)?
+pub fn in_demand_zone(a: u64) -> bool {
+    a >= demand_base() && a < demand_end()
+}
 // 256 GiB of reservable virtual space (within PML4 slot 2's 512 GiB). chrome's
 // PartitionAlloc reserves several GigaCage pools (observed 4 + 32 + 16 GiB), each
 // aligned to its own size, so ~130 GiB with alignment padding — 64 GiB was too
@@ -11602,17 +12376,388 @@ const DEMAND_BASE: u64 = (DEMAND_PML4_IDX as u64) << 39; // 0x100_0000_0000
 // pools: observed a 135 GiB + a 69 GiB + several GiB-scale reservations), which
 // exhausted a 256 GiB region and returned ENOMEM mid-init. Virtual-only: physical
 // frames + page tables commit per touched page, so a bigger reservation is free.
-const DEMAND_SIZE: u64 = 480 * (1 << 30);
 // Route anon mmaps >= 64 KiB here (BUG-131: under 16 MiB they came from the
 // arena window, which never gives back, and V8's 512 KiB zone segments ran it
 // dry in a YouTube renderer).
 const DEMAND_MIN_BYTES: u64 = 64 * 1024;
+
+// -- ASLR (docs/design/ASLR.md): the boot option aslr= and the demand zone -------
+
+/// The mode of the boot option `aslr=` (`euromm::layout::Mode::to_u8`; 0 = legacy).
+static ASLR_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(ASLR_DEFAULT);
+/// The mode without a boot option (`euromm::layout::Mode::to_u8`): 1 = on.
+pub const ASLR_DEFAULT: u8 = 1;
+pub fn aslr_mode() -> euromm::layout::Mode {
+    euromm::layout::Mode::from_u8(ASLR_MODE.load(Ordering::Relaxed))
+}
+/// bootopt `aslr=`: set once, before the first process starts.
+pub fn aslr_set_mode(m: euromm::layout::Mode) {
+    ASLR_MODE.store(m.to_u8(), Ordering::Relaxed);
+    let z = euromm::layout::zone(m);
+    DEMAND_NEXT.store(z.demand_base, Ordering::Relaxed);
+    DEMAND_FLOOR.store(z.demand_base, Ordering::Relaxed);
+    crate::paging::VDSO_SLOT.store(z.vdso_slot, Ordering::Relaxed);
+}
+
+/// Per process (swapped with `ChildMem` for a fork child): the window of the
+/// executable from disk and the vDSO base (0 = none).
+static EXE_BASE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
+static EXE_END: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE + euromm::layout::EXE_WINDOW);
+static VDSO_CUR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+// -- ASLR S4: the arena of a launched process outside the identity map ---------
+
+/// Boot option `aslr.arena=`: where the arena of a launched glibc process (and
+/// of its fork children) lies.
+/// - `identity` (0): at its physical address, as before S4.
+/// - `fixed` (1): at `paging::ARENA_ZONE_BASE`, 8 TiB, with PML4[0] holding no
+///   user page (S4, docs/proof/11f-aslr-s4).
+/// - `random` (2, the default since S5): at a random 2 MiB step of the arena
+///   zone 8..12 TiB, drawn per launch and per exec, with page slides for the
+///   embedded executable and ld.so (`euromm::layout`). With `aslr=off` every
+///   draw is 0, which is the layout of `fixed`.
+static ARENA_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(ARENA_MODE_DEFAULT);
+/// `aslr.arena=` without the option: `random`.
+pub const ARENA_MODE_DEFAULT: u8 = 2;
+/// The value of `aslr.arena=` (None: not identity, fixed or random).
+pub fn arena_mode_parse(v: &str) -> Option<u8> {
+    match v.trim() {
+        "identity" => Some(0),
+        "fixed" => Some(1),
+        "random" => Some(2),
+        _ => None,
+    }
+}
+pub fn arena_set_mode(m: u8) {
+    ARENA_MODE.store(m.min(2), Ordering::Relaxed);
+}
+/// The arena placement launches use now: in the zone (`fixed` or `random`).
+/// The zone needs a demand zone above it, so `aslr=legacy` (demand region at
+/// 1 TiB) keeps the identity arena.
+pub fn arena_fixed() -> bool {
+    ARENA_MODE.load(Ordering::Relaxed) != 0 && aslr_mode() != euromm::layout::Mode::Legacy
+}
+/// In the zone at a drawn base (`random`; with `aslr=off` the draw is 0).
+pub fn arena_random() -> bool {
+    arena_fixed() && ARENA_MODE.load(Ordering::Relaxed) == 2
+}
+/// ASLR S6, boot option `aslr.split=on|off` (default `on`): with `random`
+/// the arena is cut into three segments (image, heap, stack) at bases of
+/// their own; `off` keeps it in one piece at one drawn base (the S5 layout).
+/// `fixed` and `identity` are always one piece.
+static ARENA_SPLIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+pub fn arena_split_parse(v: &str) -> Option<bool> {
+    match v.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+pub fn arena_split_set(on: bool) {
+    ARENA_SPLIT.store(on, Ordering::Relaxed);
+}
+pub fn arena_split_on() -> bool {
+    ARENA_SPLIT.load(Ordering::Relaxed)
+}
+/// The value of `aslr.split` in use (`[bootopt]`): `off` when the placement
+/// is not `random` (one piece whatever the option says).
+pub fn arena_split_name() -> &'static str {
+    if arena_split_on() && arena_random() { "on" } else { "off" }
+}
+/// The name of the placement in use (`[bootopt]`, `[aslr-layout]`).
+pub fn arena_mode_name() -> &'static str {
+    if arena_random() { "random" } else if arena_fixed() { "fixed" } else { "identity" }
+}
+/// Where an image puts its arena (ASLR S5): the virtual base and the page
+/// slides of the embedded executable and of ld.so inside it. S6: the arena is
+/// a list of segments (`segs`); the executable and ld.so lie in the first.
+#[derive(Clone, Copy, Debug)]
+pub struct ArenaPlace {
+    pub segs: euromm::layout::Segs,
+    pub exe_slide: u64,
+    pub ldso_slide: u64,
+}
+impl ArenaPlace {
+    /// The virtual base of the image segment (`ARENA_BASE`).
+    pub fn base(&self) -> u64 {
+        self.segs.base()
+    }
+    /// Where ld.so is loaded: +8 MiB and its slide.
+    pub fn ldso(&self) -> u64 {
+        self.base() + euromm::layout::LDSO_OFF + self.ldso_slide
+    }
+    /// Where an embedded executable of `exe_bytes` is loaded: the start of the
+    /// arena and its slide, as far as the program still ends below ld.so.
+    pub fn exe(&self, exe_bytes: u64) -> u64 {
+        let room = euromm::layout::LDSO_OFF.saturating_sub((exe_bytes + 0xFFF) & !0xFFF);
+        self.base() + self.exe_slide.min(room & !0xFFF)
+    }
+    /// ASLR S6: where the kernel reaches the arena address `va` of a launched
+    /// process whose RAM starts at `phys` (through the identity map): the RAM
+    /// at the arena offset of `va`, whatever segment it lies in.
+    pub fn kern(&self, va: u64, phys: u64) -> u64 {
+        phys + self.segs.off(va).unwrap_or(va.wrapping_sub(self.base()))
+    }
+}
+/// The arena of an image whose RAM is at `phys` (`span` bytes) with the draw
+/// `lay`: `identity` at `phys`, `fixed` at 8 TiB, `random` at the drawn base
+/// (`euromm::layout::arena_base`) with the drawn slides.
+fn arena_place(phys: u64, span: u64, lay: &euromm::layout::Layout) -> ArenaPlace {
+    use euromm::layout::Segs;
+    if arena_random() {
+        // ASLR S6: three segments (image, heap, stack) at bases of their own,
+        // unless `aslr.split=off` (the S5 layout: one piece at the drawn base).
+        let one = || Segs::one(euromm::layout::arena_base(lay, span), span);
+        let segs = if arena_split_on() { euromm::layout::split_segs(lay, span).unwrap_or_else(one) } else { one() };
+        ArenaPlace { segs, exe_slide: lay.exe_slide, ldso_slide: lay.ldso_slide }
+    } else if arena_fixed() {
+        ArenaPlace { segs: Segs::one(crate::paging::ARENA_ZONE_BASE, span), exe_slide: 0, ldso_slide: 0 }
+    } else {
+        ArenaPlace { segs: Segs::one(phys, span), exe_slide: 0, ldso_slide: 0 }
+    }
+}
+/// ASLR S5: the arena base of the image an exec in a fork child starts, with
+/// the arena now at `old` (`span` bytes, `lazy`: single frames, BUG-156). A
+/// lazy arena in the zone moves to the base of the new draw (design 2.4); an
+/// arena of contiguous RAM or the identity one stays where it is.
+fn exec_arena(old: &euromm::layout::Segs, lazy: bool, lay: &euromm::layout::Layout) -> ArenaPlace {
+    if lazy && old.base() >= crate::paging::ARENA_ZONE_BASE && arena_random() {
+        arena_place(old.base(), old.span(), lay)
+    } else {
+        ArenaPlace { segs: *old, exe_slide: 0, ldso_slide: if arena_random() { lay.ldso_slide } else { 0 } }
+    }
+}
+/// The RAM of the arena of the launched process (0 = none): the frames the
+/// reaper's copy-on-write sweep and the teardown go by. `ARENA_BASE` is its
+/// virtual base; the two are equal only with the identity arena. Not part of
+/// `ChildMem`: a fork child's arena is single frames (BUG-156), it has no RAM
+/// base, and nothing reaches a child's arena by a frame number derived from it.
+static LAUNCH_ARENA_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// One draw for one image (a launch or an exec), cut by euromm::layout
+/// (BUG-088, ASLR S1): exe base (programs from disk), mmap floor, vDSO and the
+/// slides inside the arena, for the mode of this boot.
+fn image_layout(exe_span: u64, exe_align: u64) -> euromm::layout::Layout {
+    let r = crate::entropy::draw_wait::<{ euromm::layout::DRAW_BYTES }>();
+    euromm::layout::draw(&r, aslr_mode(), exe_span, exe_align)
+}
+
+/// Where an image puts its regions: what a launcher and `do_child_execve`
+/// use, and what `[aslr-exec]` compares.
+#[derive(Clone, Copy, Debug)]
+pub struct Placed {
+    pub exe: u64,
+    pub ldso: u64,
+    pub floor: u64,
+    pub vdso: u64,
+    pub brk: u64,
+    pub mmap: u64,
+    pub stack: u64,
+}
+/// The regions of an image with the arena at `arena` (`span` bytes) and the
+/// draw `lay`. A program from disk has its executable at the exe base, an
+/// embedded one at the start of the arena; `vdso`: whether a vDSO is mapped
+/// (a launch, and an exec in a fork child since BUG-350).
+fn place(ap: &ArenaPlace, lay: &euromm::layout::Layout, from_disk: bool, vdso: bool) -> Placed {
+    let (brk, mmap, _, stack) = glibc_arena_layout(&ap.segs, lay);
+    Placed {
+        exe: if from_disk { lay.exe_base } else { ap.exe(0) },
+        ldso: ap.ldso(),
+        floor: lay.mmap_floor,
+        vdso: if vdso { lay.vdso } else { 0 },
+        brk,
+        mmap,
+        stack,
+    }
+}
+
+/// `[aslr-exec]`, kernel side (the probe cannot exec itself: only the
+/// persistent program from disk re-executes): the placement a launch of a
+/// program from disk makes, then eight execs in a fork child of it, each with
+/// the draw `do_child_execve` makes. Per region: how many of the eight execs
+/// kept the address of the parent.
+pub fn aslr_exec_check() -> [(&'static str, usize); 7] {
+    const SPAN: u64 = 128 << 20;
+    let ram = 0x4000_0000; // only a number: nothing is mapped
+    let (es, ea) = (200 << 20, 4096);
+    let pl = image_layout(es, ea);
+    let pa = arena_place(ram, SPAN, &pl);
+    let parent = place(&pa, &pl, true, true);
+    let mut kept = [("exe", 0usize), ("ldso", 0), ("floor", 0), ("vdso", 0), ("brk", 0), ("mmap", 0), ("stack", 0)];
+    for _ in 0..8 {
+        // The child's arena is lazy (a fork child, BUG-156), at the parent's base.
+        let cl = image_layout(es, ea);
+        let ca = exec_arena(&pa.segs, true, &cl);
+        let c = place(&ca, &cl, true, true);
+        let pairs = [(parent.exe, c.exe), (parent.ldso, c.ldso), (parent.floor, c.floor), (parent.vdso, c.vdso), (parent.brk, c.brk), (parent.mmap, c.mmap), (parent.stack, c.stack)];
+        for (k, (a, b)) in pairs.iter().enumerate() {
+            if a == b || *b == 0 {
+                kept[k].1 += 1;
+            }
+        }
+    }
+    kept
+}
+
+/// The span (lowest PT_LOAD at 0 to the end of the highest) and the largest
+/// p_align of the executable `diskidx` of a pack, from its ELF header.
+fn disk_exe_geometry(diskidx: usize) -> (u64, u64) {
+    let mut hdr = alloc::vec![0u8; 8192];
+    if !pack_read(diskidx, 0, &mut hdr) || &hdr[0..4] != b"\x7fELF" {
+        return (0, 4096);
+    }
+    let e_phoff = rd_u64(&hdr, 32) as usize;
+    let e_phentsize = rd_u16(&hdr, 54) as usize;
+    let e_phnum = rd_u16(&hdr, 56) as usize;
+    let (mut span, mut align) = (0u64, 4096u64);
+    for i in 0..e_phnum {
+        let ph = e_phoff + i * e_phentsize;
+        if ph + 56 > hdr.len() {
+            break;
+        }
+        if rd_u32(&hdr, ph) == 1 {
+            span = span.max(rd_u64(&hdr, ph + 16).saturating_add(rd_u64(&hdr, ph + 40)));
+            align = align.max(rd_u64(&hdr, ph + 48));
+        }
+    }
+    (span, align)
+}
+
+/// The PML4 slots of the demand region (`aslr=legacy`: slot 2; else 64..191).
+/// The walks skip a slot without a table in one read.
+fn demand_slots() -> core::ops::Range<usize> {
+    euromm::layout::zone(aslr_mode()).demand_slots()
+}
+/// `paging::scan_demand_ro` over every slot of the demand region.
+fn dz_scan_ro(pml4: u64, age: bool, f: &mut dyn FnMut(u64, bool) -> bool) -> usize {
+    demand_slots().map(|s| crate::paging::scan_demand_ro(pml4, s, age, f)).sum()
+}
+/// `paging::demand_phys_sorted` over every slot of the demand region.
+fn dz_phys_sorted(pml4: u64) -> alloc::vec::Vec<u64> {
+    let mut v = alloc::vec::Vec::new();
+    for s in demand_slots() {
+        v.extend(crate::paging::demand_phys_sorted(pml4, s));
+    }
+    v.sort_unstable();
+    v
+}
+/// `paging::walk_demand_region` over every slot; returns the table frames.
+fn dz_walk(pml4: u64, f: &mut dyn FnMut(u64, u64)) -> usize {
+    demand_slots().map(|s| crate::paging::walk_demand_region(pml4, s, f)).sum()
+}
+/// `paging::free_demand_region_except` over every slot.
+fn dz_free_except(pml4: u64, keep: &[u64]) {
+    for s in demand_slots() {
+        crate::paging::free_demand_region_except(pml4, s, keep);
+    }
+}
+/// `paging::clone_demand_region` over every slot (fork).
+fn dz_clone(parent: u64, child: u64, between: &mut dyn FnMut(), private: &dyn Fn(u64) -> bool) -> bool {
+    demand_slots().all(|s| crate::paging::clone_demand_region(parent, child, s, between, private))
+}
+
+/// ASLR S1 (`[demand-slots]`): the demand functions over every PML4 slot of the
+/// demand zone of `aslr=on` (euromm::layout, PML4 64..191). Two scratch
+/// address spaces and a small demand pool of their own: four pages are mapped
+/// through the demand mapper in the first and the last slot of the zone,
+/// counted by the census walk, copied to the second space by the fork copy
+/// (two shared copy-on-write, two copied), listed by frame, then freed in both
+/// spaces: every frame must be back in the pool. With `aslr=legacy` the
+/// region is one slot and the check does not apply.
+pub fn demand_slots_selftest(falloc: &mut FrameAllocator) -> bool {
+    use euromm::layout::{zone, Mode};
+    if aslr_mode() == Mode::Legacy {
+        crate::serial_println!("[demand-slots] aslr=legacy: the demand region is one PML4 slot (2), nothing to check ⬜");
+        return true;
+    }
+    let z = zone(Mode::On);
+    let last = (z.demand_slots().end as u64 - 1) << 39;
+    let pages = [z.demand_base + 0x1000, z.demand_base + 0x3F_F000, last + 0x40_0000_0000 + 0x2000, z.demand_end() - 0x1000];
+    let shared = |va: u64| va < z.demand_base + (1 << 39);
+    let pat = |k: usize| 0x5107_0000_0000_D00Du64 | ((k as u64) << 24);
+    if crate::procpool::demand_total_frames() != 0 {
+        crate::serial_println!("[demand-slots] a demand pool is installed: SKIPPED");
+        return false;
+    }
+    const POOL: usize = 256;
+    let Ok(dp) = falloc.allocate_contiguous(POOL) else {
+        crate::serial_println!("[demand-slots] no 1 MiB for a demand pool -> FAILED ✗");
+        return false;
+    };
+    crate::procpool::demand_install(dp, POOL);
+    let free0 = crate::procpool::demand_free_frames();
+    let mut why: Option<&str> = None;
+    let spaces = [crate::procpool::demand_alloc(), crate::procpool::demand_alloc()];
+    let (mut walked, mut tables, mut fa, mut fb) = (0usize, 0usize, 0usize, 0usize);
+    if let [Some(a), Some(b)] = spaces {
+        // SAFETY: two fresh pool frames, identity-mapped; never loaded in CR3.
+        unsafe {
+            core::ptr::write_bytes(a as *mut u8, 0, 4096);
+            core::ptr::write_bytes(b as *mut u8, 0, 4096);
+        }
+        for (k, &va) in pages.iter().enumerate() {
+            match crate::procpool::demand_alloc() {
+                // SAFETY: a fresh pool frame, identity-mapped.
+                Some(f) if crate::paging::map_demand_4k(a, va, f) => unsafe { (f as *mut u64).write_volatile(pat(k)) },
+                _ => why = why.or(Some("no frame or table for a page")),
+            }
+        }
+        tables = dz_walk(a, &mut |_, _| walked += 1);
+        if why.is_none() && walked != pages.len() {
+            why = Some("the census walk does not find every page");
+        }
+        if why.is_none() && !dz_clone(a, b, &mut || {}, &shared) {
+            why = Some("the fork copy failed");
+        }
+        if why.is_none() {
+            let rd = |s: u64, va: u64| crate::paging::translate_in(s, va).map(|p| unsafe { ((p & !0xFFF) as *const u64).read_volatile() });
+            let (pa, pb) = (dz_phys_sorted(a), dz_phys_sorted(b));
+            fa = pa.len();
+            fb = pb.len();
+            if pages.iter().enumerate().any(|(k, &va)| rd(a, va) != Some(pat(k)) || rd(b, va) != Some(pat(k))) {
+                why = Some("the copy in the second space does not hold the pages");
+            } else if fa != 4 || fb != 4 || pa.iter().filter(|f| pb.contains(f)).count() != 2 {
+                why = Some("frames: want 4 in each space, 2 of them shared");
+            }
+        }
+        dz_free_except(b, &[]);
+        dz_free_except(a, &[]);
+        crate::procpool::demand_free(b);
+        crate::procpool::demand_free(a);
+        crate::paging::flush_tlb_all();
+    } else {
+        why = Some("no frames for two scratch spaces");
+        for f in spaces.into_iter().flatten() {
+            crate::procpool::demand_free(f);
+        }
+    }
+    let free1 = crate::procpool::demand_free_frames();
+    if why.is_none() && free1 != free0 {
+        why = Some("frames were not all given back");
+    }
+    crate::procpool::demand_uninstall();
+    for i in 0..POOL as u64 {
+        let _ = falloc.free(dp + i * 4096);
+    }
+    let slots = demand_slots();
+    match why {
+        None => crate::serial_println!(
+            "[demand-slots] pages at {:#x} and {:#x} (PML4 {} and {}): census {walked} pages {tables} tables, fork copy {fa} -> {fb} frames (2 shared), freed in both, pool {free0} -> {free1}; demand slots {}..{} -> OK ✓",
+            pages[0], pages[3], pages[0] >> 39, pages[3] >> 39, slots.start, slots.end
+        ),
+        Some(w) => crate::serial_println!(
+            "[demand-slots] pages at {:#x} and {:#x} (PML4 {} and {}): {w}; census {walked} pages, frames {fa}/{fb}, pool {free0} -> {free1}; demand slots {}..{} (aslr={}) -> FAILED ✗",
+            pages[0], pages[3], pages[0] >> 39, pages[3] >> 39, slots.start, slots.end, aslr_mode().name()
+        ),
+    }
+    why.is_none()
+}
 pub static DEMAND_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+static DEMAND_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
 /// The lowest demand address that can be committed this run (DEMAND_NEXT at
-/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from DEMAND_BASE
+/// reset). Swap eviction scans [DEMAND_FLOOR, DEMAND_NEXT), not from demand_base()
 /// (192 MiB of the region below the exe window is never mapped).
-pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(DEMAND_BASE);
+pub static DEMAND_FLOOR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(euromm::layout::LEGACY_DEMAND_BASE);
 static DEMAND_COMMITTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Pages zeroed by madvise(MADV_DONTNEED/MADV_FREE) so far, and how many calls did it.
@@ -11649,7 +12794,7 @@ fn madvise(addr: u64, len: u64, advice: u64) -> u64 {
     }
     let start = addr & !0xFFF;
     let end = addr.saturating_add(len).saturating_add(0xFFF) & !0xFFF;
-    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+    if end <= start || start < demand_base() || end > demand_end() {
         return 0;
     }
     ensure_globals_for_current();
@@ -11731,7 +12876,7 @@ fn demand_give_back(start: u64, end: u64) {
 /// or alias: those frames belong to the file), leave shared and page-cache frames
 /// to their owners. A later touch faults in zeros (or the file's bytes again).
 fn demand_drop_range(start: u64, end: u64) -> (usize, usize) {
-    if end <= start || start < DEMAND_BASE || end > DEMAND_BASE + DEMAND_SIZE {
+    if end <= start || start < demand_base() || end > demand_end() {
         return (0, 0);
     }
     ensure_globals_for_current();
@@ -11771,17 +12916,20 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  valid bytes from mapping start — beyond this the mapping reads as zero). `valid`
 //  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
-static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static DEMAND_FILE_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "DEMAND_FILE_MAPS");
 /// Address ranges of this process's demand region that munmap gave back
 /// (BUG-131): an anonymous mmap takes its addresses from here before the bump
 /// pointer moves. Swapped per process with the rest of the demand state.
-static DEMAND_FREE: Mutex<euromm::FreeRanges> = Mutex::new(euromm::FreeRanges::new());
+static DEMAND_FREE: crate::irqlock::IrqLock<euromm::FreeRanges> =
+    crate::irqlock::IrqLock::new(euromm::FreeRanges::new(), "DEMAND_FREE");
 static DEMAND_REUSED: AtomicU64 = AtomicU64::new(0);
 /// Live MAP_SHARED regions: (file index, arena base, region length). One entry per
 /// shared in-RAM file (memfd/tmpfs) for the duration of a process — every mapping of
 /// that file resolves to this one region, which is what "shared memory" means. Arena
 /// addresses are per-process, so this is cleared when a process starts.
-static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_MAPS");
 /// Physical frames backing a shared file, one per page, allocated on first touch
 /// (0 = not yet). This is what makes sharing REAL: every mapping of the file gets
 /// its own address range, and each range faults onto THESE frames, so a write
@@ -11790,7 +12938,8 @@ static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(all
 /// keyed BY ADDRESS and CHECK-fails when two of them collide.
 static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, euromm::ramfile::PageFile)>> = Mutex::new(alloc::vec::Vec::new());
 /// Address ranges handed out for shared mappings: (base, length, file index).
-static SHARED_ALIASES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_ALIASES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_ALIASES");
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -11858,7 +13007,7 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     // Copy-on-write (fork): a write to a page shared with another process.
     // Needs no demand state and no lock but the pool's, so it comes first: a
     // system call that copies into its caller may hold any other lock.
-    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+    if write && present && addr >= demand_base() && addr < demand_end() {
         let pml4 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         match crate::paging::demand_cow_fault(pml4, addr) {
             Some(true) => return true,
@@ -11883,7 +13032,7 @@ pub fn handle_demand_fault(addr: u64, write: bool, present: bool) -> bool {
     // read-only mapping of a shared disk-cache frame — give the writer its own
     // copy and retry. (Every other present+write fault is a real violation and
     // falls through to the terminate path.)
-    if write && present && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE {
+    if write && present && addr >= demand_base() && addr < demand_end() {
         let pml4 = {
             use x86_64::registers::control::Cr3;
             Cr3::read().0.start_address().as_u64()
@@ -11973,7 +13122,7 @@ fn oom_kill() -> bool {
     let mut sizes: alloc::vec::Vec<(u64, usize)> = alloc::vec::Vec::new();
     for &(pid, _, pml4, _, _) in kids.iter() {
         let mut n = 0usize;
-        crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |_, pte| {
+        dz_walk(pml4, &mut |_, pte| {
             if pte & 3 == 3 {
                 n += 1;
             }
@@ -12016,10 +13165,69 @@ fn oom_kill() -> bool {
     }
 }
 
+/// BUG-352: fork children the kernel ended for a fault in ring 3 (memory
+/// isolation, #GP, #UD), with the signal, waiting for their teardown.
+static FAULT_KILLED: Mutex<alloc::vec::Vec<(u64, u32)>> = Mutex::new(alloc::vec::Vec::new());
+
+/// BUG-352: a task of a fork child faulted in ring 3 and is marked dead. The
+/// whole child ends (its other tasks too, as on Linux), and its parent gets
+/// the status "killed by `signal`" from wait4 like after any other death. The
+/// teardown needs another process's context (it frees the page tables this
+/// task runs on), so `fault_killed_poll` does it: in the parent's wait4, the
+/// desktop loop or the next fault. Before, the parent waited the 60 s wait4
+/// bound and got nothing; the child was only freed at the end of the run.
+fn fork_child_fault_kill(cur: usize, signal: u8) -> bool {
+    let Some(owner) = fork_child_owner(cur) else { return false };
+    let hit = GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.1 == owner).copied();
+    let Some((pid, ctask, _, _, _)) = hit else { return false };
+    let threads: alloc::vec::Vec<usize> = CHILD_THREADS.lock().iter()
+        .filter(|&&(_, m)| m == ctask).map(|&(t, _)| t).collect();
+    for &t in core::iter::once(&ctask).chain(threads.iter()) {
+        futex_purge_task(t);
+        if t != cur && !crate::sched::is_dead(t) {
+            crate::sched::mark_dead(t);
+        }
+    }
+    {
+        let mut g = FAULT_KILLED.lock();
+        if !g.iter().any(|&(p, _)| p == pid) {
+            g.push((pid, signal as u32));
+        }
+    }
+    crate::serial_println!("[fork] child pid {pid} (task {cur}) ended by signal {signal} after a fault in ring 3: its parent's wait4 gets the status");
+    true
+}
+
+/// BUG-352: tear down the fork children `fork_child_fault_kill` ended; their
+/// status (the signal) goes to wait4. Not from inside such a child.
+fn fault_killed_poll() {
+    let list: alloc::vec::Vec<(u64, u32)> = {
+        let _g = crate::sched::IfOffGuard::new();
+        let mut g = FAULT_KILLED.lock();
+        if g.is_empty() {
+            return;
+        }
+        core::mem::take(&mut *g)
+    };
+    let _g = crate::sched::IfOffGuard::new();
+    let me = fork_child_owner(crate::sched::current());
+    for (pid, sig) in list {
+        let hit = GLIBC_FORK_CHILDREN.lock().iter().find(|k| k.0 == pid).copied();
+        let Some((_, ctask, pml4, arena, frames)) = hit else { continue }; // gone (end of the run)
+        if me == Some(ctask) {
+            FAULT_KILLED.lock().push((pid, sig));
+            continue;
+        }
+        fork_child_teardown(pid, ctask, pml4, arena, frames, Some(sig));
+        crate::serial_println!("[fork] child pid {pid} torn down after its fault: status {sig:#x} for wait4");
+    }
+}
+
 /// End the child that was found to be the one to go while it was itself the
 /// running process. Called from task context of ANOTHER process (the desktop
 /// loop, a wait4, a fault from ring 3); a no-op otherwise.
 pub fn oom_deferred_poll() {
+    fault_killed_poll();
     let pid = OOM_DEFERRED.load(Ordering::Relaxed);
     if pid == 0 {
         return;
@@ -12062,11 +13270,11 @@ pub fn oom_in_syscall(idx: usize, addr: u64, rip: u64) {
 /// Is `addr` in the demand region, i.e. was a fault there one the pool could
 /// not serve (and not a wild kernel pointer)?
 pub fn in_demand_region(addr: u64) -> bool {
-    DEMAND_ENABLED.load(Ordering::Relaxed) && addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE
+    DEMAND_ENABLED.load(Ordering::Relaxed) && addr >= demand_base() && addr < demand_end()
 }
 
 fn handle_demand_fault_inner(addr: u64) -> bool {
-    let in_region = addr >= DEMAND_BASE && addr < DEMAND_BASE + DEMAND_SIZE;
+    let in_region = addr >= demand_base() && addr < demand_end();
     if !DEMAND_ENABLED.load(Ordering::Relaxed) {
         if in_region && !DEMAND_DIAG.swap(true, Ordering::Relaxed) {
             crate::serial_println!("[demand] REJECT addr={addr:#x}: DEMAND_ENABLED=false");
@@ -12487,22 +13695,27 @@ pub fn spawn_glibc_persistent(
     let frames = (nblocks * 512) as usize;
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    let exe_base = arena;
-    let ldso_base = arena + 0x0080_0000;
+    // ASLR S4: av virtual, arena the RAM the kernel fills (see run_glibc).
+    // S5: the base and the slides of the exe and ld.so come from the draw.
+    let lay = image_layout(0, 0);
+    let ap = arena_place(arena, nblocks * MIB2, &lay);
+    let kern = |va: u64| ap.kern(va, arena);
+    let exe_base = ap.exe(program_span_pages(exe) as u64 * 4096);
+    let ldso_base = ap.ldso();
     // brk heap: [arena+32MiB, arena+64MiB); mmap bump area starts AFTER it so brk() and
     // mmap() never share a cursor (see BRK_CUR/BRK_END).
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
-    ARENA_BASE.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // BUG-053: from here on the arena is held; every refusal gives it back.
     let (Some(exe_info), Some(ld_info)) = (
-        load_elf64(exe, exe_base, program_span_pages(exe)),
-        load_elf64(ldso, ldso_base, program_span_pages(ldso)),
+        load_elf64(exe, exe_base, kern(exe_base), program_span_pages(exe)),
+        load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)),
     ) else {
         glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
         crate::serial_println!("[glibc] persistent app: executable or loader is not a loadable ELF - not started");
@@ -12512,15 +13725,15 @@ pub fn spawn_glibc_persistent(
     // the deferred mapping would never run — and an auxv that promises a vDSO which
     // is not mapped crashes ld.so. The glibc syscall clock keeps working.
     let vdso_ok = false;
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, 0) };
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -12538,7 +13751,7 @@ pub fn spawn_glibc_persistent(
     // the first attempt mapped nothing and the auxv promise nearly caused a crash.
     let _ = vdso_ok;
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
@@ -12581,11 +13794,11 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     // before the demand pool their pages came from is handed back below.
     reap_orphan_fork_children();
     crate::sched::reclaim_task(main);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::mark_dead(t);
         crate::sched::reclaim_task(t);
     }
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     let pml4 = PERSIST_PML4.swap(0, Ordering::Relaxed);
     let arena = PERSIST_ARENA.swap(0, Ordering::Relaxed);
@@ -13126,8 +14339,14 @@ fn glibc_disk_launch(
     reset_fd_table();
     cdp_pipes_create(); // fd 3/4 for --remote-debugging-pipe, after the wipe above
 
-    // The exe is placed at the START of the demand region; ld.so libs reserve above it.
-    let exe_base = DEMAND_BASE;
+    // ASLR S1: one draw for this image (euromm::layout): the exe base (aligned
+    // to the largest p_align of the program), the mmap floor, the vDSO and the
+    // slides in the arena. With aslr=legacy: the start of the demand region.
+    let (exe_span, exe_align) = disk_exe_geometry(diskidx);
+    let lay = image_layout(exe_span, exe_align);
+    let exe_base = lay.exe_base;
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
     let exe_info = match read_disk_exe_info(diskidx, dev, doff, exe_base) {
         Some(i) => i,
         None => return Err("(bad disk exe ELF)"),
@@ -13168,16 +14387,21 @@ fn glibc_disk_launch(
     let frames = (nblocks * 512) as usize;
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
-    ARENA_BASE.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    // ASLR S4: av virtual, arena the RAM the kernel fills (see run_glibc).
+    // S5: the base and the ld.so slide come from the draw of this launch.
+    let ap = arena_place(arena, nblocks * MIB2, &lay);
+    let av = ap.base();
+    let kern = |va: u64| ap.kern(va, arena);
+    let ldso_base = ap.ldso(); // ld-linux at +8 MiB and its slide
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_disk_launch_abort(falloc, arena, frames, 0, 0, 0, prev_demand, prev_file);
@@ -13185,19 +14409,17 @@ fn glibc_disk_launch(
         }
     };
     let vdso_ok = vdso_prepare(falloc);
-    if vdso_ok {
-        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
-    }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -13211,17 +14433,21 @@ fn glibc_disk_launch(
             return Err("(out of memory: page tables)");
         }
     };
-    if vdso_ok && !vdso_map_into(falloc, pml4) {
+    if vdso_ok && !vdso_map_into(falloc, pml4, lay.vdso) {
         // As in run_glibc: no frames for the vDSO's tables is a refusal (BUG-053).
         glibc_disk_launch_abort(falloc, arena, frames, pml4, 0, 0, prev_demand, prev_file);
         return Err("(out of memory: vDSO mapping)");
     }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    let demand_floor = lay.mmap_floor;
+    crate::serial_println!(
+        "[aslr-layout] launch {exe_path}: exe {exe_base:#x} (span {} MiB, align {:#x}) floor {demand_floor:#x} vdso {:#x} arena {av:#x} hseg {:#x} sseg {:#x} ld.so {ldso_base:#x} brk {brk_start:#x} stack {stack_top:#x} (aslr={}, arena {}, split {})",
+        exe_span >> 20, exe_align, VDSO_CUR.load(Ordering::Relaxed), seg_virt(&ap.segs, 1), seg_virt(&ap.segs, 2), aslr_mode().name(), arena_mode_name(), arena_split_name()
+    );
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
@@ -13340,7 +14566,7 @@ pub fn run_glibc_disk(
             let step = (used >> 26) as u32; // 64 MiB steps
             let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
             if step > prev {
-                let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+                let files: usize = files_heap_bytes();
                 let pipes: usize = pipes_lock().iter().map(|p| p.len()).sum();
                 crate::serial_println!(
                     "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
@@ -13444,7 +14670,7 @@ pub fn run_glibc_disk(
             let tick = crate::interrupts::ticks();
             crate::serial_println!("[stall] snap {snaps} ({iters} iters): +{} syscalls +{} futex +{} epoll, ticks {}->{} ({}) | threads={}",
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
-                if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
+                if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, glibc_threads_len());
             crate::serial_println!("[evfd] writes={} epoll-checks={} epoll-ready={}",
                 crate::net::EVENTFD_WRITES.load(Ordering::Relaxed),
                 EVFD_IN_EPOLLSET.load(Ordering::Relaxed),
@@ -13493,12 +14719,12 @@ pub fn run_glibc_disk(
     reap_orphan_fork_children();
     // Idempotent: the clean exit path already freed these.
     free_thread_kstack(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     crate::sched::reclaim_task(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::reclaim_task(t);
     }
     let out = OUTPUT.lock().clone();
@@ -13528,7 +14754,7 @@ pub fn run_glibc_disk(
 /// main and worker tasks Dead and drop their futex waits, so nothing can wake them
 /// after their stacks and address space are freed. Caller is task 0, never one of them.
 fn kill_glibc_group(main_task: usize) {
-    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    let threads = glibc_threads_snapshot();
     let mut killed = 0usize;
     for &t in core::iter::once(&main_task).chain(threads.iter()) {
         futex_purge_task(t);
@@ -14426,6 +15652,35 @@ pub fn exit_flag_selftest(falloc: &mut FrameAllocator) {
     );
 }
 
+/// `[aslr-phys]` (aslrtest.rs): while set, `run_glibc` looks every address of
+/// the probe's first line up in the page tables of the process before it frees
+/// them, and keeps (address, physical address) in `PHYS_SEEN`.
+pub static PHYS_PROBE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub static PHYS_SEEN: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+/// `[vdso-ro]`: the leaf entries of the two vDSO pages of that process (0 = not mapped).
+pub static PHYS_VDSO_PTES: Mutex<[u64; 2]> = Mutex::new([0; 2]);
+fn phys_probe_note(pml4: u64, out: &str) {
+    let mut seen = PHYS_SEEN.lock();
+    seen.clear();
+    *PHYS_VDSO_PTES.lock() = [0; 2];
+    let Some(l) = out.lines().find(|l| l.starts_with("gaslr: ")) else { return };
+    if let Some(v) = l.split(' ').find_map(|f| f.strip_prefix("vdso=0x")).and_then(|h| u64::from_str_radix(h, 16).ok()) {
+        if v != 0 {
+            let e = |a: u64| crate::paging::leaf_entry_in(pml4, a).unwrap_or(0);
+            *PHYS_VDSO_PTES.lock() = [e(v), e(v + VDSO_DATA_VOFF)];
+        }
+    }
+    for f in l.split(' ') {
+        if let Some((_, h)) = f.split_once("=0x") {
+            if let Ok(va) = u64::from_str_radix(h, 16) {
+                if va != 0 {
+                    seen.push((va, crate::paging::translate_in(pml4, va).unwrap_or(u64::MAX)));
+                }
+            }
+        }
+    }
+}
+
 pub fn run_glibc(
     falloc: &mut FrameAllocator,
     exe: &[u8],
@@ -14514,29 +15769,37 @@ pub fn run_glibc(
     // clear it directly here.) SAFETY: `frames` contiguous frames we just reserved.
     unsafe { core::ptr::write_bytes(arena as *mut u8, 0, frames * 4096); }
 
-    // Arena layout.
-    let exe_base = arena; // PIE exe: first PT_LOAD has p_vaddr 0
-    let ldso_base = arena + 0x0080_0000; // ld-linux at +8 MiB
+    // Arena layout. ASLR S4: av is where the process sees the arena, arena
+    // its RAM, which the kernel fills here through the identity map (the
+    // launcher runs on the boot address space).
+    // S5: one draw gives the arena base and the page slides of exe and ld.so.
+    let lay = image_layout(0, 0);
+    let ap = arena_place(arena, nblocks * MIB2, &lay);
+    let kern = |va: u64| ap.kern(va, arena);
+    let exe_base = ap.exe(program_span_pages(exe) as u64 * 4096); // PIE exe: first PT_LOAD has p_vaddr 0
+    let ldso_base = ap.ldso(); // ld-linux at +8 MiB and its slide
     // brk heap [+32 MiB, +64 MiB); mmap bump area starts after it (disjoint cursors).
-    let (brk_start, mmap_start, stack_top) = glibc_arena_layout(arena, nblocks * (1 << 21));
+    EXE_BASE.store(lay.exe_base, Ordering::Relaxed);
+    EXE_END.store(lay.exe_end, Ordering::Relaxed);
+    let (brk_start, mmap_start, heap_end, stack_top) = glibc_arena_layout(&ap.segs, &lay);
 
-    ARENA_BASE.store(arena, Ordering::Relaxed);
-    ARENA_SPAN_DYN.store(nblocks * MIB2, Ordering::Relaxed);
+    arena_segs_set(&ap.segs); // ASLR S6: ARENA_BASE, the span and the segments
+    LAUNCH_ARENA_PHYS.store(arena, Ordering::Relaxed);
     BRK_CUR.store(brk_start, Ordering::Relaxed);
     BRK_END.store(mmap_start, Ordering::Relaxed);
     HEAP_BREAK.store(mmap_start, Ordering::Relaxed);
-    HEAP_END.store(stack_top - 0x0010_0000, Ordering::Relaxed);
+    HEAP_END.store(heap_end, Ordering::Relaxed);
 
     // load_elf64 places PT_LOAD at base+p_vaddr and applies R_X86_64_RELATIVE
     // (idempotent: ld.so also self-relocates).
-    let exe_info = match load_elf64(exe, exe_base, program_span_pages(exe)) {
+    let exe_info = match load_elf64(exe, exe_base, kern(exe_base), program_span_pages(exe)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
             return (String::from("(bad exe ELF)"), u64::MAX);
         }
     };
-    let ld_info = match load_elf64(ldso, ldso_base, program_span_pages(ldso)) {
+    let ld_info = match load_elf64(ldso, ldso_base, kern(ldso_base), program_span_pages(ldso)) {
         Some(i) => i,
         None => {
             glibc_launch_abort(falloc, arena, frames, 0, 0, 0);
@@ -14545,19 +15808,17 @@ pub fn run_glibc(
     };
 
     let vdso_ok = vdso_prepare(falloc);
-    if vdso_ok {
-        VDSO_EHDR_NEXT.store(VDSO_BASE, Ordering::Relaxed);
-    }
-    let rsp = unsafe { setup_user_stack_glibc(stack_top, argv, envp, &exe_info, ldso_base) };
+    VDSO_CUR.store(if vdso_ok { lay.vdso } else { 0 }, Ordering::Relaxed);
+    let rsp = unsafe { setup_user_stack_glibc(stack_top, kern(stack_top), argv, envp, &exe_info, ldso_base, if vdso_ok { lay.vdso } else { 0 }) };
 
     let sel = crate::gdt::selectors();
     let user_cs = (sel.user_code.0 | 3) as u64;
     let user_ss = (sel.user_data.0 | 3) as u64;
-    let pml4 = match crate::paging::try_build_address_space_rwx_big(falloc, arena, nblocks) {
+    let pml4 = match crate::paging::try_build_address_space_arena(falloc, &ap.segs, arena) {
         // Demand-paged: 4 KiB pages for the arena, so a fork can share it
         // copy-on-write (paging::arena_split).
         Ok(p) if DEMAND_ENABLED.load(Ordering::Relaxed) => {
-            crate::paging::arena_split(falloc, p, arena, nblocks as u64);
+            crate::paging::arena_split(falloc, p, &ap.segs);
             p
         }
         Ok(p) => p,
@@ -14569,7 +15830,7 @@ pub fn run_glibc(
             return (String::from("(out of memory: page tables)"), u64::MAX);
         }
     };
-    if vdso_ok && !vdso_map_into(falloc, pml4) {
+    if vdso_ok && !vdso_map_into(falloc, pml4, lay.vdso) {
         // The auxv on the stack already promises a vDSO: a process started without
         // the mapping jumps into nothing. No frames for its tables: refuse (BUG-053).
         glibc_launch_abort(falloc, arena, frames, pml4, 0, 0);
@@ -14577,12 +15838,12 @@ pub fn run_glibc(
     }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
     // Fresh demand-paging state for this run (bump pointer, counters, used flag).
-    let demand_floor = DEMAND_BASE + 0x0C00_0000 + aslr_slides().demand;
+    let demand_floor = lay.mmap_floor;
     DEMAND_NEXT.store(demand_floor, Ordering::Relaxed); DEMAND_FREE.lock().clear(); // past the exe window, randomised
     DEMAND_FLOOR.store(demand_floor, Ordering::Relaxed);
     DEMAND_COMMITTED.store(0, Ordering::Relaxed);
@@ -14692,7 +15953,7 @@ pub fn run_glibc(
         // ...and the call it is IN (the ring keeps a call that has not returned
         // with result 0xffff...: that is the one it waits in).
         dump_main_syscalls();
-        for &t in GLIBC_THREADS.lock().iter() {
+        for t in glibc_threads_snapshot() {
             let (n2, a2, r2) = last_syscall(t);
             crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
         }
@@ -14705,7 +15966,7 @@ pub fn run_glibc(
     // Reclaim any kstacks still held by this run's tasks (idempotent on the
     // clean-exit path, which already freed them).
     free_thread_kstack(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
@@ -14713,11 +15974,14 @@ pub fn run_glibc(
     // kernel stacks + address space are freed, and glibc tasks have no BgProc, so the
     // slots can be reused — otherwise the 48-slot table fills after ~14 programs.
     crate::sched::reclaim_task(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::reclaim_task(t);
     }
     let out = OUTPUT.lock().clone();
     let code = GLIBC_EXIT_CODE.load(Ordering::Relaxed);
+    if PHYS_PROBE.load(Ordering::Relaxed) {
+        phys_probe_note(pml4, &out);
+    }
     // Tear down this run's demand pool: uninstall it and return its ENTIRE backing
     // region (committed pages, demand page tables, and all) to the main allocator in
     // one sweep — simpler and complete vs. walking PML4[2]. (The pml4 itself, incl.
@@ -14748,28 +16012,35 @@ pub fn run_glibc(
 /// Build the SysV x86-64 initial stack for a real glibc program: argc, argv[],
 /// envp[], and a FULL auxv (AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/FLAGS/ENTRY/UID/GID/
 /// PLATFORM/HWCAP/CLKTCK/SECURE/RANDOM/EXECFN) that glibc's ld.so requires.
-/// AT_SYSINFO_EHDR for the NEXT setup_user_stack_glibc call (0 = none). Set by the
-/// launch path right after it maps the vDSO into the new address space.
-static VDSO_EHDR_NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// The initial stack of a glibc process (argv, envp, auxv) below `stack_top`,
+/// a virtual address of the process; the bytes are written at `stack_kern`, the
+/// address where the kernel reaches that stack top now (ASLR S3; equal for
+/// every caller until the arena leaves the identity map). Returns the
+/// virtual stack pointer.
 unsafe fn setup_user_stack_glibc(
     stack_top: u64,
+    stack_kern: u64,
     argv: &[&[u8]],
     envp: &[&[u8]],
     info: &LoadInfo,
     interp_base: u64,
+    vdso: u64,
 ) -> u64 {
+    // ASLR S3: every pointer is a virtual address of the process (from
+    // `stack_top`); every byte is written where the kernel reaches it now.
+    let k = |va: u64| va.wrapping_sub(stack_top).wrapping_add(stack_kern);
     let mut p = stack_top;
     // 16 AT_RANDOM bytes.
     p -= 16;
     let random_ptr = p;
-    write_at_random(random_ptr);
+    write_at_random(k(random_ptr));
     // AT_PLATFORM string.
     let plat = b"x86_64\0";
     p -= plat.len() as u64;
     let plat_ptr = p;
     for (i, b) in plat.iter().enumerate() {
-        (plat_ptr as *mut u8).add(i).write(*b);
+        (k(plat_ptr) as *mut u8).add(i).write(*b);
     }
     // argv strings.
     let mut argptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::with_capacity(argv.len());
@@ -14777,9 +16048,9 @@ unsafe fn setup_user_stack_glibc(
         p -= a.len() as u64 + 1;
         let ptr = p;
         for (i, b) in a.iter().enumerate() {
-            (ptr as *mut u8).add(i).write(*b);
+            (k(ptr) as *mut u8).add(i).write(*b);
         }
-        (ptr as *mut u8).add(a.len()).write(0);
+        (k(ptr) as *mut u8).add(a.len()).write(0);
         argptrs.push(ptr);
     }
     // envp strings.
@@ -14788,15 +16059,14 @@ unsafe fn setup_user_stack_glibc(
         p -= e.len() as u64 + 1;
         let ptr = p;
         for (i, b) in e.iter().enumerate() {
-            (ptr as *mut u8).add(i).write(*b);
+            (k(ptr) as *mut u8).add(i).write(*b);
         }
-        (ptr as *mut u8).add(e.len()).write(0);
+        (k(ptr) as *mut u8).add(e.len()).write(0);
         envptrs.push(ptr);
     }
     let execfn = *argptrs.first().unwrap_or(&0);
     p &= !0xF;
 
-    let vdso = VDSO_EHDR_NEXT.swap(0, Ordering::Relaxed);
     let aux: [(u64, u64); 19] = [
         (33, vdso),           // AT_SYSINFO_EHDR (0 = no vDSO: glibc uses the syscalls)
         (3, info.phdr),       // AT_PHDR
@@ -14822,7 +16092,7 @@ unsafe fn setup_user_stack_glibc(
     let sp = (p - nslots * 8) & !0xF;
     let mut w = sp;
     let mut put = |val: u64| {
-        (w as *mut u64).write(val);
+        (k(w) as *mut u64).write(val);
         w += 8;
     };
     put(argptrs.len() as u64);
@@ -15213,6 +16483,9 @@ pub extern "sysv64" fn syscall_dispatch(num: u64, a1: u64, a2: u64, a3: u64, a4:
         // so a blocking socket call may sleep (net.rs). Not a foreground
         // excursion: that one runs synchronously on task 0's borrowed stack.
         let _nb = NetBlockScope::enter(!FG_ACTIVE.load(Ordering::Relaxed));
+        if trace_child {
+            crate::forkvdsotest::on_child_syscall(num);
+        }
         let r = linux_dispatch(num, a1, a2, a3, a4, a5);
         if trace_child {
             // High budget: we want the renderer's WHOLE post-execve life
@@ -15573,10 +16846,14 @@ fn demand_addr_origin(addr: u64) -> String {
                 addr - base + foff as u64);
         }
     }
-    if addr >= DEMAND_BASE {
-        alloc::format!("anon (demand+{:#x})", addr - DEMAND_BASE)
+    if addr >= demand_base() {
+        alloc::format!("anon (demand+{:#x})", addr - demand_base())
     } else {
-        alloc::format!("arena+{:#x}", addr.wrapping_sub(ARENA_BASE.load(Ordering::Relaxed)))
+        // ASLR S6: the arena offset through the segment the address lies in.
+        match arena_segs_now().off(addr) {
+            Some(o) => alloc::format!("arena+{o:#x}"),
+            None => alloc::format!("not arena ({addr:#x})"),
+        }
     }
 }
 
@@ -15883,9 +17160,9 @@ fn mm_fail(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, r: u64) {
     crate::serial_println!(
         "[mm-fail] #{n} t{cur} {:?} process {}: {call} = {} | arena mmap window {} KiB left of {} MiB, brk {} KiB left | demand addresses {} of {} GiB handed out | demand pool {} MiB free, process pool {} MiB free | kernel heap {} MiB used {} MiB free, big blocks {bu}/{bf} MiB",
         thread_name(cur), fork_child_owner(cur).unwrap_or(0), r as i64,
-        win_end.saturating_sub(win) / 1024, win_end.saturating_sub(ARENA_BASE.load(Ordering::Relaxed)) >> 20,
+        win_end.saturating_sub(win) / 1024, arena_segs_now().off(win_end.saturating_sub(1)).map_or(0, |o| o + 1) >> 20,
         brk_end.saturating_sub(brk) / 1024,
-        DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(DEMAND_BASE) >> 30, DEMAND_SIZE >> 30,
+        DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(demand_base()) >> 30, demand_size() >> 30,
         crate::procpool::demand_free_frames() / 256, crate::procpool::free_frames() / 256,
         hu >> 20, hf >> 20);
     let (free_total, free_n) = { let f = DEMAND_FREE.lock(); (f.total(), f.ranges().len()) };
@@ -16144,7 +17421,7 @@ fn census_walk(m: &mut ProcMem, pml4: u64, file: &euromm::FreeRanges, shared: &e
         (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let refs = crate::paging::cow_refs();
     let mut cow_units = 0usize;
-    m.tables = crate::paging::walk_demand_region(pml4, DEMAND_PML4_IDX, &mut |va, pte| {
+    m.tables = dz_walk(pml4, &mut |va, pte| {
         if pte & 1 == 0 {
             sw += 1;
         } else if pte & crate::paging::COW != 0 {
@@ -16212,7 +17489,7 @@ fn mem_census_once() -> (MemTotals, alloc::vec::Vec<ProcMem>) {
         let Some((file, shared, none, reserved)) = proc_mem_ranges(owner) else { continue };
         let mut m = ProcMem { pid, task, name: thread_name(task), arena, reserved, ..Default::default() };
         m.noaccess = none.ranges().iter()
-            .filter(|&&(s, _)| s >= DEMAND_BASE && s < DEMAND_BASE + DEMAND_SIZE).map(|&(s, e)| e - s).sum();
+            .filter(|&&(s, _)| s >= demand_base() && s < demand_end()).map(|&(s, e)| e - s).sum();
         census_walk(&mut m, pml4, &file, &shared, &none);
         procs.push(m);
     }
@@ -16776,7 +18053,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     if exit_log {
                         crate::serial_println!("[fork-acct] child exit BEFORE frees: process-pool {} · demand-pool {}", crate::procpool::free_frames(), crate::procpool::demand_free_frames());
                     }
-                    crate::paging::free_demand_region_except(pml4, DEMAND_PML4_IDX, &child_keep_list(pml4));
+                    dz_free_except(pml4, &child_keep_list(pml4));
                     // ... and the child's own page tables under PML4[0] (pdpt, pd,
                     // 4 KiB PTs: procpool frames), which only the pml4 free used to cover.
                     crate::paging::free_fork_tables(pml4);
@@ -16805,8 +18082,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     crate::serial_println!("[exitgrp] task {cur} ({}) exit_group({a1}) rip={:#x} rsp={:#x}",
                         if is_main { "MAIN" } else { "worker" },
                         unsafe { USER_RIP }, unsafe { USER_RSP });
-                    let lo = DEMAND_BASE;
-                    let hi = DEMAND_BASE + 0x0C00_0000; // ~192 MiB: the exe image window
+                    let lo = EXE_BASE.load(Ordering::Relaxed);
+                    let hi = EXE_END.load(Ordering::Relaxed); // the exe image window
                     let rsp = unsafe { USER_RSP };
                     let mut shown = 0;
                     for i in 0..256u64 {
@@ -17072,7 +18349,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                                 Cr3::read().0.start_address().as_u64()
                             };
                             let start = DEMAND_NEXT.fetch_add(pages * 4096, Ordering::Relaxed);
-                            if start + pages * 4096 > DEMAND_BASE + DEMAND_SIZE {
+                            if start + pages * 4096 > demand_end() {
                                 return (-12i64) as u64; // -ENOMEM
                             }
                             for i in 0..pages {
@@ -17108,7 +18385,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         let fsz = ram_len(fi);
                         let region = (((fsz.max(off + len as usize)) as u64 + 0xFFF) & !0xFFF).max(4096);
                         let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                        if start + region > DEMAND_BASE + DEMAND_SIZE {
+                        if start + region > demand_end() {
                             DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                             return (-12i64) as u64; // -ENOMEM
                         }
@@ -17150,7 +18427,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         // file (a freshly ftruncated file reads as the zeros it should).
                         let b = if DEMAND_ENABLED.load(Ordering::Relaxed) && region > (1 << 20) {
                             let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                            if start + region > DEMAND_BASE + DEMAND_SIZE {
+                            if start + region > demand_end() {
                                 DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                                 return (-12i64) as u64; // -ENOMEM
                             }
@@ -17238,10 +18515,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let mut start = DEMAND_NEXT.load(Ordering::Relaxed);
                 start = (start + (align - 1)) & !(align - 1);
                 let new_next = start + len;
-                if new_next > DEMAND_BASE + DEMAND_SIZE {
+                if new_next > demand_end() {
                     if len >= (1 << 30) {
-                        crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> ENOMEM (demand region {} GiB exhausted, next={:#x})",
-                            len >> 20, align, DEMAND_SIZE >> 30, DEMAND_NEXT.load(Ordering::Relaxed));
+                        crate::serial_println!("[demand-res] mmap anon RESERVE {} MiB align={:#x} -> ENOMEM (demand region {} GiB exhausted, next={:#x})",
+                            len >> 20, align, demand_size() >> 30, DEMAND_NEXT.load(Ordering::Relaxed));
                     }
                     return (-12i64) as u64; // -ENOMEM: out of demand virtual space
                 }
@@ -17253,7 +18530,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     prot_none_set(start, new_next, true);
                 }
                 if len >= (1 << 30) {
-                    crate::serial_println!("[linux-abi] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
+                    crate::serial_println!("[demand-res] mmap anon RESERVE {} MiB align={:#x} -> {:#x} (lazy)", len >> 20, align, start);
                 }
                 return start; // untouched -> committed lazily by handle_demand_fault
             }
@@ -17265,7 +18542,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // (or as zero for bss) on first touch — see handle_demand_fault.
             if DEMAND_ENABLED.load(Ordering::Relaxed) && DEMAND_FILE_ENABLED.load(Ordering::Relaxed) {
                 const PROT_RWX: u64 = 0x7; // PROT_READ|WRITE|EXEC
-                let in_demand = |x: u64| x >= DEMAND_BASE && x < DEMAND_BASE + DEMAND_SIZE;
+                let in_demand = |x: u64| x >= demand_base() && x < demand_end();
 
                 // (A) A MAP_FIXED overlay landing inside a reserved demand span: the
                 // loader placing a segment (file-backed) or .bss (anon) at base+vaddr.
@@ -17329,7 +18606,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                     };
                     drop(fds);
                     let start = DEMAND_NEXT.fetch_add(len, Ordering::Relaxed);
-                    if start + len > DEMAND_BASE + DEMAND_SIZE {
+                    if start + len > demand_end() {
                         DEMAND_NEXT.fetch_sub(len, Ordering::Relaxed);
                         return (-12i64) as u64; // -ENOMEM
                     }
@@ -17441,7 +18718,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // otherwise leaks its way through the demand pool over a long session.
             let start = a1 & !0xFFF;
             let end = start.saturating_add((a2 + 0xFFF) & !0xFFF);
-            if start >= DEMAND_BASE && end <= DEMAND_BASE + DEMAND_SIZE && end > start {
+            if start >= demand_base() && end <= demand_end() && end > start {
                 let (unmapped, freed) = demand_drop_range(start, end);
                 prot_none_set(start, end, false);
                 demand_give_back(start, end);
@@ -17498,10 +18775,10 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
 
             // In-place growth when this mapping is the last thing handed out from its
             // bump. That is the ordinary realloc pattern and costs no copy at all.
-            if old >= DEMAND_BASE {
+            if old >= demand_base() {
                 let next = DEMAND_NEXT.load(Ordering::Relaxed);
                 if old + old_len == next
-                    && next + grow <= DEMAND_BASE + DEMAND_SIZE
+                    && next + grow <= demand_end()
                     && DEMAND_NEXT
                         .compare_exchange(next, next + grow, Ordering::Relaxed, Ordering::Relaxed)
                         .is_ok()
@@ -17544,7 +18821,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                 let off = old - abase;
                 let region = ((off + new_len + 0xFFF) & !0xFFF).max(4096);
                 let start = DEMAND_NEXT.fetch_add(region, Ordering::Relaxed);
-                if start + region > DEMAND_BASE + DEMAND_SIZE {
+                if start + region > demand_end() {
                     DEMAND_NEXT.fetch_sub(region, Ordering::Relaxed);
                     return (-12i64) as u64; // -ENOMEM
                 }
@@ -17574,7 +18851,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // demand region, a small one to the arena window.
             let dst = if DEMAND_ENABLED.load(Ordering::Relaxed) && new_len >= DEMAND_MIN_BYTES {
                 let start = DEMAND_NEXT.fetch_add(new_len, Ordering::Relaxed);
-                if start + new_len > DEMAND_BASE + DEMAND_SIZE {
+                if start + new_len > demand_end() {
                     DEMAND_NEXT.fetch_sub(new_len, Ordering::Relaxed);
                     return (-12i64) as u64; // -ENOMEM
                 }
@@ -17884,6 +19161,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let wnohang = a3 & 1 != 0;
             let deadline = crate::interrupts::ticks() + 6000; // ~60 s of guest time
             loop {
+                fault_killed_poll(); // BUG-352: a child ended by a fault
                 let mut ce = GLIBC_CHILD_EXITS.lock();
                 if let Some(i) = ce.iter().position(|&(p, _)| want == -1 || p == want as u64) {
                     let (cpid, status) = ce.remove(i);
@@ -17892,6 +19170,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
                         return EFAULT;
                     }
                     crate::serial_println!("[wait4] reaped glibc child pid {cpid} status={status:#x}");
+                    crate::forkvdsotest::note_reap(cpid, status);
                     return cpid;
                 }
                 drop(ce);
@@ -19156,6 +20435,7 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             let addr = a1 & !0xFFF;
             let end = addr.saturating_add((a2 + 0xFFF) & !0xFFF);
             prot_none_set(addr, end, a3 == 0);
+            ro_file_note(addr, end, a3); // BUG-351
             0
         }
         13 => {
@@ -19286,13 +20566,8 @@ fn linux_dispatch_inner_raw(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u6
             // clock_gettime(clk, *timespec): CLOCK_REALTIME(0)/CLOCK_TAI(11) give the
             // REAL wall clock (RTC epoch); CLOCK_MONOTONIC(1)/BOOTTIME(7) the uptime.
             if a2 != 0 {
-                let (sec, nsec) = if a1 == 0 || a1 == 11 {
-                    let w = wall_ns();
-                    (w / 1_000_000_000, w % 1_000_000_000)
-                } else {
-                    let ticks = crate::interrupts::ticks();
-                    (ticks / 100, (ticks % 100) * 10_000_000) // 100 Hz PIT
-                };
+                let ns = clock_ns(a1);
+                let (sec, nsec) = (ns / 1_000_000_000, ns % 1_000_000_000);
                 if !write_user(a2, sec) || !write_user(a2 + 8, nsec) {
                     return EFAULT;
                 }
@@ -20018,4 +21293,179 @@ pub fn run_args(
 
     let out = OUTPUT.lock().clone();
     unsafe { (core::ptr::read(core::ptr::addr_of!(EXIT_CODE)), out) }
+}
+
+// -- ASLR S3: the loader with two numbers ([elf-bias]) --------------------------
+
+/// ASLR step S3 ([elf-bias]): a glibc program (`seq`, 10 R_X86_64_RELATIVE
+/// relocations) and ld.so (its own relocations are packed RELR, it applies
+/// them itself) loaded at virtual bases that are not the addresses the
+/// kernel writes at, and their stack built the same way. Case "near": the
+/// virtual addresses are the second half of a scratch buffer, so a loader
+/// that still writes at the virtual address fills that half and the check
+/// sees it; case "high": the virtual addresses lie in the arena zone (8 TiB,
+/// not mapped for the kernel). LoadInfo (entry, PHDR, base), every relocated
+/// word and the stack (argv, envp, auxv AT_PHDR/AT_ENTRY/AT_BASE/AT_RANDOM/
+/// AT_PLATFORM/AT_EXECFN, the stack pointer) must carry virtual addresses,
+/// and only the kernel-side memory may be written.
+pub fn elf_bias_selftest() -> bool {
+    use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+    const STK: u64 = 0x8000;
+    let (exe, ldso) = (REAL_SEQ_ELF, LDLINUX_ELF);
+    let (pe, pl) = (program_span_pages(exe), program_span_pages(ldso));
+    let half = (pe + pl) as u64 * 4096 + STK;
+    let total = 2 * half as usize;
+    let Ok(layout) = Layout::from_size_align(total, 4096) else { return false };
+    // SAFETY: plain heap allocation, identity mapped.
+    let buf = unsafe { alloc_zeroed(layout) } as u64;
+    if buf == 0 {
+        crate::serial_println!("[elf-bias] no heap for the scratch buffer: SKIPPED");
+        return false;
+    }
+    let zone = crate::paging::ARENA_ZONE_BASE;
+    // Kernel side: exe image, ld.so image, stack (top) in the first half.
+    let k = [buf, buf + pe as u64 * 4096, buf + half];
+    let cases = [
+        ("near", [k[0] + half, k[1] + half, k[2] + half], true),
+        ("high", [zone + 0x1234_5000, zone + 0x4000_0000, zone + 0x8000_0000], false),
+    ];
+    let mut why = None;
+    let mut rel = 0;
+    let mut done = 0;
+    for (name, v, near) in cases {
+        // SAFETY: the buffer allocated above.
+        unsafe { core::ptr::write_bytes(buf as *mut u8, 0, total) };
+        match elf_bias_case(exe, ldso, k, v, STK) {
+            Ok(n) => {
+                rel = n;
+                done += 1;
+            }
+            Err(w) => {
+                why = Some((name, w));
+                break;
+            }
+        }
+        // SAFETY: with `near` the virtual ranges are the second half of the buffer.
+        if near && unsafe { (0..half / 8).any(|i| ((buf + half + i * 8) as *const u64).read() != 0) } {
+            why = Some((name, "bytes were written at the virtual addresses"));
+            break;
+        }
+    }
+    // SAFETY: same layout as the allocation.
+    unsafe { dealloc(buf as *mut u8, layout) };
+    match why {
+        None => crate::serial_println!(
+            "[elf-bias] seq + ld.so loaded at virtual bases != the kernel-side addresses ({done} cases: next to each other, and at {zone:#x}+): entry, PHDR, base virtual, {rel} relocated words = virtual base + addend, argv/envp/auxv (AT_PHDR, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PLATFORM, AT_EXECFN) and rsp virtual, nothing written at the virtual addresses -> OK ✓"
+        ),
+        Some((name, w)) => crate::serial_println!("[elf-bias] case {name}: {w} -> FAILED ✗"),
+    }
+    why.is_none()
+}
+
+/// The relocated words of `elf` loaded for virtual base `v` at `k`: each
+/// R_X86_64_RELATIVE target must hold `v + addend`. Returns how many.
+fn elf_bias_relocs(elf: &[u8], k: u64, v: u64, span: u64) -> Result<u32, &'static str> {
+    let Some(rela) = dyn_value(k, elf, 7) else { return Ok(0) };
+    let relasz = dyn_value(k, elf, 8).unwrap_or(0);
+    let mut good = 0u32;
+    let mut off = 0u64;
+    while off + 24 <= relasz {
+        // SAFETY: the RELA table of the image just loaded at k.
+        let (ro, ri, ra) = unsafe {
+            let e = (k + rela + off) as *const u64;
+            (e.read(), e.add(1).read(), e.add(2).read())
+        };
+        if ri & 0xffff_ffff == 8 && ro < span {
+            // SAFETY: r_offset < span: inside the image.
+            if unsafe { ((k + ro) as *const u64).read() } != v.wrapping_add(ra) {
+                return Err("a relocated word does not carry the virtual base");
+            }
+            good += 1;
+        }
+        off += 24;
+    }
+    Ok(good)
+}
+
+/// One case of [`elf_bias_selftest`]: exe, ld.so and stack top at the
+/// kernel-side addresses `k` for the virtual addresses `v`.
+fn elf_bias_case(exe: &[u8], ldso: &[u8], k: [u64; 3], v: [u64; 3], stk: u64) -> Result<u32, &'static str> {
+    let mut good = 0;
+    let mut infos = [None, None];
+    for (i, elf) in [exe, ldso].into_iter().enumerate() {
+        let pages = program_span_pages(elf);
+        let span = pages as u64 * 4096;
+        let info = load_elf64(elf, v[i], k[i], pages).ok_or("load_elf64 refused the program")?;
+        if info.base != v[i] || info.entry != v[i] + rd_u64(elf, 24) {
+            return Err("LoadInfo base or entry is not the virtual address");
+        }
+        if info.phdr < v[i] || info.phdr >= v[i] + span {
+            return Err("LoadInfo phdr is not a virtual address");
+        }
+        let e_phoff = rd_u64(elf, 32) as usize;
+        let n = (info.phnum * info.phent) as usize;
+        let phk = info.phdr - v[i] + k[i];
+        // SAFETY: inside the kernel-side image (phdr < v + span, checked).
+        if (0..n).any(|j| unsafe { ((phk + j as u64) as *const u8).read() } != elf.get(e_phoff + j).copied().unwrap_or(0)) {
+            return Err("the program headers are not at the kernel side of the PHDR address");
+        }
+        good += elf_bias_relocs(elf, k[i], v[i], span)?;
+        infos[i] = Some(info);
+    }
+    if good == 0 {
+        return Err("no R_X86_64_RELATIVE relocation was checked");
+    }
+    let Some(info) = infos[0].take() else { return Err("no exe") };
+    let (sk, sv) = (k[2], v[2]);
+    let argv: [&[u8]; 2] = [b"/bin/seq", b"--elf-bias"];
+    let envp: [&[u8]; 1] = [b"ELF_BIAS=1"];
+    // SAFETY: sk is the top of `stk` bytes of the scratch buffer.
+    let sp = unsafe { setup_user_stack_glibc(sv, sk, &argv, &envp, &info, v[1], 0) };
+    let inv = |a: u64| a >= sv - stk && a < sv;
+    if !inv(sp) || sp & 0xF != 0 {
+        return Err("the stack pointer is not in the virtual stack");
+    }
+    // Reads below are only of addresses inside the virtual stack (inv), at
+    // their kernel-side place.
+    let rk = |a: u64| if inv(a) && a + 8 <= sv {
+        // SAFETY: inside the kernel-side stack.
+        unsafe { ((a - sv + sk) as *const u64).read() }
+    } else {
+        u64::MAX
+    };
+    let cstr_is = |a: u64, want: &[u8]| {
+        inv(a) && a + want.len() as u64 + 1 <= sv
+            // SAFETY: inside the kernel-side stack (checked just before).
+            && (0..=want.len()).all(|i| unsafe { ((a - sv + sk + i as u64) as *const u8).read() } == *want.get(i).unwrap_or(&0))
+    };
+    if rk(sp) != 2 || !cstr_is(rk(sp + 8), argv[0]) || !cstr_is(rk(sp + 16), argv[1]) || rk(sp + 24) != 0 {
+        return Err("argc/argv on the stack are wrong or not virtual");
+    }
+    if !cstr_is(rk(sp + 32), envp[0]) || rk(sp + 40) != 0 {
+        return Err("envp on the stack is wrong or not virtual");
+    }
+    let mut a = sp + 48;
+    let mut seen = 0u32;
+    loop {
+        if a + 16 > sv {
+            return Err("no AT_NULL in the auxv");
+        }
+        let (t, val) = (rk(a), rk(a + 8));
+        a += 16;
+        match t {
+            0 => break,
+            3 if val == info.phdr => seen |= 1,
+            7 if val == v[1] => seen |= 2,
+            9 if val == info.entry => seen |= 4,
+            25 if inv(val) => seen |= 8,
+            15 if inv(val) => seen |= 16,
+            31 if val == rk(sp + 8) => seen |= 32,
+            3 | 7 | 9 | 25 | 15 | 31 => return Err("AT_PHDR/AT_BASE/AT_ENTRY/AT_RANDOM/AT_PLATFORM/AT_EXECFN is not the virtual address"),
+            _ => {}
+        }
+    }
+    if seen != 63 {
+        return Err("an auxv entry is missing");
+    }
+    Ok(good)
 }

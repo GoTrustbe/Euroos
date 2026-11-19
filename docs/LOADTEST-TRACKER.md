@@ -1727,8 +1727,8 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (needs a server) was not run.
 - **Proof:**    `proof/small-2026-11e/README.md`
 
-### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ⬜ OPEN
-- **Status:**   OPEN · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
+### BUG-088 — the address-space slides of a Linux-ABI process are 4 to 10 bits wide ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s5`, `e9b488d`; design steps S0..S5) · **Severity:** MEDIUM (hardening: the layout can be guessed in a few hundred tries)
 - **Found:**    2026-11-12 · by reading `aslr_slides` while moving its source to the CSPRNG (BUG-080).
 - **Actual:**   `brk` 4 bits (64 KiB steps), the mmap base 5 bits (64 KiB steps), the stack top 8 bits (4 KiB
   steps), the demand pool 10 bits (2 MiB steps). The bits are now unpredictable (they came from RDRAND or
@@ -1750,6 +1750,68 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   (`build_address_space_remap`), so the main process is the case to convert; the places that read a process's memory
   through the identity map (comments "identity-mapped" in `ring3.rs`, about 30) have to go through its page tables.
   And spread the demand pool over several PML4 slots.
+- **2026-11-16 (`feature/11f-aslr-s23`, preparation, no address changes):** steps S2 and S3 of
+  `docs/design/ASLR.md`. S2: the arena functions and the page-fault dispatch handle an arena in any PML4 slot
+  of the new arena zone (8..12 TiB), self-test `[arena-hi]`. S3: `load_elf64` and `setup_user_stack_glibc`
+  take the virtual address and the kernel-side address separately, self-test `[elf-bias]`. Every caller still
+  passes one address twice; `[aslr]` gives the same bits as before. Proof `docs/proof/11f-aslr-s23/`.
+  Next: S0, S1, S4 (the launched process at a non-identity base).
+- **2026-11-16 (`feature/11f-aslr-s01`, S0 and S1):** boot option `aslr=on|off|legacy`, default `on`. With `on` the
+  demand region is 32..96 TiB (PML4 64..191); per launch and per exec one draw places the program from disk (Chromium),
+  the mmap floor (libraries, large mmaps) and the vDSO: `[aslr]` mmap 1 MiB 19 -> 30, libc 19 -> 30, vDSO 0 -> 27 bits.
+  PIE of embedded programs, ld.so (0) and stack (8) need the arena to leave the identity map (S4, S5): `[aslr]` stays
+  FAILED. New lines `[aslr-phys]`, `[aslr-ind]`, `[aslr-exec]` FAILED as "not yet", `[aslr-fork]`, `[demand-slots]`,
+  `[vdso-ro]` OK. Found on the way: BUG-350 to BUG-355. Proof `docs/proof/11f-aslr-s01/`.
+- **2026-11-17 (`feature/11f-aslr-s4`, S4):** boot option `aslr.arena=fixed|identity`, default `fixed`: the arena of a
+  launched glibc process (ld.so, brk, small mmaps, stack, embedded programs) lies at 8 TiB instead of at its physical
+  address; PML4[0] of the process holds no user page. `[aslr-phys]` FAILED -> OK. Audit of every kernel path that reaches
+  user memory from another address space or hands a user buffer to a device: one silent miss fixed (the reaper's
+  copy-on-write sweep used the virtual base as frames), no ring-0 fault in any workload, IOMMU legs clean. Bits unchanged
+  (the base is fixed: S5 draws it). BUG-360..369 not used. Proof `docs/proof/11f-aslr-s4/`.
+- **2026-11-17 (`feature/11f-bugs-35x`, from `c71cce8`):** BUG-351 (kernel writes into libc .data/.bss of a fork
+  child), BUG-352 (a fork child ended by a fault is reported to wait4) and BUG-355 (the vDSO clock stepped back up to
+  10 ms; exec'd children have a vDSO again) fixed, self-tests `[fork-cow-write]`, `[fork-fault-wait]`, `[vdso-mono]`.
+  Found: BUG-370 to BUG-372. Proof `docs/proof/11f-bugs-35x/`.
+- **2026-11-17 (`feature/11f-aslr-s5`, S5, `e9b488d`; bugs-35x merged in `417f6b9`):** the arena base is drawn per launch
+  and per exec (21 bits, 2 MiB steps in 8..12 TiB), the embedded executable and ld.so get a 9-bit page slide in it, an exec
+  in a fork child moves its arena to the base of its new draw (design 2.4). Boot option `aslr.arena=random|fixed|identity`,
+  `random` the default. `[aslr]` FAILED -> **OK in 20 of 20 boots**: PIE 0 -> 30, ld.so 0 -> 30, stack 8 -> 29, brk 8 -> 29,
+  small mmap 9 -> 30 bits (mmap 1 MiB/libc 30 and vDSO 27 as before); Chromium: ld.so, brk and stack 0/8/8 -> 30/29/29 at
+  the launch and in every exec'd child, none of 199 exec'd children kept an address of the browser. `[aslr-exec]` FAILED
+  -> OK, new `[arena-move]` OK. `aslr=off` (0 bits) and `aslr=legacy` (layout of before) unchanged. `[aslr-ind]` stays
+  FAILED: the regions inside the arena share one base (design step S6, optional hardening). Full regression with `on`
+  (core also with `off` and `legacy`): 0 markers worse, 0 ring-0 faults, watchdogs or panics; Chromium soaks 1 h: one of
+  three 123/123, two lost one openstreetmap step (map tiles not drawn yet, no child crash; base soak beside it 123/123),
+  see the proof. These are the exit criteria of S5 in the design, so the bug is closed; S6 is tracked in the design, not
+  here. Found: BUG-380. Proof `docs/proof/11f-aslr-s5/`.
+- **2026-11-17 (`feature/11f-aslr-s6`, S6, `831894f`, tests first `fcb4736`):** optional hardening after the fix. The arena
+  of a glibc process is cut into image (exe + ld.so), heap (brk + small mmaps) and stack segments, each at a random 2 MiB
+  step of its own 4 TiB window (8..12, 12..16, 16..20 TiB); boot option `aslr.split=on|off`, `on` the default. `[aslr-ind]`
+  FAILED -> **OK in 21 of 21 boots**: exe-stack 10 -> 32, stack-mmap 10 -> 31, exe-mmap 15 -> 31, exe-brk 14 -> 31,
+  brk-stack 10 -> 31, stack-ld.so 10 -> 32 bits; Chromium ld.so-brk, brk-stack, ld.so-stack 12/10/10 -> 31/31/32 at the
+  launch and in every exec'd child. Region bits as in S5. Audit of every place that turns an arena address into another
+  (proof `audit.md`): two silent places and one gap write found by reading and fixed. See the proof for the regression.
+  Proof `docs/proof/11f-aslr-s6/`.
+- **2026-11-17 (`feature/11f-bug380`, from `7b2eea6`):** BUG-380 and BUG-371 fixed: the vDSO and the kernel read the
+  TSC inside the seqlock (`lfence; rdtsc; lfence`, `vdso.so` rebuilt), `vdso_tick` makes the sequence odd before it reads
+  the anchor TSC, interrupts off. `[vdso-mono]` strict (any step back, stalled reads, AP readers, cross-CPU): FAILED in
+  12 of 12 base legs -> OK everywhere (TCG matrix 10/10, 30/30 loaded KVM boots). Found: BUG-400 (the tick count runs
+  slow against the host). Proof `docs/proof/11f-bug380/`.
+- **2026-11-17 (`feature/11f-aslr-s7`, S7):** S6 merged with the BUG-380 fix (`4599d0e`); documentation: design section 12 (as built),
+  `docs/SECURITY-ASLR.md`, boot options checked, release notes in `docs/UPDATES.md`. Merge check: KVM 1/2/4 GiB 0 markers worse against
+  `55c6e25` and `19f7586`, `[vdso-mono]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]`, `[arena-segs]` OK; TCG matrix 10/10 with
+  `[vdso-mono]` OK in every leg; gui-smoke 67/67; Chromium 5/5 starts and a sites round 14/14. Proof `docs/proof/11f-aslr-s7/`.
+- **2026-11-17 (`feature/11f-bug400`, from `19f7586`):** BUG-400 fixed: the clock is TSC time held to the HPET (else
+  the PM timer), the tick count and the vDSO page follow it. Cause: the one 10 ms PIT calibration (+747 to +4672 ppm),
+  not lost ticks. `[clock-drift]` FAILED 9 of 9 base boots -> OK everywhere; host drift over 30 min KVM at rest -855 ->
+  +0.9 ppm, busy siblings -1975 -> +0.1 ppm, TCG -2222 -> +0.0 ppm. Found: BUG-420 (wall clock set once to the second,
+  never adjusted), BUG-421 (markers-compare misses "-> OK"). Proof `docs/proof/11f-bug400/`.
+- **2026-11-19 (`feature/11f-integ2`):** BUG-400 (`feature/11f-bug400`) merged into ASLR S0-S7 + BUG-390 + BUG-410 (`b3eda20`,
+  only the tracker conflicted): KVM boots 1/2/4 GiB x 1/2/4 vCPU 0 markers worse against `79891a2` and `249cbf9`, `[clock-drift]`,
+  `[vdso-mono]`, `[swap-irq]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]`, `[arena-segs]` OK; TCG matrix 10/10;
+  drift over 15 min KVM +4.7 ppm at rest, +0.1 ppm busy; gui-smoke 67/67; Chromium 5/5 and 14/14. Proof `docs/proof/11f-integ2/`.
+  BUG-430 fixed (`GLIBC_THREADS` under `IfOffGuard`): `[swap-irq]` part 4 stopped 5 of 5 boots before, 30 of 30 OK after.
+  Found: BUG-440 (guard released before the lock), more candidates added to BUG-431. Proof `docs/proof/11f-bug430/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3038,3 +3100,299 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Found:**    2026-11-16 · 2 h session at 8 GiB: 4 of 11 rounds fail only this step (`content 273 colours, commonest 85%, still changing`); 0 of 3 rounds in the sites run. No kernel line near it,
   nothing else fails. 11e saw it once in 11 rounds.
 - **Next:**     decide whether the settle criterion should ignore the map tile animation, or treat it as a live-site step.
+
+### BUG-350 — a glibc fork child had no vDSO: its first clock call through it was a fault ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`) · **Severity:** HIGH for programs that fork without exec (Chromium children exec at once)
+- **Found:**    2026-11-16 · by the new `[aslr-fork]` self-test (ASLR S0): every fork child of the probe `gaslrx` died with
+  an instruction fetch fault at the vDSO address (`rip=0x1f00000045e`), and its parent then waited 60 s (BUG-352).
+- **Cause:**    `do_glibc_fork` builds the child's tables (`fill_remap_tables_lazy`, `clone_demand_region`) but never mapped
+  the vDSO; the child runs the parent's code, whose copied memory holds `AT_SYSINFO_EHDR`. An exec in a fork child gave
+  the new image `AT_SYSINFO_EHDR` 0 (no vDSO at all).
+- **Fix:**      the child maps the vDSO image and clock page at the parent's address (tables from the process pool, freed by
+  `free_fork_tables`); an exec frees that chain and the new image runs without a vDSO, as before (`0073feb` also
+  mapped one at the new draw; that was taken back for BUG-355 in `1d95d9b`).
+  `[aslr-fork]` FAILED (`deaba4d`) -> OK 8/8 (`0073feb`, `1d95d9b`) in KVM boots at 1/2/4/8 GiB. Proof `proof/11f-aslr-s01/`.
+
+### BUG-351 — getrandom in a fork child into a copy-on-write page returns EFAULT ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `d839c89`, `b4355d7`) · **Severity:** LOW (glibc falls back; a program that checks the error sees EFAULT)
+- **Found:**    2026-11-16 · `[cst]` lines of the `[aslr-fork]` children: `318(0x2b3be3735178,0x8,0x1) = -14` in 8 of 8 fork
+  children on `277b4dc` (glibc's malloc asks 8 bytes into its tcache, a demand page shared copy-on-write with the parent).
+- **Cause:**    not copy-on-write (the fault path breaks a share for a kernel write as for ring 3): `demand_file_backed`
+  refused every user range that overlapped ANY file mapping. The flat whole-library mapping of libc stays in
+  `DEMAND_FILE_MAPS` under its .data segment and its .bss overlay, so a system call writing there gave EFAULT
+  (getrandom, clock_gettime, gettimeofday, sysinfo, getrlimit, getcwd, socketpair, getdents64; pipe2 even returned 0
+  without storing the descriptors).
+- **Fix:**      page by page the newest mapping decides (the .bss overlay is anonymous); a page of a file mapping that the
+  process holds writable or shares copy-on-write takes the write, unless mprotect made it read-only since: read-only
+  mprotects of file ranges are recorded per address space (`RO_FILE_RANGES`), because Chromium's ProtectedMemory
+  CHECKs that EFAULT (`base::internal::CheckMemoryReadOnly`; the first rule without it, `d839c89`, made every renderer
+  abort at its start, 161-205 aborts per session: `proof/11f-bugs-35x/bug351-renderer-abort.txt`). pipe2 returns
+  EFAULT when it cannot store the descriptors.
+- **Test:**     `[fork-cow-write]`: a fork child of `gaslrx fork` takes 13 kinds of kernel writes into pages it shares
+  copy-on-write (demand and arena pages); each must succeed, give the child its own copy and leave the parent's bytes
+  unchanged (read through the parent's address space). `1 of 26 -> FAILED` (c71cce8 + test) -> `26 of 26 -> OK`
+  (`537de96`, KVM 1/2/4 GiB with 2 vCPU, 2 GiB with 4 vCPU). Left: BUG-370, BUG-372.
+
+### BUG-352 — a fork child killed by a ring-3 fault is not reported to the parent's wait4 ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `b2c78a0`) · **Severity:** MEDIUM (the parent hangs 60 s per dead child, then gets no status)
+- **Found:**    2026-11-16 · S0 boot of the self-test image: after each `[isolation] ... TERMINATED` of a fork child,
+  `[wait4] blocking wait for pid N gave up after 60 s`, then `[fork] child pid N ... outlived its run`.
+- **Cause:**    the #PF, #GP and #UD handlers mark the faulting task dead and call `fault_kill_group`, which handles the
+  launched process only. A fork child's other tasks ran on, no exit was recorded for wait4, and its memory came back
+  only at the end of the run.
+- **Fix:**      `fault_kill_group` ends the whole fork child (every task, futex waits purged) and queues it;
+  `fault_killed_poll` tears it down from another process's context (the parent's wait4 on every round, the desktop
+  loop, the next fault) with the status "killed by the signal" (SIGSEGV 11, SIGILL 4), as kill(2) and the OOM killer
+  already did. This kernel delivers no signals at all (rt_sigaction is accepted, nothing is delivered), so there is no
+  SIGCHLD, for a normal exit neither; the parent sees the death by wait4 and by end-of-file on the child's descriptors.
+- **Test:**     `[fork-fault-wait]`: the fork child of `gaslrx fork` gets the return address 0x10 at its first system
+  call and faults in ring 3. `last reap pid 0, run 60 s -> FAILED` (c71cce8 + test) -> `waitpid got status 0xb (killed
+  by SIGSEGV), run 0 s -> OK` (`537de96`, KVM 1/2/4 GiB with 2 vCPU, 2 GiB with 4 vCPU). Not covered: a task of a fork
+  child that overflows its kernel stack (`[g1]`) is still ended alone.
+
+### BUG-353 — the vDSO pages were mapped user-writable in every glibc process ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`) · **Severity:** HIGH (security: one process could rewrite code and time that
+  every glibc process runs)
+- **Found:**    2026-11-16 · reading `map_user_4k_falloc` for ASLR S1; test first: `[vdso-ro]` FAILED on `deaba4d` ("writable
+  for the process: image, clock page").
+- **Cause:**    the vDSO mapper set `WRITABLE | USER` on the leaf; the image frames and the clock frame are shared by all.
+- **Fix:**      user read-only (`map_user_4k_falloc`, and `map_user_4k_pool` for children). `[vdso-ro]` OK at 1/2/4/8 GiB.
+
+### BUG-355 — Chromium's network service aborts when an exec'd child has a vDSO ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bugs-35x`, `eed2a95`, `537de96`) · **Severity:** MEDIUM (a page load fails)
+- **Found:**    2026-11-16 · ASLR S1 Chromium runs with `0073feb` (vDSO mapped into exec'd children): the network service
+  aborted in 2 of 6 sessions, CHECK in `net::HttpNetworkTransaction::RecordStreamRequestResult`
+  (`proof/11f-aslr-s01/bug355/`). `1d95d9b` took the vDSO after exec away.
+- **Cause:**    the vDSO clock ran backwards. The clock page held `ticks * 10 ms` as its anchor and the vDSO adds up to
+  two ticks of rdtsc time to it; the tick count does not follow a late tick (a gap under two periods counts as one, a
+  vCPU that was not running, interrupts held off), so the next anchor was often below what a reader had just seen.
+  `[vdso-mono]` measured steps back of up to 10 ms (9998 us) in MONOTONIC, BOOTTIME and REALTIME, 51 to 154 per run,
+  and the system call (the bare tick count) up to 20 ms behind the vDSO. Chromium's browser process always read the
+  vDSO; its exec'd children used the system call, monotonic but coarse. With a vDSO the network service saw time go
+  backwards. Ruled out: a clock frame that differs between processes (one frame, mapped read-only in every child;
+  `[vdso-mono]` checks it in the fork child).
+- **Fix:**      `vdso_tick` publishes the larger of the tick time and the time readers see at that moment (the clock is
+  continuous), and while it is ahead of the tick count it runs slower (1/8, 3/4 from 5 ms) until the ticks caught up;
+  REALTIME is that clock plus the boot epoch. clock_gettime, gettimeofday and the realtime futex conversion read the
+  same page with the formula of `vdso.c`. The vDSO is mapped after an exec in a fork child again, at the new draw.
+- **Test:**     `[vdso-mono]` (16 late ticks of 1.5 periods with interrupts held off, then a 2 s run, the vDSO read as
+  `vdso.c` reads it, against the system call): `steps back 9998 us, system call outside its two vDSO reads -> FAILED`
+  (c71cce8 + test) -> `0 steps back over 1 us, system call between its two vDSO reads -> OK` (`537de96`, KVM 1/2/4 GiB
+  with 2 vCPU, 2 GiB with 4 vCPU). Chromium with a vDSO in every exec'd child (`b4355d7`): 16 site sessions (start + one round) 16/16 PASS, 20 starts 20/20, a 3-round session 36/36: 0 aborts, 0 in the network service (`proof/11f-bugs-35x/chrome.txt`).
+  Left: BUG-371.
+
+### BUG-370 — fstat on a pipe end answers EBADF ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · `[fork-cow-write]` (11f-bugs-35x): `fstat(read end of pipe2)` = -9. Linux gives
+  `S_IFIFO`. The self-test takes fstat of a directory instead.
+
+### BUG-371 — the vDSO reads the TSC with a plain rdtsc: steps back of a few hundred ns ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug380`, `f426198`, with BUG-380: the same read) · **Severity:** LOW
+- **Found:**    2026-11-17 · `[vdso-mono]` (11f-bugs-35x): after BUG-355, steps back under 1 us in 2 of 4 KVM boots
+  (2 x, max 401 ns; 1 x 275 ns). `userland/glibc/vdso.c` executes rdtsc without lfence, so the CPU may read the TSC
+  before the loads of the clock page are done. Needs a rebuilt `vdso.so` (lfence; rdtsc, as Linux's `rdtsc_ordered`).
+- **Cause:**    the rdtsc was unordered and outside the seqlock (BUG-380); the sub-us steps are the same mechanism with a
+  short window.
+- **Fix:**      `lfence; rdtsc; lfence` inside the seqlock in `vdso.c` (`vdso.so` rebuilt) and in the kernel reader.
+- **Test:**     `[vdso-mono]` now counts every step back (no 1 us threshold): see BUG-380.
+
+### BUG-372 — a kernel write into an untouched page of a writable file mapping gives EFAULT ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · reading `demand_file_backed` for BUG-351: mmap and mprotect protections are not kept per
+  page (only PROT_NONE and, since BUG-351, read-only mprotects of file ranges), so a page of a private writable file
+  mapping (a library's .data) that the process has not written yet still refuses a system call's write (Linux would
+  copy the page). Once the process wrote it, or after a fork, it is accepted.
+
+### BUG-380 — the vDSO clock steps back by microseconds under TCG and on a loaded host ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug380`, `f426198`) · **Severity:** LOW (a few to tens of microseconds; BUG-355 removed the 10 ms steps)
+- **Found:**    2026-11-17 · `[vdso-mono]` in the regression of ASLR S5 (`proof/11f-aslr-s5/`), the same in the base
+  `417f6b9` (S4 + the BUG-355 fix): FAILED in 9 of 10 TCG legs of the base and 6 of 10 of S5, with one vCPU as well
+  (steps back mono up to 24 us, boot up to 28 us, realtime up to 21 us, 1 or 2 times per 2 s run; "system call outside its
+  two vDSO reads" up to 38 us), and once in 32 KVM boots while the R630 ran every lane at once (legacy 1 GiB: mono 3 us,
+  boot 4 us). The same boot on a quiet host: OK 3 of 3 (and the base 3 of 3).
+- **Cause:**    `vdso.c` checked the sequence of the clock page and read the TSC after that, outside the seqlock. A
+  reader whose rdtsc came after the tick had replaced the anchor (the tick between the check and the rdtsc, or a vCPU the
+  host did not run there) ran the old rate past the new anchor; the new anchor often has a lower rate (the BUG-355 slew,
+  a new calibration under TCG), so the next read was lower. The kernel reader (clock_gettime, gettimeofday) did the same.
+  Proof: the old and the ordered formula read side by side in the same boots, with reads stalled between page loads and
+  rdtsc: every step of the old one (2 to 8 per boot, up to 1.7 ms) came right after a read that took its TSC after the
+  page changed; the ordered one 0 in all 6 legs (KVM and TCG, 1/2/4 vCPU). Ruled out: a published anchor below an
+  earlier one (anchor TSC never below the previous, the ordered read never went back), nested or AP writers (0), the
+  TCG calibration as such (only a source of the rate difference), a different syscall formula (the same flaw).
+- **Fix:**      `vdso.c` loads the page, `lfence; rdtsc; lfence`, then checks the sequence and reads again if it changed;
+  a TSC below the anchor adds nothing, a very old anchor gets the 2-tick cap. `vdso.so` rebuilt (no signature: embedded in
+  the signed kernel; command in `vdso.c`). `vdso_tick` makes the sequence odd before it reads the anchor TSC
+  (`mfence; lfence; rdtsc`), with interrupts off for the whole update; the kernel reader is the same as `vdso.c`.
+- **Test:**     `[vdso-mono]` strict: any step back (mono, boot, real), any system call outside its two vDSO reads, part C
+  (16 reads stalled across a late tick), every AP reading along (some reads stalled a tick period) and checked against
+  the largest value any CPU read before. `7b2eea6` + test: FAILED in 12 of 12 legs (KVM with busy siblings and TCG, 1/2/4
+  vCPU) -> `f426198`: OK in 6 of 6, TCG matrix 10 of 10, 30 of 30 KVM boots with busy siblings, 9 of 9 quiet KVM boots
+  (`proof/11f-bug380/`). Drift against the host unchanged by the fix (BUG-400).
+
+### BUG-400 — the tick count, and with it the vDSO clock, runs slow against the host ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug400`, `f487cc7`) · **Severity:** LOW on KVM (about 1 s per 15 min), MEDIUM under TCG (about 1 %)
+- **Found:**    2026-11-17 · drift measurement of BUG-380 (`proof/11f-bug380/drift.txt`, 12 min, `uptime` over the serial
+  console): KVM 2 vCPU -1145 ppm (`7b2eea6` clock) and -809 ppm (fix), TCG 1 vCPU -9705 and -8671 ppm. The vDSO clock
+  follows `ticks x 10 ms` to within 5 ppm in every run (by design since BUG-355), so the tick count itself loses time.
+- **Cause:**    the LAPIC period and the TSC rate came from one 10 ms window of PIT channel 2 at boot and nothing
+  corrected them: the period came out +747 to +2046 ppm long under KVM and +1618 to +4672 ppm under TCG (measured
+  against the HPET in the guest, 9 base boots, and against the host over 30 min). At rest no timer interrupt was lost:
+  timer interrupts, tick count and clock ran at exactly the calibration error (30 min KVM at rest: interrupts -855 ppm,
+  clock -855 ppm; busy siblings -1975/-1975; TCG -2222/-2222; HPET against the host 0.0 to 0.4 ppm). Ruled out: lost or
+  late ticks (with interrupts held off 13-35 ms the late-tick rule made up 84-86 of 83 coalesced periods), the HPET or
+  host clock, the vDSO formula, forced tick advances (0 in every run).
+- **Fix:**      `timebase.rs`: the clock is TSC time, its rate held to the HPET (else the ACPI PM timer) from a sample
+  about once a second (rate over the whole time since the reference was taken, offset removed over 4 s, at most 500 ppm,
+  re-anchored at each sample: continuous). Each timer interrupt adds the 10 ms periods the time base passed (0, 1 or
+  more); forced advances as before. `vdso_tick` publishes the time base (plus forced ticks) with its rate; the BUG-355/380
+  rules are unchanged; a lead under 1 ms is taken out over one period.
+- **Test:**     `[clock-drift]` (clock and tick count against the HPET, 10 s at rest and 6 s with late ticks, at most
+  50 ppm): base FAILED 9 of 9 (KVM 1/2/4 vCPU, busy siblings, TCG 1/2 vCPU; -726 to -5022 ppm) -> OK 9 of 9 (clock 0 ppm),
+  30 of 30 loaded KVM boots, 10 of 10 TCG legs. Host, 30 min, A/B side by side: KVM at rest -855 -> **+0.9 ppm**, busy
+  siblings -1975 -> **+0.1 ppm**, TCG -2222 -> **+0.0 ppm** (`proof/11f-bug400/drift.txt`). Regression: 1 h loadtest soak and keylat/[fair] equal to `19f7586`, gui-smoke 67/67, Chromium 20 starts and 36/36, VP9+Opus (`proof/11f-bug400/README.md`).
+
+### BUG-420 — the wall clock is set once from the RTC, to the second, and never again ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · reading the clock path for BUG-400: `vdso_prepare` reads the CMOS RTC once
+  (`rtc::epoch()`, whole seconds, the fraction dropped: REALTIME starts 0 to 1 s behind) and REALTIME is that plus the
+  monotonic clock ever after. Nothing adjusts it later: no NTP/NTS client (`nts.rs` is a self-test of the protocol
+  with a demo timestamp), no `clock_settime`/`settimeofday`/`adjtimex`, no re-read of the RTC. With BUG-400 fixed the
+  rate is right; the offset is not corrected and a host clock change is never followed.
+
+### BUG-421 — `markers-compare.py` does not count an ASCII "-> OK" as a verdict ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (test tooling)
+- **Found:**    2026-11-17 · `markers-compare.py` of the R630 harness scripts (not in this repository) counts OK only for a check mark or "→ OK", although its
+  docstring says "-> OK". Markers that end in "-> OK" (`[clock-drift]`, `[vdso-mono]` diag lines and others) are not
+  verdicts to it, so a marker that goes from FAILED to OK shows as gone, and a new OK marker is not listed. FAILED is
+  counted as before.
+
+### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug390`, tests `378f83d`, fix `9692f11`) · **Severity:** HIGH when it happens (the machine
+  stops answering; no panic, no watchdog line), seen once in a soak
+- **Found:**    2026-11-17 · the regression of ASLR S6 (`proof/11f-aslr-s6/`), in the chrome-mem-soak of the **base** image
+  `7b2eea6` (S5, browser image, KVM 2 vCPU, 8 GiB), round 1, at the YouTube consent step: the desktop loop did not answer
+  the serial console within 40 s. The NMI probes show CPU 0 in the browser main task (task 1, last system call 47
+  recvmsg) with IF=0 at `ring3::child_mem_swap+0x1ab`, called from `ensure_globals_for_current` <- `yield_reacquire` <-
+  `PollKeys::sleep` <- `linux_dispatch_inner_raw`; the swapped globals were owned by task 77 (a fork child).
+- **Cause (proven):** `child_mem_swap+0x1ab` of that build (rebuilt bit for bit, same link map) is the `pause` spin on
+  **`DEMAND_FILE_MAPS`** (`proof/11f-bug390/analysis.txt`). `child_mem_swap` runs with interrupts off and ring-0 code runs
+  on the BSP only, so the holder was a task that the timer had preempted while it held the lock with interrupts on, and
+  that could never run again. Such a holder exists: the desktop loop's heartbeat census (CDP heartbeat 12 and 20, "silent
+  after navigate", "cdp channel dead"; also `run_glibc_disk`'s stall profile) calls `dump_threads_now` ->
+  `dump_rip_profile` -> `demand_addr_origin`, which takes `DEMAND_FILE_MAPS` (and `DISK_FILES`, `FILES` under it) with
+  interrupts on, up to 16 times a dump. The `[prof]` line of the same heartbeat guards the same call
+  (`IfOffGuard`, runs 21 and 53); `dump_rip_profile` did not. Any task with interrupts off that wants the lock next (a
+  demand fault, mmap, mprotect, or a globals swap like the one of the browser main thread back from its poll) spins for
+  ever. Rare because the window is short (3 to 5 dumps a soak, microseconds each) and a tick has to land inside it.
+- **Reproduced:** self-test `[swap-irq]` (`378f83d`): a kernel task with interrupts on calls `demand_addr_origin`
+  without pause while `gslots` (40 fork children with 6 threads each, the parent's threads beside them) runs. Before the
+  fix **5 of 5 boots stop** (1, 2 and 4 vCPU): IF=0 spin on `DEMAND_FILE_MAPS` in `child_mem_swap+0x243` (4 vCPU, task 0
+  swapping the globals of a fork child back) or `ro_file_note+0x45` (mprotect), the holder the kernel task, Ready with
+  IF=1 inside `demand_addr_origin` (`proof/11f-bug390/tests-first.txt`).
+- **Fix:**      `irqlock::IrqLock`: interrupts off before the lock is taken, the previous state back after it is
+  released, whoever takes it. `CHILD_MEM`, the five lists `child_mem_swap` swaps (`DEMAND_FILE_MAPS`,
+  `PROT_NONE_RANGES`, `SHARED_ALIASES`, `SHARED_MAPS`, `DEMAND_FREE`), `GLIBC_FORK_CHILDREN` and `CHILD_THREADS` are
+  IrqLocks, so no caller (desktop loop, launcher, kernel task) can hold them preemptibly any more. Watch: a wait of 2 s
+  on an IrqLock prints `[irqlock] <lock> not free after 2 s` once per lock, with the waiting task and place and the
+  last holder and place.
+- **Verified:** `[swap-irq]` OK in **90 of 90** stress boots (30 each with 1, 2, 4 vCPU; 238 196 globals swaps,
+  508 million lookups beside them), KVM boots 1/2/4/8 GiB 0 markers worse than `55c6e25`, gui-smoke 67/67, Chromium 20/20
+  starts, sites 3 rounds 36/36, six chrome-mem-soaks of 1 h without a hang, ring-0 fault or watchdog
+  (`proof/11f-bug390/`). Not reproduced in a Chromium run itself: the soak hang was seen once in all soaks so far.
+- **Release 2026.11.17 (`b30adb6`):** the same code (`demand_addr_origin` takes `DEMAND_FILE_MAPS`, a plain spin lock,
+  unguarded from `dump_rip_profile`, which the heartbeat census calls): the same risk.
+
+### BUG-410 — FILES taken with interrupts on in the heap watch of run_glibc_disk ✅ FIXED
+- **Status:**   FIXED (`feature/11f-integ2`, tests `781537d`, fix `a780d84`) · **Severity:** LOW (only `run_glibc_disk`: the
+  chrome-boot image, the crashpad and LLM runners; not the desktop browser)
+- **Found:**    2026-11-17 · reading for BUG-390: the launcher loop of `run_glibc_disk` (task 0, interrupts on: it ends
+  in `hlt`) sums `FILES` when the kernel heap grows by a 64 MiB step, without `IfOffGuard`. The demand fault handler and
+  system calls take `FILES` with interrupts off, so a tick inside that sum can stop the machine the way BUG-390 did.
+  `FILES` is an `eurolock` `Mode::Plain` lock (statistics only).
+- **Who takes FILES:** about 100 call sites in `ring3.rs` and `fsback.rs`. The system-call dispatcher
+  (`linux_dispatch_inner_raw` and the `vfs_*` functions below it) and the demand fault handler
+  (`handle_demand_fault_inner`) take it with interrupts off (FMASK; an interrupt gate), as does everything that wraps it in
+  `IfOffGuard` or `without_interrupts` (`cdp_pump_inner`, `ram_files_census_inner`, `mem_totals`, `paged_named_release`,
+  `ram_file_sweep`, `take_dirty`, `fsback::fetch`, `pipehold_ctl`, `fsback::write_back`). So the hang is possible for
+  every taker with interrupts on: ring-0 code runs on the BSP only, and a holder the timer parked can never run again
+  once a task with interrupts off spins on the lock. The taker with interrupts on that runs while programs run was the
+  heap watch of `run_glibc_disk`.
+- **Cause (proven by the test):** `run_glibc_disk` summed `FILES` with interrupts on (`FILES.lock().iter()...sum()`).
+- **Reproduced:** `[swap-irq]` part 3 (`781537d`): a kernel task with interrupts on calls the heap-watch sum
+  (`files_heap_bytes`) without pause while the test task takes `FILES` with interrupts off (`files_count`, as a system call
+  does) for 3 s. Before the fix **5 of 5 boots stop** (1, 2 and 4 vCPU): task 0 spins with IF=0 in `FILES.lock`
+  (`proof/11f-bug410/tests-first.txt`).
+- **Fix:**      `files_heap_bytes` (the sum, one function) turns interrupts off before it takes `FILES`
+  (`IfOffGuard`, as the other `FILES` takers of the launcher and the census do); the lock is released before the
+  interrupt state comes back. `FILES` itself is not made an `IrqLock`: its takers copy file contents and call functions
+  that take other locks while they hold it, and not every one of them is reviewed for that.
+- **Verified:** see `proof/11f-bug410/README.md`.
+- **Same class, found by reading:** BUG-430 (fixed after this, `proof/11f-bug430/`), BUG-431 (open).
+
+### BUG-430 — GLIBC_THREADS taken with interrupts on in the launcher, the CDP frame and run_glibc ✅ FIXED
+- **Status:**   FIXED (`feature/11f-integ2`, tests `acd65ba`, fix `9000469`) · **Severity:** LOW to MEDIUM (`cdp_begin_frame` runs
+  in the desktop browser path)
+- **Found:**    2026-11-19 · looking for the class of BUG-410: `GLIBC_THREADS` (a plain `spin::Mutex`) is taken with
+  interrupts off by `linux_dispatch_inner_raw` (clone, exit, exit_group), `proc_tasks`, `set_process_profile`,
+  `fault_kill_group` and `retire_task` (from `kill`), and with interrupts on by `cdp_begin_frame` (it prints inside the
+  loop), `run_glibc_disk` (stall snapshot, end of the run), `kill_glibc_group`, `spawn_glibc_persistent`, `run_glibc`
+  (all in `ring3.rs`), and by `glibc_disk_launch`, `kill_persistent_glibc` and `retire_task` (from the end-of-run reap of
+  fork children) which the first list did not name. `futex_purge_task` is a false positive (it takes `FUTEX_QUEUE`).
+  Same hang as BUG-390 when a tick lands in a critical section of an unguarded taker.
+- **Checked per site:** every taker with interrupts on runs on task 0 (the launcher loop, the desktop loop: `cdp_pump`) or in
+  the end-of-run reap; BUG-040 documents that the launch code of `run_glibc` and `spawn_glibc_persistent` runs with
+  interrupts on. The takers with interrupts off are the system-call dispatcher (FMASK) and the fault handlers (interrupt
+  gates). `dump_threads_now` does not take the lock at all (the first list was wrong there); the one guarded site of
+  `cdp_pump_inner` had its guard and its lock released in the wrong order (BUG-440).
+- **Cause (proven by the test):** the launchers and `cdp_begin_frame` took `GLIBC_THREADS` without `IfOffGuard`, some of
+  them held it across other work (`reclaim_task`, `free_thread_kstack`, `serial_println!`).
+- **Reproduced:** `[swap-irq]` part 4 (`acd65ba`): a kernel task with interrupts on copies, counts and edits the list the
+  way the launchers do (32 entries) without pause while the test task takes it with interrupts off (as clone and exit do)
+  for 3 s. Before the fix **5 of 5 boots stop** (1, 2 and 4 vCPU): the NMI probe shows CPU 0, IF=0, the test task
+  spinning on the lock byte of `GLIBC_THREADS` (`proof/11f-bug430/tests-first.txt`).
+- **Fix:**      `glibc_threads_snapshot`, `_len`, `_clear`, `_forget` (one place): `IfOffGuard` before the lock, the lock
+  released before the interrupt state comes back, the critical section a copy; every taker with interrupts on goes
+  through them and works on the copy, so none of them holds the lock across other work. The takers with interrupts off
+  (dispatcher, `proc_tasks`, `set_process_profile`, `fault_kill_group`) are unchanged. `GLIBC_THREADS` is not an
+  `IrqLock`: the dispatcher sites hold it while they print and free kernel stacks, and I did not want to change those.
+- **Verified:** KVM boots 1/2/4 GiB x 1/2/4 vCPU 0 worse than the merge, `[swap-irq]` stress 30 of 30, gui-smoke 67/67, Chromium 10/10 starts
+  and 14/14 sites, chrome-mem-soak 1 h PASS (123/123 steps, 0 ring-0 faults, 0 watchdog, 0 freezes, 0 `[irqlock]`); see
+  `proof/11f-bug430/README.md`. `cdp_begin_frame` itself did not run in the browser runs (covered by the test only).
+- **Same class, found by reading, NOT changed:** BUG-431 (more locks), BUG-440 (guard released before the lock).
+
+### BUG-431 — OUTPUT, THREAD_NAMES, GLIBC_CTIDS, CURRENT_APP, CHILD_EXE_PATH, DISK_FILES also taken both ways ⬜ OPEN
+- **Status:**   OPEN (found by a scan, not checked site by site, not reproduced, not changed) · **Severity:** LOW
+- **Found:**    2026-11-19 · same scan as BUG-430. Locks that system calls take with interrupts off and that launcher and
+  diagnostics functions of `ring3.rs` take with no `IfOffGuard` in the function: `OUTPUT` (`take_output`,
+  `run_glibc_disk`, `run_glibc`, `run_args`, `run_dynamic`, `run_interp`, `glibc_disk_launch`, `spawn_glibc_persistent`;
+  system calls: `output_push`), `THREAD_NAMES` (`thread_name`, `thread_name_print`, `thread_name_try`, `retire_task`, the
+  launchers), `GLIBC_CTIDS`, `CURRENT_APP`, `CHILD_EXE_PATH`, `DISK_FILES` (`europack_*`, `glibc_disk_launch`,
+  `do_child_execve`). `FILES` itself has a few more takers that depend on the caller: `vfs_file_bytes` (called from
+  `main.rs`), `files_count` (`churn.rs`, `ltstat.rs`), `register_file` and `register_file_static` (boot and launch code),
+  `fdsem_selftest`. A function listed here is a candidate: whether it runs with interrupts on while a program runs has
+  to be checked per site.
+- **Added 2026-11-19 (BUG-430 work, by reading, not changed):** in the desktop browser path: `cdp_begin_frame` calls
+  `thread_name` (`THREAD_NAMES`, no guard; the system call that sets a thread name takes it with interrupts off) with
+  interrupts on, inside the same loop that BUG-430 fixed; `retire_task` takes `GLIBC_CTIDS` and `THREAD_NAMES` without a
+  guard and is reached with interrupts on from `kill_persistent_glibc` -> `reap_orphan_fork_children` ->
+  `fork_child_teardown` (the browser is closed) and from the end-of-run reap; `fork_child_teardown` takes
+  `GLIBC_CHILD_EXITS` the same way. `dump_threads_now` calls `thread_name(main)` unguarded.
+
+### BUG-440 — the IfOffGuard is released before the lock at four heartbeat and diagnostic sites ⬜ OPEN
+- **Status:**   OPEN (found by reading, the drop order checked with a small program, not reproduced, not changed) ·
+  **Severity:** LOW (a window of a few instructions)
+- **Found:**    2026-11-19 · fixing BUG-430: the pattern `{ let _g = IfOffGuard::new(); X.lock().clone() }` (edition 2021)
+  drops `_g` (interrupts back on) before the temporary of the tail expression, the lock guard, so the lock is released with
+  interrupts on. A tick in that window parks the holder and the next taker with interrupts off spins (BUG-390 class).
+  Sites: `ring3.rs` `cdp_pump_inner` (the heartbeat: `FILES` at the `files_mib` sum, `THREAD_NAMES` before the `[rmain]` line,
+  `SOCK_PAIRS` in the fd-peer lookup; the desktop browser path) and `dump_threads_now` (`THREAD_NAMES`). The BUG-430 site
+  of `cdp_pump_inner` had the same defect and is fixed (it goes through `glibc_threads_snapshot`). Fix: bind the value in a
+  statement of its own (`let v = X.lock().clone(); v`), as `files_heap_bytes` does.
+
+### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
+- **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)
+- **Found:**    2026-11-16 · reading `do_child_execve` for ASLR S1: it stores its new mmap floor in the global `DEMAND_FLOOR`,
+  which `ChildMem` did not swap, so the parent's swap eviction range `[DEMAND_FLOOR, DEMAND_NEXT)` changed with every
+  child exec. With per-process random floors that range could become empty.
+- **Fix:**      `DEMAND_FLOOR` is per process (in `ChildMem`, with the exe window and the vDSO base).
+

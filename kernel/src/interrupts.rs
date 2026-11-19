@@ -731,9 +731,10 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // Copy-on-write (fork): a write to an arena page shared with another
     // process. The writer gets its copy, or, when the writer is the launched
     // process, the children that share the page get theirs. From ring 3 and
-    // from a system call that copies into its caller alike.
+    // from a system call that copies into its caller alike. An arena lies
+    // under PML4[0] or in the arena zone (ASLR S2: `paging::in_arena_zone`).
     if code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && code.contains(PageFaultErrorCode::CAUSED_BY_WRITE)
-        && addr >> 39 == 0
+        && crate::paging::in_arena_zone(addr)
     {
         let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
@@ -749,7 +750,7 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
     // gets a zeroed frame from the process pool, for ring 3 and for a system
     // call that copies into its caller alike. A fault from ring 3 leaves the
     // last 1 MiB of the pool to the kernel.
-    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && addr >> 39 == 0 {
+    if !code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) && crate::paging::in_arena_zone(addr) {
         let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
         let reserve = if code.contains(PageFaultErrorCode::USER_MODE) { 256 } else { 0 };
         match crate::paging::lazy_arena_fault(cr3, addr, reserve) {
@@ -836,15 +837,17 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, code: P
             let rsp = frame.stack_pointer.as_u64();
             serial_println!("[pf-diag] task={idx} rip={rip:#x} rsp={rsp:#x}");
             // Scan the stack upward for return addresses into user code (chrome's libs
-            // live in the demand region 0x100_0000_0000.. ; the arena is lower). These
+            // live in the demand region (ring3::in_demand_zone); the arena is lower). These
             // name the call chain that reached the null/wild jump — map each against the
             // [mmaplib] ranges to identify the crashing library.
             let mut printed = 0;
             for i in 0..96u64 {
                 let a = rsp.wrapping_add(i * 8);
                 if let Some(v) = read_user_qword(a) {
-                    // Plausible code pointer: in the demand region (libs/code) or arena.
-                    if (v >= 0x100_0000_0000 && v < 0x140_0000_0000) || (v >= 0x0100_0000 && v < 0x1000_0000) {
+                    // Plausible code pointer: in the demand region (libs/code) or arena
+                    // (identity, or the arena zone: ASLR S4).
+                    if crate::ring3::in_demand_zone(v) || (v >= 0x0100_0000 && v < 0x1000_0000)
+                        || (crate::paging::ARENA_ZONE_BASE..crate::paging::ARENA_ZONE_END).contains(&v) {
                         serial_println!("[pf-diag]   ret[{:#05x}] -> {v:#x}", i * 8);
                         printed += 1;
                         if printed >= 12 { break; }

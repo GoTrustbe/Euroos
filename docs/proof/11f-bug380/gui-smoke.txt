@@ -1,0 +1,4 @@
+# gui-smoke.py --image b-pub.img (public image of f426198, no boot options) --kvm --smp 4 --mem 4G --pin 16,17,36,37
+[gui-smoke] ok   Terminal: after a foreground program, commands that reach the process table and a userspace driver (BUG-063): hello: EuroOS userspace program (C, ring 3) — via syscall; ps: 3 line(s); no e1000e NIC in this run (--net e1000e adds the userspace driver)
+[gui-smoke] ok   desktop back to rest
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/b380-runs/ui/gs

@@ -1,0 +1,17 @@
+# q35 metal matrix, KVM, restrict=on, legs one after the other, s6-st (831894f). tpm/tpmcrb not run: no swtpm on the R630.
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbaudio PASS
+  usbnet   PASS
+  hwprobe  PASS
+  scan     PASS
+  nvmeroot PASS
+  ahciroot PASS
+  power    PASS
+  printer  PASS
+[matrix] ALL LEGS PASS ✓

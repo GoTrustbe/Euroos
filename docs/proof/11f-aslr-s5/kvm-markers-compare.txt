@@ -1,0 +1,135 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -nic none. S5 = e9b488d, base = 417f6b9 (merge, S4 layout), same boot option. on = default (aslr=on, aslr.arena=random), off = aslr=off, legacy = aslr=legacy. Host loaded (all lanes of stage 1 at once).
+s5-st k-1G end=marker after 223s failed-lines=3 crash-lines=0
+s5-st k-2G end=marker after 226s failed-lines=1 crash-lines=0
+s5-st k-4G end=marker after 219s failed-lines=1 crash-lines=0
+s5-st k-8G end=marker after 223s failed-lines=1 crash-lines=0
+m-st k-1G end=marker after 204s failed-lines=5 crash-lines=0
+m-st k-2G end=marker after 227s failed-lines=3 crash-lines=0
+m-st k-4G end=marker after 253s failed-lines=3 crash-lines=0
+m-st k-8G end=marker after 297s failed-lines=3 crash-lines=0
+s5-st-off k-1G end=marker after 204s failed-lines=3 crash-lines=0
+s5-st-off k-2G end=marker after 216s failed-lines=1 crash-lines=0
+s5-st-off k-4G end=marker after 236s failed-lines=1 crash-lines=0
+s5-st-off k-8G end=marker after 236s failed-lines=1 crash-lines=0
+m-st-off k-1G end=marker after 201s failed-lines=3 crash-lines=0
+m-st-off k-2G end=marker after 219s failed-lines=1 crash-lines=0
+m-st-off k-4G end=marker after 222s failed-lines=1 crash-lines=0
+m-st-off k-8G end=marker after 224s failed-lines=1 crash-lines=0
+s5-st-leg k-1G end=marker after 235s failed-lines=7 crash-lines=0
+s5-st-leg k-2G end=marker after 236s failed-lines=4 crash-lines=0
+s5-st-leg k-4G end=marker after 244s failed-lines=4 crash-lines=0
+s5-st-leg k-8G end=marker after 254s failed-lines=4 crash-lines=0
+m-st-leg k-1G end=marker after 205s failed-lines=6 crash-lines=0
+m-st-leg k-2G end=marker after 264s failed-lines=4 crash-lines=0
+m-st-leg k-4G end=marker after 221s failed-lines=4 crash-lines=0
+m-st-leg k-8G end=marker after 221s failed-lines=4 crash-lines=0
+## markers-compare base(m-st) -> S5(s5-st), aslr=on, 1G
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st) -> S5(s5-st), aslr=on, 2G
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st) -> S5(s5-st), aslr=on, 4G
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st) -> S5(s5-st), aslr=on, 8G
+-- WORSE: 0
+-- CHANGED (not worse): 2
+   aslr: base FAILx1 | new OKx1
+   aslr-exec: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-off) -> S5(s5-st-off), aslr=off, 1G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-off) -> S5(s5-st-off), aslr=off, 2G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-off) -> S5(s5-st-off), aslr=off, 4G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-off) -> S5(s5-st-off), aslr=off, 8G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-leg) -> S5(s5-st-leg), aslr=legacy, 1G
+-- WORSE: 1
+   vdso-mono: base OKx1 | new FAILx1
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-leg) -> S5(s5-st-leg), aslr=legacy, 2G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-leg) -> S5(s5-st-leg), aslr=legacy, 4G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## markers-compare base(m-st-leg) -> S5(s5-st-leg), aslr=legacy, 8G
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+
+# Reruns of legacy 1 GiB on a quieter host ([vdso-mono], see README)
+## mleg-1G-1: mleg-1G-1 end=marker after 193s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (10527398 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6256 times (max 11249 us), clock ahead of the tick count now 27 u
+## s5leg-1G-1: s5leg-1G-1 end=marker after 195s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (11085827 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6309 times (max 10691 us), clock ahead of the tick count now 2 us
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## mleg-1G-2: mleg-1G-2 end=marker after 191s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (10318081 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 1 times, max 179 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6191 times (max 10673 us), clock ahead of the tick count now 15
+## s5leg-1G-2: s5leg-1G-2 end=marker after 189s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (11740066 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6179 times (max 11431 us), clock ahead of the tick count now 2 us
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1
+## mleg-1G-3: mleg-1G-3 end=marker after 192s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (10263985 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 1); tick anchor behind the readers 6240 times (max 11681 us), clock ahead of the tick count now 18 u
+## s5leg-1G-3: s5leg-1G-3 end=marker after 190s failed-lines=6 crash-lines=0
+[vdso-mono] 16 late ticks of 1.5 periods and a 2 s run (11477202 rounds): steps back mono 0 us, boot 0 us, real 0 us (0 times; under 1 us 0 times, max 0 ns); system call outside its two vDSO reads 0 times (max 0 us; by under 1 us 0); tick anchor behind the readers 6190 times (max 11138 us), clock ahead of the tick count now 2 us
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   arena-move: OKx1

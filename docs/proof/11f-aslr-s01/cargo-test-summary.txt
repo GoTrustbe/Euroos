@@ -1,0 +1,9 @@
+# cargo test (default-members), worktree at 277b4dc + docs, .16, -j 6
+188 suites, 1387 passed, 0 failed (3a51bc6: 188 suites, 1381 passed)
+# euromm::layout host tests:
+test layout::tests::off_is_fixed ... ok
+test layout::tests::zones_and_slots ... ok
+test layout::tests::legacy_is_the_layout_of_before ... ok
+test layout::tests::parse_values ... ok
+test layout::tests::on_entropy_per_region ... ok
+test layout::tests::on_every_region_in_its_zone ... ok

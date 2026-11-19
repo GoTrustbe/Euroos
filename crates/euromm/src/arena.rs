@@ -56,6 +56,40 @@ pub fn glibc_layout(base: u64, span: u64, sl: Slides) -> Option<Layout> {
     ok.then_some(l)
 }
 
+/// ASLR S6: the layout of an arena whose segments are `segs`. One piece: as
+/// [`glibc_layout`] at its base. Three segments (image, heap, stack,
+/// `layout::split_segs`): every region is the arena offset of `glibc_layout`
+/// seen through its segment, the mmap window ends where the heap segment ends,
+/// and each region must lie in its own segment (ld.so with its largest slide in
+/// the image, the brk heap and at least 8 MiB of mmap window in the heap, the
+/// stack top in the stack segment), or None.
+pub fn glibc_layout_segs(segs: &crate::layout::Segs, sl: Slides) -> Option<Layout> {
+    let span = segs.span();
+    if !segs.split() {
+        return glibc_layout(segs.base(), span, sl);
+    }
+    let o = glibc_layout(0, span, sl)?;
+    let x = segs.list();
+    let (img, heap, stk) = (x[0], x[1], x[2]);
+    let ok = o.ldso + crate::layout::SLIDE_WINDOW + MIB <= img.len
+        && o.brk_start >= heap.off
+        && o.mmap_start + 8 * MIB <= heap.off + heap.len
+        && o.stack_top > stk.off
+        && o.stack_top <= stk.off + stk.len;
+    if !ok {
+        return None;
+    }
+    Some(Layout {
+        exe: img.virt,
+        ldso: segs.virt(o.ldso),
+        brk_start: segs.virt(o.brk_start),
+        brk_end: segs.virt(o.brk_end),
+        mmap_start: segs.virt(o.mmap_start),
+        heap_end: heap.end(),
+        stack_top: segs.virt(o.stack_top),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +128,41 @@ mod tests {
     fn large_arenas_keep_their_layout() {
         let l = glibc_layout(0, 256 * MIB, SLIDES[0]).unwrap();
         assert_eq!((l.brk_start, l.mmap_start, l.stack_top), (32 * MIB, 64 * MIB, 255 * MIB));
+    }
+
+    /// ASLR S6: with three segments every region lies in its own segment, the
+    /// brk heap and the mmap window are those of one piece (same offsets), the
+    /// mmap window ends with the heap segment; one piece is the layout of before.
+    #[test]
+    fn segments_hold_their_regions() {
+        use crate::layout::{seg_cuts, Seg, Segs};
+        for span_mib in [64u64, 96, 128, 192, 256, 384, 512, 1024] {
+            let span = span_mib * MIB;
+            let (h, s) = seg_cuts(span);
+            let segs = Segs::three([
+                Seg { virt: 9 << 40, off: 0, len: h },
+                Seg { virt: 13 << 40, off: h, len: s - h },
+                Seg { virt: 17 << 40, off: s, len: span - s },
+            ])
+            .unwrap();
+            for sl in SLIDES {
+                let one = glibc_layout(0, span, sl).unwrap();
+                let l = glibc_layout_segs(&segs, sl).unwrap_or_else(|| panic!("{span_mib} MiB {sl:?}: no layout"));
+                let x = segs.list();
+                assert_eq!(l.exe, x[0].virt);
+                assert!(x[0].has(l.ldso) && l.ldso - x[0].virt == one.ldso);
+                assert!(x[1].has(l.brk_start) && x[1].has(l.mmap_start));
+                assert_eq!((l.brk_start - x[1].virt + h, l.mmap_start - x[1].virt + h), (one.brk_start, one.mmap_start));
+                assert_eq!(l.brk_end, l.mmap_start);
+                assert_eq!(l.heap_end, x[1].end());
+                assert!(l.heap_end >= l.mmap_start + 8 * MIB);
+                assert!(l.stack_top > x[2].virt && l.stack_top <= x[2].end());
+                assert_eq!(l.stack_top - x[2].virt + s, one.stack_top);
+                // The stack keeps at least 2 MiB below its top inside its segment.
+                assert!(l.stack_top - x[2].virt >= 2 * MIB);
+            }
+            assert_eq!(glibc_layout_segs(&Segs::one(0x0620_0000, span), SLIDES[1]), glibc_layout(0x0620_0000, span, SLIDES[1]));
+        }
     }
 
     #[test]

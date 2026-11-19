@@ -1,0 +1,14 @@
+# Tests first: KVM 2 GiB boots until the [elf-bias] line
+## ff: tests added, paging.rs/interrupts.rs unchanged, loader with the new signature but one number (writes at the virtual base)
+ff-2g end=marker after 173s failed-lines=2 crash-lines=0
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages touched through the fault path, shared copy-on-write None, one written again, contents right in both, an untouched page reads 0; teardown 14 frames, pool 73728 -> 73728 -> FAILED ✗
+[arena-hi]   the arena pages are not lazy entries above PML4[0]
+[elf-bias] case near: the program headers are not at the kernel side of AT_PHDR -> FAILED ✗
+## s23a: S2 + S3 done, first [elf-bias] version (ld.so only): ld.so has no R_X86_64_RELATIVE in DT_RELA (packed RELR) -> test changed to seq + ld.so
+s23a-2g end=marker after 164s failed-lines=1 crash-lines=0
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages touched through the fault path, shared copy-on-write Some((5, 0, 0)), one written again, contents right in both, an untouched page reads 0; teardown 27 frames, pool 73728 -> 73728 -> OK ✓
+[elf-bias] case near: no R_X86_64_RELATIVE relocation to check -> FAILED ✗
+## ff2: final tests, S2 done, loader and stack again with one number (kern_base = virt_base)
+ff2-2g end=marker after 140s failed-lines=1 crash-lines=0
+[arena-hi] lazy arena of 8 MiB at 0x87fffc00000 (PML4 slots 16-17) in two scratch spaces: 5 pages written through the fault path, shared copy-on-write Some((5, 0, 0)), one written again (copy), contents right in both, an untouched page reads 0, census 3 + 4 frames; teardown 27 frames, pool 73728 -> 73728 -> OK ✓
+[elf-bias] case near: the program headers are not at the kernel side of the PHDR address -> FAILED ✗

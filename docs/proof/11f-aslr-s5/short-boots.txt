@@ -1,0 +1,3 @@
+# 60 short TCG boots of the S5 self-test image to [fuzz] Linux-ABI, 2 vCPU, qemu64,+smep,+smap, 6 lanes of 10 (CPUs 16-19, 30-37), other lanes running
+60
+     60 end=marker failed-lines=0 crash-lines=0

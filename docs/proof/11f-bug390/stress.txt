@@ -1,0 +1,191 @@
+# [swap-irq] stress: 90 KVM boots of the fix (tree of 9692f11, selftest image), 4 GiB, HD-Audio, no NIC, up to the [swap-irq] line;
+# each boot: the 8-lock check + one gslots run (40 fork children x 6 threads, ended by exit_group, a worker exit_group and kill) beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on without pause (demand_addr_origin).
+# lanes (drivers/stress.sh): smp 4 on 14,15,34,35 and 16,17,36,37; smp 2 on 28,29 / 30,31 / 32,33; smp 1 on 28..33 and 14..17; three 1 h soaks ran beside them on 8-13.
+# boots:      30 s1
+# boots:      30 s2
+# boots:      30 s4
+# [swap-irq] OK: 90 of 90; end=marker 90; crash lines 0 in 90; NMI 0 in 90
+# other FAILED lines:  7 [vdso-mono] (BUG-380, the clock; boots s2-23 s2-3 s4-20 s2-6 s4-23 s4-15 s1-30 )
+# gslots: 90 runs, exit 88 in 90; globals swaps 238196 (fewest in one run 2442), lookups by the kernel task 508190926
+
+s1-1 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-2 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-3 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-4 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-5 end=marker after 228s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-6 end=marker after 248s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-7 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-8 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-9 end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-10 end=marker after 227s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-11 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-12 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-13 end=marker after 228s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-14 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-15 end=marker after 229s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-16 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-17 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-18 end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-19 end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-20 end=marker after 232s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-21 end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-22 end=marker after 236s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-23 end=marker after 233s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-24 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-25 end=marker after 231s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-26 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-27 end=marker after 225s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-28 end=marker after 224s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-29 end=marker after 224s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-30 end=marker after 222s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s2-1 end=marker after 249s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-2 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-3 end=marker after 241s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s2-4 end=marker after 244s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-5 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-6 end=marker after 254s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s2-7 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-8 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-9 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-10 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-11 end=marker after 245s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-12 end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-13 end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-14 end=marker after 243s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-15 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-16 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-17 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-18 end=marker after 253s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-19 end=marker after 248s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-20 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-21 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-22 end=marker after 241s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-23 end=marker after 241s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s2-24 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-25 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-26 end=marker after 245s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-27 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-28 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-29 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-30 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-1 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-2 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-3 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-4 end=marker after 232s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-5 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-6 end=marker after 232s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-7 end=marker after 233s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-8 end=marker after 229s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-9 end=marker after 228s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-10 end=marker after 231s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-11 end=marker after 233s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-12 end=marker after 227s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-13 end=marker after 226s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-14 end=marker after 225s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-15 end=marker after 225s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s4-16 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-17 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-18 end=marker after 232s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-19 end=marker after 231s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-20 end=marker after 235s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s4-21 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-22 end=marker after 225s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-23 end=marker after 229s swapirq=OK ✓ failed-lines=1 crash-lines=0 nmi=0
+s4-24 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-25 end=marker after 230s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-26 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-27 end=marker after 229s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-28 end=marker after 232s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-29 end=marker after 234s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-30 end=marker after 229s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+
+s1-1: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2696 lookups 5647055; -> OK ✓
+s1-2: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2788 lookups 5490209; -> OK ✓
+s1-3: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2642 lookups 5704793; -> OK ✓
+s1-4: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2678 lookups 5793926; -> OK ✓
+s1-5: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2504 lookups 5925324; -> OK ✓
+s1-6: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2732 lookups 5641763; -> OK ✓
+s1-7: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2760 lookups 5787622; -> OK ✓
+s1-8: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2612 lookups 5721322; -> OK ✓
+s1-9: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2708 lookups 5688229; -> OK ✓
+s1-10: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2664 lookups 5617570; -> OK ✓
+s1-11: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2736 lookups 5652398; -> OK ✓
+s1-12: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2638 lookups 5589943; -> OK ✓
+s1-13: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2636 lookups 5889619; -> OK ✓
+s1-14: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2622 lookups 5915066; -> OK ✓
+s1-15: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2500 lookups 6046899; -> OK ✓
+s1-16: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2612 lookups 5765930; -> OK ✓
+s1-17: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2532 lookups 5899881; -> OK ✓
+s1-18: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2638 lookups 5761971; -> OK ✓
+s1-19: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2868 lookups 4932064; -> OK ✓
+s1-20: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2674 lookups 5673930; -> OK ✓
+s1-21: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2780 lookups 5498702; -> OK ✓
+s1-22: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2712 lookups 5404748; -> OK ✓
+s1-23: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2682 lookups 5750187; -> OK ✓
+s1-24: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2618 lookups 5815078; -> OK ✓
+s1-25: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2612 lookups 5944407; -> OK ✓
+s1-26: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2590 lookups 5659894; -> OK ✓
+s1-27: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2466 lookups 5877686; -> OK ✓
+s1-28: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2624 lookups 5953120; -> OK ✓
+s1-29: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2556 lookups 5895753; -> OK ✓
+s1-30: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2564 lookups 5902084; -> OK ✓
+s2-1: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2822 lookups 5588329; -> OK ✓
+s2-2: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2760 lookups 5646824; -> OK ✓
+s2-3: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2558 lookups 5631787; -> OK ✓
+s2-4: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2766 lookups 5483405; -> OK ✓
+s2-5: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2708 lookups 5708430; -> OK ✓
+s2-6: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2908 lookups 5388907; -> OK ✓
+s2-7: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2568 lookups 5734361; -> OK ✓
+s2-8: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2748 lookups 5479248; -> OK ✓
+s2-9: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2746 lookups 5542329; -> OK ✓
+s2-10: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2618 lookups 5729147; -> OK ✓
+s2-11: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2630 lookups 6158640; -> OK ✓
+s2-12: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2582 lookups 5688919; -> OK ✓
+s2-13: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2622 lookups 5820104; -> OK ✓
+s2-14: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2906 lookups 4626968; -> OK ✓
+s2-15: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2598 lookups 5457893; -> OK ✓
+s2-16: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2678 lookups 5721333; -> OK ✓
+s2-17: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2760 lookups 5449846; -> OK ✓
+s2-18: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2810 lookups 5518758; -> OK ✓
+s2-19: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2694 lookups 5409126; -> OK ✓
+s2-20: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2734 lookups 5405056; -> OK ✓
+s2-21: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2674 lookups 5515411; -> OK ✓
+s2-22: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2596 lookups 5740436; -> OK ✓
+s2-23: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2576 lookups 5697570; -> OK ✓
+s2-24: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 3028 lookups 4773525; -> OK ✓
+s2-25: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2442 lookups 5662323; -> OK ✓
+s2-26: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2790 lookups 5178265; -> OK ✓
+s2-27: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2848 lookups 5330594; -> OK ✓
+s2-28: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2598 lookups 5635940; -> OK ✓
+s2-29: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2798 lookups 4835361; -> OK ✓
+s2-30: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2568 lookups 5443594; -> OK ✓
+s4-1: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2636 lookups 5621488; -> OK ✓
+s4-2: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2682 lookups 5721424; -> OK ✓
+s4-3: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2568 lookups 5625202; -> OK ✓
+s4-4: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2692 lookups 5654864; -> OK ✓
+s4-5: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2608 lookups 5690353; -> OK ✓
+s4-6: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2598 lookups 5761786; -> OK ✓
+s4-7: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2678 lookups 5706989; -> OK ✓
+s4-8: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2580 lookups 5716437; -> OK ✓
+s4-9: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2486 lookups 5703495; -> OK ✓
+s4-10: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2634 lookups 5713224; -> OK ✓
+s4-11: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2614 lookups 5723931; -> OK ✓
+s4-12: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2478 lookups 5756071; -> OK ✓
+s4-13: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2668 lookups 5774592; -> OK ✓
+s4-14: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2590 lookups 5776244; -> OK ✓
+s4-15: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2470 lookups 5799524; -> OK ✓
+s4-16: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2652 lookups 5634353; -> OK ✓
+s4-17: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2654 lookups 5666750; -> OK ✓
+s4-18: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2608 lookups 5656946; -> OK ✓
+s4-19: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2508 lookups 5871696; -> OK ✓
+s4-20: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2610 lookups 5685751; -> OK ✓
+s4-21: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2600 lookups 5684140; -> OK ✓
+s4-22: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2510 lookups 5870654; -> OK ✓
+s4-23: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2552 lookups 5702178; -> OK ✓
+s4-24: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2560 lookups 5636483; -> OK ✓
+s4-25: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2508 lookups 5700575; -> OK ✓
+s4-26: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2602 lookups 5702164; -> OK ✓
+s4-27: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2550 lookups 5642134; -> OK ✓
+s4-28: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2636 lookups 5755824; -> OK ✓
+s4-29: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2574 lookups 5719217; -> OK ✓
+s4-30: [swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2512 lookups 5666835; -> OK ✓

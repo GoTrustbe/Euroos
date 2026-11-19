@@ -1,0 +1,22 @@
+  [ahciroot] phase B: booting standalone from the installed SATA disk
+  [ahciroot] phase B: loop=True, standalone-sata-root=True
+  [ahciroot] PASS ✓ — installed to a blank SATA disk (boot medium untouched) and booted standalone with root on it
+  [ahciroot] PASS ✓
+
+[matrix] result:
+  base     PASS
+  nvme     PASS
+  ahci     PASS
+  e1000e   PASS
+  hda      PASS
+  usb      PASS
+  usbhub   PASS
+  usbaudio PASS
+  usbnet   PASS
+  hwprobe  PASS
+  scan     PASS
+  power    PASS
+  printer  PASS
+  nvmeroot PASS
+  ahciroot PASS
+[matrix] ALL LEGS PASS ✓

@@ -1,0 +1,17 @@
+aslr: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+aslr-ind: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+aslr-exec: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+aslr-fork: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+aslr-phys: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+arena-segs: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+arena-move: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+arena-hi: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+fork-cow-write: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+fork-fault-wait: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+vdso-ro: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+vdso-mono: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+swap-irq: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+elf-bias: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+clock-drift: cand KVM boots with a line and no FAILED 11, with FAILED 1, of 12
+upd3: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12
+g4: cand KVM boots with a line and no FAILED 12, with FAILED 0, of 12

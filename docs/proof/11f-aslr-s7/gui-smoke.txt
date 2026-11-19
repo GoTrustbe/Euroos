@@ -1,0 +1,4 @@
+# gui-smoke, merge public image (m-pub.img, 4599d0e), KVM 4 vCPU 4 GiB, pinned 8-11 (run before the CPU range was narrowed to 0-7/20-27)
+[gui-smoke] QEMU pid 1395606, booting (KVM, 4 cpu, 4G)...
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/aslr7-runs/gs
+ok lines: 67

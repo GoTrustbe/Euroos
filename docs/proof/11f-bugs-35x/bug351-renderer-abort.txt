@@ -1,0 +1,14 @@
+# eed2a95 (first BUG-351 rule: a written page of a file mapping takes a kernel write), Chromium site session s01, KVM smp 2 6 GiB:
+# every renderer aborted at its start; symbolized with addr2line on the chrome of chrome-pack2.img, exe base of task 70 0x20f5f0c16000
+[aslr-layout] exec task 70: exe 0x20f5f0c16000 floor 0x2921dce60000 ld.so 0x42400000 brk 0x43c87000 stack 0x49ad0000 vdso 0x640a04fa5000 (aslr=on)
+[abort] t70 "CrRendererMain" tgkill(tgid=1, tid=70, sig=6) — a glibc abort/assert fired; see [abort] __abort_msg in the stall dump
+  base::internal::CheckMemoryReadOnly(void const*)
+  base::AutoWritableMemory<bool>::AutoWritableMemory(base::ProtectedMemory<bool>&)
+  base::ProtectedMemoryInitializer::ProtectedMemoryInitializer<bool, bool>(base::ProtectedMemory<bool>&, bool&&)
+  blink::RuntimeEnabledFeaturesBase::get_is_mojo_js_test_enabled_()
+  blink::V8Window::Impl::InstallContextIndependentProperties(v8::Isolate*, blink::DOMWrapperWorld const&, v8::Local<v8::ObjectTemplate>, v8::Local<v8::ObjectTemplate>, v8::Local<v8::Template>)
+  blink::V8ContextSnapshotImpl::InstallInterfaceTemplates(v8::Isolate*)
+  blink::V8Initializer::InitializeV8Common(v8::Isolate*)
+  blink::V8Initializer::InitializeMainThread()
+  blink::Initialize(blink::Platform*, mojo::BinderMap*, blink::scheduler::WebThreadScheduler*)
+# aborts per session (eed2a95): s01 205, s02 161, s03 170, all CrRendererMain; after b4355d7 (read-only mprotect recorded): 0

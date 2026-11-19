@@ -1,0 +1,10 @@
+# loadtest soak 1 h (65 min), S5 st image, KVM 4 vCPU 16 GiB, e1000e restrict, hammer 4, 32 procs, churn-proc 8, CPUs 4-7 (host loaded by the other lanes)
+[loadtest] scenario=soak image=/srv/euroos/aslr5-runs/soak-on/w/boot.img disks=['/srv/euroos/aslr5-runs/soak-on/w/disk0-8G.raw'] bus=virtio kvm=True smp=4 mem=16G nic=e1000e bootopts=- iommu=False
+[loadtest] serial log: /srv/euroos/aslr5-runs/soak-on/w/loadtest-serial-20261117-025019.log  ·  CSV: /srv/euroos/aslr5-runs/soak-on/w/loadtest-results.csv
+[loadtest] waiting for serial console …
+[loadtest] serial console up after 322s — driving commands
+[loadtest] completed clean · results → /srv/euroos/aslr5-runs/soak-on/w/loadtest-results.csv · ltstat samples → /srv/euroos/aslr5-runs/soak-on/w/loadtest-results-ltstat.csv
+[loadtest] hammer (inbound httpd, 4 clients): {"ok": 379611, "err": 0, "p50_ms": 5.8, "p99_ms": 434.7, "max_ms": 8364.1, "busy_windows": 185, "busy_s": 1673, "busy": {"ok": 171727, "err": 0, "p50_ms": 5.9, "p99_ms": 426.1, "max_ms": 1626.0}, "idle": {"ok": 207884, "err": 0, "p50_ms": 5.8, "p99_ms": 440.3, "max_ms": 8364.1}}
+[loadtest] host HTTP server served 665 request(s)
+commands: 5770, status:    5770 ok 
+serial: watchdog 0, panic/ring-0 0, [oom] 3 (the [memt] self-test), [churn-proc] FAILED 0 of 4255

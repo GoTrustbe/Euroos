@@ -1,0 +1,21 @@
+## starts20-on
+launch: 20 lines; varying bits: exe 30, ld.so 30, arena 21, brk 29, stack 29, floor 30, vdso 27
+exec: 199 lines; varying bits: exe 30, ld.so 30, arena 21, brk 29, stack 29, floor 30, vdso 27
+aborts=0 ring0=0 FROZEN=0 oom=0 execs=199 exec-enomem=0 bootopt=[bootopt] aslr=on [bootopt] aslr.arena=random 
+[chrome-smoke] starts: 20/20 PASS
+## starts20-base
+launch: 20 lines; varying bits: exe 30, ld.so 0, brk 8, stack 8, floor 30, vdso 27
+exec: 183 lines; varying bits: exe 30, ld.so 0, brk 8, stack 9, floor 30, vdso 27
+aborts=0 ring0=0 FROZEN=0 oom=0 execs=183 exec-enomem=0 bootopt=[bootopt] aslr=on [bootopt] aslr.arena=fixed 
+[chrome-smoke] starts: 20/20 PASS
+## starts20-off
+launch: 20 lines; varying bits: exe 0, ld.so 0, arena 0, brk 0, stack 0, floor 0, vdso 0
+exec: 190 lines; varying bits: exe 0, ld.so 0, arena 0, brk 0, stack 0, floor 0, vdso 0
+aborts=0 ring0=0 FROZEN=0 oom=0 execs=190 exec-enomem=0 bootopt=[bootopt] aslr=off [bootopt] aslr.arena=random 
+[chrome-smoke] starts: 20/20 PASS
+## starts20-leg
+launch: 20 lines; varying bits: exe 0, ld.so 0, arena 0, brk 8, stack 8, floor 20, vdso 0
+exec: 186 lines; varying bits: exe 0, ld.so 0, arena 0, brk 8, stack 9, floor 20, vdso 0
+aborts=0 ring0=0 FROZEN=0 oom=0 execs=186 exec-enomem=0 bootopt=[bootopt] aslr=legacy [bootopt] aslr.arena=identity 
+[chrome-smoke] starts: 20/20 PASS
+## on: exec'd children (199) that kept an address of the launched browser, per region: exe 0, ld.so 0, arena 0, brk 0, stack 0, floor 0, vdso 0

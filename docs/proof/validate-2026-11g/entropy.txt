@@ -1,0 +1,55 @@
+boots 20; [aslr] verdicts: OK 20
+region   over boots  per boot min..max  distinct firsts
+exe              30             30..30   20/20
+ldso             30             30..30   20/20
+libc             30             30..30   20/20
+stack            29             29..29   20/20
+brk              29             29..29   20/20
+mmap             30             30..30   20/20
+mmapbig          30             30..30   20/20
+vdso             27             27..27   20/20
+distance over boots (first start of each boot):
+  exe-heap (brk)             31
+  heap-stack (brk-stack)     31
+  exe-stack                  32
+  exe-mmap 4 KiB             31
+  exe-mmap 1 MiB             34
+  exe-vDSO                   31
+  stack-mmap 4 KiB           31
+  stack-ld.so                32
+  ld.so-exe (same segment)   12
+  mmap-brk (same segment)    14
+[aslr-ind] per boot: OK 20
+  stack-mmap         min 31 max 31
+  exe-stack          min 32 max 32
+  exe-mmap           min 31 max 31
+  stack-ldso         min 32 max 32
+  exe-brk            min 31 max 31
+  brk-stack          min 31 max 31
+  libc-exe           min 34 max 34
+  vDSO-mmap1MiB      min 31 max 31
+  mmap1MiB-exe       min 34 max 34
+  vDSO-exe           min 31 max 31
+  ldso-exe           min 12 max 12
+  mmap-brk           min 14 max 14
+
+boot=1 end=marker secs=164.669659584 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 530 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=2 end=marker secs=165.954594627 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 502 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=3 end=marker secs=159.411502705 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 543 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=4 end=marker secs=160.900281493 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 563 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=5 end=marker secs=159.782847244 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 503 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=1 end=marker secs=159.868218378 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 494 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=2 end=marker secs=160.500406620 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 529 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=3 end=marker secs=162.023191981 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 564 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=4 end=marker secs=165.415150752 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 555 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=5 end=marker secs=159.163104394 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 556 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=1 end=marker secs=172.991803217 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 559 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=2 end=marker secs=171.347896155 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 559 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=3 end=marker secs=159.659771970 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 555 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=4 end=marker secs=161.097926190 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 537 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=5 end=marker secs=169.156806554 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 499 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=1 end=marker secs=161.119294438 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 565 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=2 end=marker secs=160.089151435 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 540 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=3 end=marker secs=161.550367463 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 500 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=4 end=marker secs=160.231622036 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 546 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1
+boot=5 end=marker secs=158.945307466 3d8 ok=1 failed=0 | failed-lines=0 crash-lines=0 | [entropy] CSPRNG seeded: 534 of 256 bits · sources mixed: tpm=none, rdseed=8 words, rdrand=8 words (CPU credit 1

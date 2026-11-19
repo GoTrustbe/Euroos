@@ -415,6 +415,11 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
         "uptime" => {
             let t = crate::interrupts::ticks();
             let mut out = vec![format!("uptime: {t} timer ticks (~{} s) at 100 Hz APIC timer", t / 100)];
+            // BUG-380: the clock processes read (vDSO page), to measure its
+            // drift against a host clock over the serial console.
+            out.push(format!("vdso clock: mono {} ns, real {} ns", crate::ring3::clock_ns(1), crate::ring3::clock_ns(0)));
+            // BUG-400: raw counters, to split the drift into its causes on the host.
+            out.push(crate::clockdrift::diag_line());
             if crate::hpet::present() {
                 out.push(format!(
                     "HPET  : {} MHz, {} ms since activation (high-resolution HAL time source)",
@@ -578,6 +583,13 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             let mut out = vec![format!("mem: {}", lines[0])];
             out.extend(lines.iter().skip(1).map(|l| format!("  {l}")));
             out
+        }
+        // BUG-390: `swapirq [rounds]` runs the [swap-irq] self-test (rounds of the stress).
+        "swapirq" => {
+            let n = arg1.parse::<usize>().unwrap_or(1).clamp(1, 1000);
+            let l = crate::ring3::swap_irq_selftest(ctx.mem, n);
+            crate::serial_println!("{l}");
+            vec![l]
         }
         "cdiag" => {
             // What a hosted glibc program (the browser) is doing right now: every

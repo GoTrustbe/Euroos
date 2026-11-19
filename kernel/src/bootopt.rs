@@ -45,6 +45,24 @@
 //!   hosted Chromium to the page over DevTools, as it did until 2026-11. The
 //!   default, `x11`, sends X events only.
 //!
+//! - `aslr.arena=random|fixed|identity`: where the arena of a launched Linux
+//!   program (and of its fork children) lies: at a random 2 MiB step of
+//!   8..12 TiB, drawn per launch and per exec (`random`, default, ASLR step S5;
+//!   with `aslr=off` the draw is 0), always at 8 TiB (`fixed`, step S4) or at its
+//!   physical address (`identity`, as before S4). `aslr=legacy` keeps `identity`.
+//!   Since S6 the zone is 8..20 TiB: with `random` the arena is cut into three
+//!   segments, each at a random 2 MiB step of a window of its own.
+//! - `aslr.split=on|off`: with `aslr.arena=random`, cut the arena into image,
+//!   heap and stack segments at bases of their own (`on`, default, ASLR step S6)
+//!   or keep it in one piece at one drawn base (`off`, the layout of S5).
+//! - `aslr=on|off|legacy`: address-space layout randomisation of Linux
+//!   programs (docs/design/ASLR.md, euromm::layout). `on` is the default (ring3::ASLR_DEFAULT);
+//!   `legacy` is the layout of before (demand region in PML4 slot 2); `on` places
+//!   the demand region, the executable from disk, the mmap floor and the vDSO
+//!   at random addresses in their zones; `off` uses the zones of `on` with
+//!   every random part 0, so addresses repeat from run to run (debugging,
+//!   comparing two logs). An unknown value is ignored and logged.
+//!
 //! The file is not signed. It only chooses between two code paths that are
 //! both part of the signed kernel image; it cannot add code.
 
@@ -112,6 +130,18 @@ fn apply(text: &str) {
                     Ok(p) if (1..=100).contains(&p) => crate::sched::set_driver_budget(p),
                     _ => crate::serial_println!("[bootopt] sched.drvbudget={v} is not 1..100: ignored"),
                 },
+                ("aslr.arena", v) => match crate::ring3::arena_mode_parse(v) {
+                    Some(m) => crate::ring3::arena_set_mode(m),
+                    None => crate::serial_println!("[bootopt] aslr.arena={v} is not random, fixed or identity: ignored"),
+                },
+                ("aslr.split", v) => match crate::ring3::arena_split_parse(v) {
+                    Some(on) => crate::ring3::arena_split_set(on),
+                    None => crate::serial_println!("[bootopt] aslr.split={v} is not on or off: ignored"),
+                },
+                ("aslr", v) => match euromm::layout::Mode::parse(v) {
+                    Some(m) => crate::ring3::aslr_set_mode(m),
+                    None => crate::serial_println!("[bootopt] aslr={v} is not on, off or legacy: ignored"),
+                },
                 ("display.mode", v) => match parse_mode(v) {
                     Some((w, h)) => DISPLAY_MODE.store(w << 16 | h, Ordering::Relaxed),
                     None => crate::serial_println!("[bootopt] display.mode={v} is not <width>x<height>: ignored"),
@@ -145,12 +175,17 @@ pub fn capture() {
         }
         break;
     }
+    // The zone of the aslr mode (default or chosen) before the first process.
+    crate::ring3::aslr_set_mode(crate::ring3::aslr_mode());
     crate::serial_println!(
         "[bootopt] {}: net.driver={}, storage.nvme={}",
         if FOUND.load(Ordering::Relaxed) { "\\EFI\\BOOT\\euroos-boot.conf read" } else { "no euroos-boot.conf (defaults)" },
         if net_user_driver() { "user" } else { "kernel" },
         if nvme_user_driver() { "user (data disk only)" } else { "kernel" }
     );
+    crate::serial_println!("[bootopt] aslr={}", crate::ring3::aslr_mode().name());
+    crate::serial_println!("[bootopt] aslr.arena={}", crate::ring3::arena_mode_name());
+    crate::serial_println!("[bootopt] aslr.split={}", crate::ring3::arena_split_name());
 }
 
 /// BUG-032: is the hardware write watch on the scheduler state on (memwatch.rs)?

@@ -1,0 +1,117 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -nic none, quiet host, one lane per image, pinned cpu+sibling. m = merge 4599d0e, s6 = 55c6e25, b380 = 19f7586 (BUG-380 fix on the S5 base)
+
+b380-1G end=marker after 200s failed-lines=3 crash-lines=0
+b380-2G end=marker after 208s failed-lines=1 crash-lines=0
+b380-4G end=marker after 210s failed-lines=1 crash-lines=0
+m-1G end=marker after 196s failed-lines=2 crash-lines=0
+m-2G end=marker after 209s failed-lines=0 crash-lines=0
+m-4G end=marker after 211s failed-lines=0 crash-lines=0
+s6-1G end=marker after 191s failed-lines=3 crash-lines=0
+s6-2G end=marker after 206s failed-lines=0 crash-lines=0
+s6-4G end=marker after 205s failed-lines=0 crash-lines=0
+
+## markers-compare s6 -> merge, 1G
+== kvm/s6-1G.log  vs  kvm/m-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   vdso-mono: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 0
+## markers-compare b380 -> merge, 1G
+== kvm/b380-1G.log  vs  kvm/m-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+## markers-compare s6 -> merge, 2G
+== kvm/s6-2G.log  vs  kvm/m-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare b380 -> merge, 2G
+== kvm/b380-2G.log  vs  kvm/m-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+## markers-compare s6 -> merge, 4G
+== kvm/s6-4G.log  vs  kvm/m-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare b380 -> merge, 4G
+== kvm/b380-4G.log  vs  kvm/m-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 1
+   aslr-ind: base FAILx1 | new OKx1
+-- only in base: 0
+-- only in new: 1
+   arena-segs: OKx1
+
+## verdict per marker (OK = a line without FAILED; absent = not in that image)
+m-1G: vdso-mono=OK aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+s6-1G: vdso-mono=FAILED aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+b380-1G: vdso-mono=OK aslr=OK aslr-ind=FAILED aslr-exec=OK aslr-phys=OK arena-segs=absent 
+m-2G: vdso-mono=OK aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+s6-2G: vdso-mono=OK aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+b380-2G: vdso-mono=OK aslr=OK aslr-ind=FAILED aslr-exec=OK aslr-phys=OK arena-segs=absent 
+m-4G: vdso-mono=OK aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+s6-4G: vdso-mono=OK aslr=OK aslr-ind=OK aslr-exec=OK aslr-phys=OK arena-segs=OK 
+b380-4G: vdso-mono=OK aslr=OK aslr-ind=FAILED aslr-exec=OK aslr-phys=OK arena-segs=absent 
+
+## merge 1G: marker lines
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown 41 frames, pool 40960 -> 4
+[aslr]   exe      first 0x0b0a135eb460  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x0b0a13ce9000  varying bits 30  distinct 64/64
+[aslr]   libc     first 0x2af6ef8fe100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x116d7dc5fd1c  varying bits 29  distinct 64/64
+[aslr]   brk      first 0x0e82c08cf000  varying bits 29  distinct 64/64
+[aslr]   mmap     first 0x0e82c2839000  varying bits 30  distinct 64/64
+[aslr]   mmapbig  first 0x2af6efab0000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x641f03598000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 8 (max 1668407 ns), 8 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered while another was running 0 times, on an AP 0 times, anchor tsc
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (3206442 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 1 of 1 APs read along (234496 reads, 458 stalled): steps back 0 times (max 0 ns), below an earlier read of another CPU 0 times (max 0 ns)
+
+## merge 2G: marker lines
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown 41 frames, pool 73728 -> 7
+[aslr]   exe      first 0x09ef3341f460  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x09ef33d58000  varying bits 30  distinct 64/64
+[aslr]   libc     first 0x29feee86b100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x10d5f7cbdd1c  varying bits 29  distinct 64/64
+[aslr]   brk      first 0x0f689ba7d000  varying bits 29  distinct 64/64
+[aslr]   mmap     first 0x0f689dacc000  varying bits 30  distinct 64/64
+[aslr]   mmapbig  first 0x29feeea1d000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x644c5cd29000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 7 (max 1675933 ns), 7 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered while another was running 0 times, on an AP 0 times, anchor tsc
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (3076235 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 1 of 1 APs read along (232448 reads, 454 stalled): steps back 0 times (max 0 ns), below an earlier read of another CPU 0 times (max 0 ns)
+
+## merge 4G: marker lines
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 shared frames of the parent hold no child any more, census 4 + 3; teardown 41 frames, pool 427008 -> 
+[aslr]   exe      first 0x0b7ae87f4460  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x0b7ae8eb3000  varying bits 30  distinct 64/64
+[aslr]   libc     first 0x2b89390e8100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x10f768482d1c  varying bits 29  distinct 64/64
+[aslr]   brk      first 0x0df25f8e0000  varying bits 29  distinct 64/64
+[aslr]   mmap     first 0x0df2618c1000  varying bits 30  distinct 64/64
+[aslr]   mmapbig  first 0x2b893929a000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x6437ee6be000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 2 (max 582975 ns), 2 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back 0 (max 0 ns); writer: entered while another was running 0 times, on an AP 0 times, anchor tsc 
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (3000452 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 1 of 1 APs read along (235008 reads, 459 stalled): steps back 0 times (max 0 ns), below an earlier read of another CPU 0 times (max 0 ns)

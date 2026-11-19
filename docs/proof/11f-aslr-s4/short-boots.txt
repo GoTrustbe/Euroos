@@ -1,0 +1,4 @@
+# short-boots.sh: 120 TCG boots (-cpu qemu64,+smep,+smap, 2 vCPU, 2 GiB, -nic none) until [fuzz] Linux-ABI; 12 lanes of two CPUs on cores 4-15 and their siblings 24-35 (both siblings of every core busy), 10 boots per lane; on lanes = image + aslr.arena=fixed, off lanes = default
+## on: boots 60, end=marker 60, with a FAILED line 0, crash lines 0, CSPRNG seeded 60
+## off: boots 60, end=marker 60, with a FAILED line 0, crash lines 0, CSPRNG seeded 60
+seconds to the marker: median 47.943661821 max 59.730980219

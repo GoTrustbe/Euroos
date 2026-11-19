@@ -1,0 +1,7 @@
+# Chromium: 20 starts (default), launch + exec
+launch: 20 lines; varying bits: exe 30, ld.so 30, arena 21, hseg 21, sseg 21, brk 29, stack 29, floor 30, vdso 27
+launch: distances varying bits: ld.so-brk 31, brk-stack 31, ld.so-stack 32, exe-brk 31, exe-stack 33, exe-floor 32, exe-vdso 31, stack-floor 32
+exec: 192 lines; varying bits: exe 30, ld.so 30, arena 21, hseg 21, sseg 21, brk 29, stack 30, floor 30, vdso 27
+exec: distances varying bits: ld.so-brk 31, brk-stack 31, ld.so-stack 32, exe-brk 31, exe-stack 33, exe-floor 32, exe-vdso 31, stack-floor 32
+## on: exec'd children (192) that kept an address of the launched browser, per region: exe 0, ld.so 0, arena 0, brk 0, stack 0, floor 0, vdso 0
+mmap window full lines: 0

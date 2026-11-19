@@ -1,0 +1,35 @@
+# Chromium runs of the merge d18fa36 (br image = public image of d18fa36 + ui.tour=off, update.check=off), KVM 2 vCPU, user-net without hostfwd, pack chrome-pack2.img, nss-pack-vid.img, scripts/chrome-smoke.py of the tree
+# (a first try with an older chrome-smoke.py from /srv/euroos/chrome-runs/scripts gave 2 of 5 starts and 9 steps in a sites round: its checks differ; not used, the run files were kept as *-oldscript.out only until clean-up)
+## starts, 5 fresh boots:
+[chrome-smoke] start 1/5: PASS
+[chrome-smoke] start 2/5: PASS
+[chrome-smoke] start 3/5: PASS
+[chrome-smoke] start 4/5: PASS
+[chrome-smoke] start 5/5: PASS
+[chrome-smoke] starts: 5/5 PASS
+## one sites round (14 steps):
+[chrome-smoke]   omnibox selection seen 0.3 s after Ctrl+L (178 px run)
+[gui-smoke] ok   consent euro-os: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.9 s, load finished 2.7 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 279 ms; fds: 7 processes, 369 descriptors,
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 0.6 s, load finished 2.0 s later; content 592 colours, commonest 78%; desktop loop: slowest console answer 233 ms; fds: 10
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 0.8 s, load finished 11.9 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 348 ms; fds: 
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('all
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.5 s, load finished 9.6 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 656 ms; fds: 13 processes, 701 desc
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.6 s, load finished 1.9 s later; content 2299 colours, commonest 36%; desktop loop: slowest console answer 204 ms; fds: 12 
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.4 s, load finished 1.9 s later; content 140 colour
+[chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/integ2b410/sites-d18
+## run_glibc_disk path (fix-chrome.img = kernel of a780d84 with --features chrome-boot, chrome pack attached, 6 GiB, 2 vCPU, no NIC, CPUs 17,18; marker: the heap-watch line; then 180 s more):
+[chrome-run] glibc self-tests SKIPPED for iteration speed
+[glibc-disk] /pack/chrome: 484 MiB on disk, entry@0x23c47f166000 phdr@0x23c479f4a040 phnum=12 (demand-paged from disk)
+[glibc-disk] demand pool: 1661 MiB in 6 region(s), largest 474 MiB @ 0x110000000
+[heap] 147 MiB used | FILES 43 MiB | pipes 0 KiB
+[xserver] MapWindow id=0x400003 mask=0x63807f
+panics/watchdog/GPF/[irqlock] lines in that log: 0; result: c-fix end=marker after 205s swapirq= failed-lines=0 crash-lines=0 nmi=0
