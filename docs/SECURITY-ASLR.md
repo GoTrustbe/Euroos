@@ -7,7 +7,7 @@ measurements are in [design/ASLR.md](design/ASLR.md) (section 12) and in the pro
 ## What it does
 
 A program that has a bug can be tricked into running an attacker's code, but the attacker first has to know where the
-program's code and data lie in memory. Since the release after 2026.11.16 (`NEXT`) EuroOS places the memory of every Linux program
+program's code and data lie in memory. Since 2026.11.19 EuroOS places the memory of every Linux program
 (the browser and every other program built for Linux) at addresses that differ from start to start, and the browser's
 child processes (renderers, the GPU process, the network service) get new addresses of their own when the browser starts
 them. An address that leaks from one place says little about another place:
@@ -43,8 +43,8 @@ and tell us which one it was:
 |---|---|---|
 | 1 | `aslr.split=off` | the program's own block is in one piece again (one random place) |
 | 2 | `aslr.arena=fixed` | that block is always at the same address (8 TiB); the other regions stay random |
-| 3 | `aslr.arena=identity` | that block is at the address of the memory it uses, as in 2026.11.16 and earlier |
-| 4 | `aslr=legacy` | the whole layout of 2026.11.16 and earlier: few random bits, the browser always at the same address |
+| 3 | `aslr.arena=identity` | that block is at the address of the memory it uses, as in 2026.11.17 and earlier |
+| 4 | `aslr=legacy` | the whole layout of 2026.11.17 and earlier: few random bits, the browser always at the same address |
 
 `aslr=off` is not a way back: it keeps the new layout but draws nothing, so addresses repeat from run to run. It is for
 debugging and for comparing logs, not for daily use. With `off` and with `legacy` the protection above is largely gone.

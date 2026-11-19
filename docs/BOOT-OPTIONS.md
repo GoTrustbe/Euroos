@@ -88,7 +88,7 @@ attacker who finds a bug in a program cannot know in advance where its code and 
 |---|---|
 | `on` (default) | Every start of a program, and every new program a browser process starts, gets its own random addresses for the program read from disk (the browser), its libraries and large memory areas. A started program also gets a random place for its small clock page (vDSO). |
 | `off` | The same layout as `on`, but always at the same addresses. For people who compare two logs of the same run. Not for daily use. |
-| `legacy` | The layout of EuroOS 2026.11.16 and earlier: fewer random bits and the browser program always at the same address. A way back if a program misbehaves with `on`; it may be removed in a later release. |
+| `legacy` | The layout of EuroOS 2026.11.17 and earlier: fewer random bits and the browser program always at the same address. A way back if a program misbehaves with `on`; it may be removed in a later release. |
 
 With `on`, every part of a program gets about 30 random bits (Linux gives 28): the browser's main program, its
 libraries and large areas, and also the program's own block (the dynamic loader, the small heap, small
@@ -109,7 +109,7 @@ which address the program sees that block.
 |---|---|
 | `random` (default) | The block is seen at random places, new for every start and for every new process the browser starts: in three parts between 8 and 20 TiB (see `aslr.split`), or in one piece between 8 and 12 TiB. Inside it, the program itself and the dynamic loader get a random page offset too. With `aslr=off` the places are always the same (8, 12 and 16 TiB; 8 TiB in one piece). |
 | `fixed` | The block is always seen at 8 TiB, whatever memory it uses. A program cannot learn where its memory physically lies, but the addresses repeat. A way back if a program misbehaves with `random`. |
-| `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.16 and earlier. The way back if a program misbehaves with `random` and with `fixed`. |
+| `identity` | The block is seen at the address of the memory chips it uses, as in EuroOS 2026.11.17 and earlier. The way back if a program misbehaves with `random` and with `fixed`. |
 
 With `aslr=legacy` the block always stays at `identity`. The log line `[bootopt] aslr.arena=...` shows the
 placement in use.
