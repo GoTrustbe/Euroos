@@ -5101,8 +5101,15 @@ pub fn thread_kstacks_used() -> usize {
 
 /// Bytes the table of files holds (names and contents): the heap watch of
 /// `run_glibc_disk` prints it, from task 0 with interrupts on (BUG-410).
+/// System calls and faults take FILES with interrupts off: held here with
+/// interrupts on, a tick inside the sum parks this task for good and the next
+/// task that wants FILES spins (kernel code runs on the BSP only).
 fn files_heap_bytes() -> usize {
-    FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum()
+    let _g = crate::sched::IfOffGuard::new();
+    // A statement of its own: the lock is released before `_g` restores interrupts
+    // (a temporary of a tail expression would outlive `_g`).
+    let n = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+    n
 }
 
 /// Entries in the global file table (the [churn-proc] leak counter).
