@@ -5099,6 +5099,12 @@ pub fn thread_kstacks_used() -> usize {
     THREAD_KSTACK_USED.iter().filter(|b| b.load(Ordering::Relaxed)).count()
 }
 
+/// Bytes the table of files holds (names and contents): the heap watch of
+/// `run_glibc_disk` prints it, from task 0 with interrupts on (BUG-410).
+fn files_heap_bytes() -> usize {
+    FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum()
+}
+
 /// Entries in the global file table (the [churn-proc] leak counter).
 pub fn files_count() -> usize {
     FILES.lock().len()
@@ -11416,6 +11422,8 @@ pub static CHILD_MEM_SWAPS: AtomicU64 = AtomicU64::new(0);
 
 static SWAPHAM_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static SWAPHAM_CALLS: AtomicU64 = AtomicU64::new(0);
+/// The hammer takes FILES the way the heap watch does (`files_heap_bytes`) instead of DEMAND_FILE_MAPS (BUG-410).
+static SWAPHAM_FILES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static SWAPHAM_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
 
@@ -11424,6 +11432,11 @@ const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
 extern "C" fn swap_hammer_main() -> ! {
     loop {
         while SWAPHAM_ON.load(Ordering::Acquire) {
+            if SWAPHAM_FILES.load(Ordering::Relaxed) {
+                core::hint::black_box(files_heap_bytes());
+                SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             let base = demand_base();
             let span = DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(base).max(0x1000);
             let n = SWAPHAM_CALLS.load(Ordering::Relaxed);
@@ -11517,13 +11530,38 @@ pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
                 r + 1, exit as i64, if ok { "" } else { " FAILED" }));
         }
     }
+    // (3) BUG-410: the heap watch of `run_glibc_disk` sums FILES from task 0 with
+    // interrupts on. A system call takes FILES with interrupts off: if the timer
+    // preempts the sum, the task that runs next spins on FILES and the holder
+    // never runs again. Here a kernel task does the sum without pause, and this
+    // task takes FILES with interrupts off (as a system call does) for 3 s.
+    SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+    SWAPHAM_FILES.store(true, Ordering::Release);
+    SWAPHAM_ON.store(true, Ordering::Release);
+    crate::sched::wake(SWAPHAM_CHAN, 1);
+    let t_end = crate::interrupts::ticks() + 300;
+    let mut taken = 0u64;
+    while crate::interrupts::ticks() < t_end {
+        crate::sched::yield_now();
+        for _ in 0..2000 {
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                core::hint::black_box(files_count());
+            });
+            taken += 1;
+        }
+    }
+    SWAPHAM_ON.store(false, Ordering::Release);
+    SWAPHAM_FILES.store(false, Ordering::Release);
+    let sums = SWAPHAM_CALLS.load(Ordering::Relaxed);
+    let files_ok = sums > 0;
     if !if_was {
         x86_64::instructions::interrupts::disable();
     }
-    let ok = bad.is_empty() && runs_ok == rounds;
+    let ok = bad.is_empty() && runs_ok == rounds && files_ok;
     alloc::format!(
-        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} -> {}",
+        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} FILES: {taken} takes with interrupts off beside {sums} heap-watch sums with interrupts on{} -> {}",
         if bad.is_empty() { String::from("none") } else { bad.join(", ") },
+        if files_ok { "" } else { " (no sum ran) FAILED" },
         if ok { "OK ✓" } else { "FAILED" })
 }
 
@@ -14416,7 +14454,7 @@ pub fn run_glibc_disk(
             let step = (used >> 26) as u32; // 64 MiB steps
             let prev = HEAP_STEP.swap(step, Ordering::Relaxed);
             if step > prev {
-                let files: usize = FILES.lock().iter().map(|(p, d)| p.len() + d.len()).sum();
+                let files: usize = files_heap_bytes();
                 let pipes: usize = pipes_lock().iter().map(|p| p.len()).sum();
                 crate::serial_println!(
                     "[heap] {} MiB used | FILES {} MiB | pipes {} KiB",
