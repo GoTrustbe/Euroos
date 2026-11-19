@@ -582,6 +582,13 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             out.extend(lines.iter().skip(1).map(|l| format!("  {l}")));
             out
         }
+        // BUG-390: `swapirq [rounds]` runs the [swap-irq] self-test (rounds of the stress).
+        "swapirq" => {
+            let n = arg1.parse::<usize>().unwrap_or(1).clamp(1, 1000);
+            let l = crate::ring3::swap_irq_selftest(ctx.mem, n);
+            crate::serial_println!("{l}");
+            vec![l]
+        }
         "cdiag" => {
             // What a hosted glibc program (the browser) is doing right now: every
             // thread with its state and last syscall, the main thread's recent

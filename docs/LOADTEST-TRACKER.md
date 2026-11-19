@@ -3212,18 +3212,49 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   a late tick under two periods counts as one, and the LAPIC period is calibrated once. Not caused by BUG-380's fix (the
   same drift before and after, both runs at the same time on the same host). Not looked into further.
 
-### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ⬜ OPEN
-- **Status:**   OPEN · **Severity:** HIGH when it happens (the machine stops answering; no panic, no watchdog line), seen once
+### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug390`, tests `378f83d`, fix `9692f11`) · **Severity:** HIGH when it happens (the machine
+  stops answering; no panic, no watchdog line), seen once in a soak
 - **Found:**    2026-11-17 · the regression of ASLR S6 (`proof/11f-aslr-s6/`), in the chrome-mem-soak of the **base** image
   `7b2eea6` (S5, browser image, KVM 2 vCPU, 8 GiB), round 1, at the YouTube consent step: the desktop loop did not answer
-  the serial console within 40 s. The NMI probes (symbolised with the map of that build) show CPU 0 in the browser main
-  task (task 1, last system call 47 recvmsg) with IF=0 at `ring3::child_mem_swap+0x1ab`, a `lock cmpxchg`/`pause` spin on a
-  static spin lock, called from `ensure_globals_for_current` <- `yield_reacquire` <- `PollKeys::sleep` <-
-  `linux_dispatch_inner_raw`; the swapped globals were owned by task 77 (a fork child). So one of the locks `child_mem_swap`
-  takes (`CHILD_MEM`, or one of the swapped lists: `DEMAND_FILE_MAPS`, `PROT_NONE_RANGES`, `SHARED_ALIASES`, `SHARED_MAPS`,
-  `DEMAND_FREE`) was held by a task that did not run while this one spun with interrupts off. Not reproduced: the A/B rerun
-  of the same base soak and every S6 run passed (see the proof). Not looked into further and not fixed (out of scope of S6;
-  S6 adds only atomics to that swap, so the S6 code has the same path).
+  the serial console within 40 s. The NMI probes show CPU 0 in the browser main task (task 1, last system call 47
+  recvmsg) with IF=0 at `ring3::child_mem_swap+0x1ab`, called from `ensure_globals_for_current` <- `yield_reacquire` <-
+  `PollKeys::sleep` <- `linux_dispatch_inner_raw`; the swapped globals were owned by task 77 (a fork child).
+- **Cause (proven):** `child_mem_swap+0x1ab` of that build (rebuilt bit for bit, same link map) is the `pause` spin on
+  **`DEMAND_FILE_MAPS`** (`proof/11f-bug390/analysis.txt`). `child_mem_swap` runs with interrupts off and ring-0 code runs
+  on the BSP only, so the holder was a task that the timer had preempted while it held the lock with interrupts on, and
+  that could never run again. Such a holder exists: the desktop loop's heartbeat census (CDP heartbeat 12 and 20, "silent
+  after navigate", "cdp channel dead"; also `run_glibc_disk`'s stall profile) calls `dump_threads_now` ->
+  `dump_rip_profile` -> `demand_addr_origin`, which takes `DEMAND_FILE_MAPS` (and `DISK_FILES`, `FILES` under it) with
+  interrupts on, up to 16 times a dump. The `[prof]` line of the same heartbeat guards the same call
+  (`IfOffGuard`, runs 21 and 53); `dump_rip_profile` did not. Any task with interrupts off that wants the lock next (a
+  demand fault, mmap, mprotect, or a globals swap like the one of the browser main thread back from its poll) spins for
+  ever. Rare because the window is short (3 to 5 dumps a soak, microseconds each) and a tick has to land inside it.
+- **Reproduced:** self-test `[swap-irq]` (`378f83d`): a kernel task with interrupts on calls `demand_addr_origin`
+  without pause while `gslots` (40 fork children with 6 threads each, the parent's threads beside them) runs. Before the
+  fix **5 of 5 boots stop** (1, 2 and 4 vCPU): IF=0 spin on `DEMAND_FILE_MAPS` in `child_mem_swap+0x243` (4 vCPU, task 0
+  swapping the globals of a fork child back) or `ro_file_note+0x45` (mprotect), the holder the kernel task, Ready with
+  IF=1 inside `demand_addr_origin` (`proof/11f-bug390/tests-first.txt`).
+- **Fix:**      `irqlock::IrqLock`: interrupts off before the lock is taken, the previous state back after it is
+  released, whoever takes it. `CHILD_MEM`, the five lists `child_mem_swap` swaps (`DEMAND_FILE_MAPS`,
+  `PROT_NONE_RANGES`, `SHARED_ALIASES`, `SHARED_MAPS`, `DEMAND_FREE`), `GLIBC_FORK_CHILDREN` and `CHILD_THREADS` are
+  IrqLocks, so no caller (desktop loop, launcher, kernel task) can hold them preemptibly any more. Watch: a wait of 2 s
+  on an IrqLock prints `[irqlock] <lock> not free after 2 s` once per lock, with the waiting task and place and the
+  last holder and place.
+- **Verified:** `[swap-irq]` OK in **90 of 90** stress boots (30 each with 1, 2, 4 vCPU; 238 196 globals swaps,
+  508 million lookups beside them), KVM boots 1/2/4/8 GiB 0 markers worse than `55c6e25`, gui-smoke 67/67, Chromium 20/20
+  starts, sites 3 rounds 36/36, six chrome-mem-soaks of 1 h without a hang, ring-0 fault or watchdog
+  (`proof/11f-bug390/`). Not reproduced in a Chromium run itself: the soak hang was seen once in all soaks so far.
+- **Release 2026.11.17 (`b30adb6`):** the same code (`demand_addr_origin` takes `DEMAND_FILE_MAPS`, a plain spin lock,
+  unguarded from `dump_rip_profile`, which the heartbeat census calls): the same risk.
+
+### BUG-410 — FILES taken with interrupts on in the heap watch of run_glibc_disk ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (only `run_glibc_disk`: the chrome-boot image, the crashpad and LLM runners; not
+  the desktop browser)
+- **Found:**    2026-11-17 · reading for BUG-390: the launcher loop of `run_glibc_disk` (task 0, interrupts on: it ends
+  in `hlt`) sums `FILES` when the kernel heap grows by a 64 MiB step, without `IfOffGuard`. The demand fault handler and
+  system calls take `FILES` with interrupts off, so a tick inside that sum can stop the machine the way BUG-390 did.
+  `FILES` is an `eurolock` `Mode::Plain` lock (statistics only). Not reproduced, not changed in `feature/11f-bug390`.
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)

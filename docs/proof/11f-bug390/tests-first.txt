@@ -1,0 +1,86 @@
+# tests first: 378f83d (self-test, no fix) and the tree of 9692f11 (fix), KVM 2 vCPU 4 GiB, HD-Audio, no NIC,
+# R630 CPUs 8-11/28-31; drivers/kboot.sh, marker [swap-irq], NMI after 120 s of silence
+## 378f83d (tests, no fix): 2 of 2 boots stop in the stress of [swap-irq]
+t1-smp2-2 end=silent after 323s swapirq="" failed-lines=0 crash-lines=0 nmi=2
+t1-smp2-1 end=silent after 331s swapirq="" failed-lines=0 crash-lines=0 nmi=2
+### t1/t1-smp2-1.log: the last lines before the silence
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0xce4b72fb000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0xce4b7483000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0xce4b74d2000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0xce4b74e5740
+### t1/t1-smp2-1.log: NMI probe (raw; ring-3 tasks of gslots left out)
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ffef232 CS=0x8 RSP=0x0000000076199fa0 RFLAGS=0x40002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x000000006ff89230
+[nmi] CR2 (address of the last page fault) = 0x00000da694bd6000
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 15, fc, 30, 09, 04, 75, 04, eb, 13, f3, 90]
+[nmi] code rip..   : [8a, 05, f0, 30, 09, 04, 84, c0, 74, e6, eb, f2, 45, 31, e4, eb]
+[nmi] current task 6 last-syscall=334(a1=0xce4b74e6060)->0xffffffffffffffda globals-owner=0
+[nmi-tasks] 54 slots, current=6 (mirror 6), SCHED free, ticks=19622, min_vr=28184651259, t0 wants=false idle=false last-turn-tick=19619, sched-skips=0
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=28185118357 sys=6261 cpu=0 last=60(a1=0x0)->0x0 resumes rip=0x7002a5d5 cs=0x8 IF=1
+[nmi-tasks] t6 Ready pid=0 cr3=0x12e000 vr=28184651259 sys=12996 cpu=447 last=334(a1=0xce4b74e6060)->0xffffffffffffffda RUNNING
+[nmi-tasks] t24 Ready pid=0 cr3=0x0 vr=28191130883 sys=24690 cpu=650 last=1(a1=0x1)->0x45 resumes rip=0x70281b75 cs=0x8 IF=1
+[nmi-tasks] t1:S t2:S t3:S t4:S
+[nmi-tasks] 8 Ready, 4 Sleeping, 0 Blocked, 0 Zombie, 42 Dead
+[nmi] stack scan (return addresses):
+[nmi]   0x00000000740aab90
+[nmi]   0x000000007619a040
+[nmi]   0x0000000070029e9c
+========== END NMI PROBE ==========
+### t1/t1-smp2-2.log: the last lines before the silence
+[linux-abi] mmap(fd=3, off=163840, 1605632 B) file-backed -> 0xf8b2170a000 (1605632 B copied)
+[linux-abi] mmap(fd=3, off=1769472, 323584 B) file-backed -> 0xf8b21892000 (323584 B copied)
+[linux-abi] mmap(fd=3, off=2088960, 24576 B) file-backed -> 0xf8b218e1000 (24576 B copied)
+[linux-abi] arch_prctl SET_FS = 0xf8b218f4740
+### t1/t1-smp2-2.log: NMI probe (raw; ring-3 tasks of gslots left out)
+========== NMI PROBE (wedge RIP capture) ==========
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ffef232 CS=0x8 RSP=0x0000000076199fa0 RFLAGS=0x40002
+[nmi] anchor kernel_base ~ nmi_handler @ 0x000000006ff89230
+[nmi] CR2 (address of the last page fault) = 0x00000dd6cf246000
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 15, fc, 30, 09, 04, 75, 04, eb, 13, f3, 90]
+[nmi] code rip..   : [8a, 05, f0, 30, 09, 04, 84, c0, 74, e6, eb, f2, 45, 31, e4, eb]
+[nmi] current task 6 last-syscall=334(a1=0xf8b218f5060)->0xffffffffffffffda globals-owner=0
+[nmi-tasks] 54 slots, current=6 (mirror 6), SCHED free, ticks=19018, min_vr=27670316991, t0 wants=false idle=false last-turn-tick=19018, sched-skips=0
+[nmi-tasks] t6 Ready pid=0 cr3=0x12e000 vr=27670316991 sys=12897 cpu=422 last=334(a1=0xf8b218f5060)->0xffffffffffffffda RUNNING
+[nmi-tasks] t24 Ready pid=0 cr3=0x0 vr=27678289671 sys=24666 cpu=587 last=1(a1=0x1)->0x45 resumes rip=0x70281b80 cs=0x8 IF=1
+[nmi-tasks] t0:S t1:S t2:S t3:S t4:S
+[nmi-tasks] 7 Ready, 5 Sleeping, 0 Blocked, 0 Zombie, 42 Dead
+[nmi] stack scan (return addresses):
+[nmi]   0x00000000740aab90
+[nmi]   0x000000007619a040
+[nmi]   0x0000000070029e9c
+========== END NMI PROBE ==========
+### symbolised with the map of that build (t1-st.map; base from nmi_handler)
+interrupted RIP 0x6ffef232 = ring3::ro_file_note+0x45: lock cmpxchg / pause spin on 0x74082328 = ring3::DEMAND_FILE_MAPS (IF=0, task 6 = gslots main, in mprotect)
+t24 (kernel task of the test, cr3=0, Ready, IF=1) resumes at 0x70281b75 = memcpy+0x2b: inside demand_addr_origin, holding DEMAND_FILE_MAPS, preempted by the timer
+## tree of 9692f11 (fix): 2 of 2 OK
+f1-smp2-2 end=marker after 214s swapirq="" failed-lines=0 crash-lines=0 nmi=0
+f1-smp2-1 end=marker after 218s swapirq="" failed-lines=0 crash-lines=0 nmi=0
+f1/f1-smp2-1.log:[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2366 lookups 5917961; -> OK ✓
+f1/f1-smp2-2.log:[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2360 lookups 6055988; -> OK ✓
+
+## 378f83d at 1 and 4 vCPU (4 GiB; drivers/kboot.sh, after the stress; t1-smp1-2 shared CPU 35 with t1-smp4-1)
+t1-smp4-1 end=silent after 347s swapirq= failed-lines=1 crash-lines=0 nmi=2
+t1-smp1-2 end=silent after 392s swapirq= failed-lines=0 crash-lines=0 nmi=2
+### t1/t1-smp4-1.log: probe
+[nmi] interrupted RIP=0x000000006ffd9d5d CS=0x8 RSP=0x000000007fe46610 RFLAGS=0x2
+[nmi] code rip-16..: [d7, 85, 08, 04, 75, 04, eb, 0e, f3, 90, 8a, 05, cb, 85, 08, 04]
+[nmi] code rip..   : [84, c0, 74, e6, eb, f2, 31, d2, 48, 8d, 05, bc, 85, 08, 04, 4c]
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=12
+[nmi-tasks] t0 Ready pid=0 cr3=0x0 vr=29532408524 sys=6261 cpu=0 last=60(a1=0x0)->0x0 RUNNING
+[nmi-tasks] t24 Ready pid=0 cr3=0x0 vr=29546038379 sys=24724 cpu=749 last=1(a1=0x1)->0x45 resumes rip=0x700af4e0 cs=0x8 IF=1
+### t1/t1-smp1-1.log: probe
+### t1/t1-smp1-2.log: probe
+[nmi] interrupted RIP=0x000000006ffff232 CS=0x8 RSP=0x00000000761a9fa0 RFLAGS=0x40002
+[nmi] code rip-16..: [31, c0, f0, 0f, b0, 15, fc, 30, 09, 04, 75, 04, eb, 13, f3, 90]
+[nmi] code rip..   : [8a, 05, f0, 30, 09, 04, 84, c0, 74, e6, eb, f2, 45, 31, e4, eb]
+[nmi] current task 6 last-syscall=334(a1=0xc8b33a96060)->0xffffffffffffffda globals-owner=0
+[nmi-tasks] t24 Ready pid=0 cr3=0x0 vr=33868338497 sys=14683 cpu=901 last=1(a1=0x1)->0x45 resumes rip=0x70198898 cs=0x8 IF=1
+### symbolised (t1-st.map)
+t1-smp4-1: RIP 0x6ffd9d5d = ring3::child_mem_swap+0x243, the pause spin on 0x74062328 = ring3::DEMAND_FILE_MAPS, IF=0,
+  task 0 (the launcher of gslots, back from a yield: globals of fork child task 12 swapped out); t24 (the kernel task of
+  the test) Ready with IF=1 at GlobalAlloc::alloc+0x21d, inside demand_addr_origin with DEMAND_FILE_MAPS held:
+  the picture of BUG-390 (child_mem_swap spinning on DEMAND_FILE_MAPS, the holder a preempted task with interrupts on).
+t1-smp1-2: RIP 0x6ffff232 = ring3::ro_file_note+0x45 spinning on DEMAND_FILE_MAPS (same as the smp 2 boots).

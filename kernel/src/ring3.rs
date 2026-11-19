@@ -196,7 +196,8 @@ unsafe fn recover_mmap_offset() -> u64 {
 /// -> the program CHECK-crashed (fontations/Rust stack-guard probe). We now record
 /// PROT_NONE ranges and treat them as NOT valid user memory (EFAULT on kernel touch,
 /// fault on ring-3 access). Atomic count gives a lock-free fast path (usually 0).
-static PROT_NONE_RANGES: Mutex<alloc::vec::Vec<(u64, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static PROT_NONE_RANGES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "PROT_NONE_RANGES");
 /// Audio diagnostics: the renderer's AudioOutputDevice thread and the browser's
 /// AudioThread (resolved by name at each heartbeat); their next syscalls are logged
 /// as [audio-sys] so the two ends of the audio sync socketpair become visible.
@@ -11162,7 +11163,8 @@ static GLIBC_THREADS: Mutex<alloc::vec::Vec<usize>> = Mutex::new(alloc::vec::Vec
 /// child_main_task). They must swap the SAME ChildMem as their child process,
 /// or a thread runs on the child's PML4 but the parent's demand-state and
 /// faults. Populated when a fork child (or one of its threads) clones.
-static CHILD_THREADS: Mutex<alloc::vec::Vec<(usize, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static CHILD_THREADS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_THREADS");
 
 /// The fork-child main task that owns `task`'s address space, if any.
 fn fork_child_owner(task: usize) -> Option<usize> {
@@ -11184,8 +11186,8 @@ fn current_is_fork_child() -> bool {
     fork_child_owner(crate::sched::current()).is_some()
 }
 
-static GLIBC_FORK_CHILDREN: Mutex<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
-    Mutex::new(alloc::vec::Vec::new());
+static GLIBC_FORK_CHILDREN: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, usize, u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "GLIBC_FORK_CHILDREN");
 
 /// Exited glibc fork children waiting to be reaped: (child pid, wait status).
 /// The launched main process is the only waiter, so no parent key is needed.
@@ -11231,7 +11233,10 @@ struct ChildMem {
     shared_maps: alloc::vec::Vec<(usize, u64, usize)>,
     free: euromm::FreeRanges,
 }
-static CHILD_MEM: Mutex<alloc::vec::Vec<ChildMem>> = Mutex::new(alloc::vec::Vec::new());
+// BUG-390: CHILD_MEM, the five lists `child_mem_swap` swaps, GLIBC_FORK_CHILDREN and
+// CHILD_THREADS are `IrqLock`s: held with interrupts off by every taker (see irqlock.rs).
+static CHILD_MEM: crate::irqlock::IrqLock<alloc::vec::Vec<ChildMem>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "CHILD_MEM");
 
 /// Snapshot the CURRENT globals into a fresh ChildMem for a just-forked task.
 /// The child inherits the parent's mappings, so it starts as a copy.
@@ -11389,7 +11394,137 @@ fn child_mem_swap(task: usize) -> bool {
     core::mem::swap(&mut *SHARED_ALIASES.lock(), &mut cm.shared_aliases);
     core::mem::swap(&mut *SHARED_MAPS.lock(), &mut cm.shared_maps);
     core::mem::swap(&mut *DEMAND_FREE.lock(), &mut cm.free);
+    CHILD_MEM_SWAPS.fetch_add(1, Ordering::Relaxed);
     true
+}
+
+/// Swaps of the per-process demand state done so far (`child_mem_swap`, in or out).
+pub static CHILD_MEM_SWAPS: AtomicU64 = AtomicU64::new(0);
+
+// -- BUG-390: the locks of the swapped state and a holder with interrupts on ([swap-irq]) --
+//
+// `child_mem_swap` runs with interrupts off (every caller: the system-call and
+// fault entries, `yield_reacquire`, `irq_window`) and takes CHILD_MEM and the
+// five lists it swaps. Ring-0 code runs on the BSP only, so a holder of one of
+// those locks that the timer preempted with interrupts on can never run again
+// once a task with interrupts off spins on that lock: the machine stops. The
+// soak of BUG-390 stopped exactly there (DEMAND_FILE_MAPS, `child_mem_swap+0x1ab`
+// in the 7b2eea6 build), and the desktop loop takes DEMAND_FILE_MAPS with
+// interrupts on in the heartbeat census (`dump_rip_profile` ->
+// `demand_addr_origin`). The test below does that from a kernel task while a
+// program with fork children and threads swaps the state all the time.
+
+static SWAPHAM_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static SWAPHAM_CALLS: AtomicU64 = AtomicU64::new(0);
+static SWAPHAM_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
+
+/// A kernel task (interrupts on, preemptible, as the desktop loop) that does
+/// what the heartbeat census does: name the file behind demand addresses.
+extern "C" fn swap_hammer_main() -> ! {
+    loop {
+        while SWAPHAM_ON.load(Ordering::Acquire) {
+            let base = demand_base();
+            let span = DEMAND_NEXT.load(Ordering::Relaxed).saturating_sub(base).max(0x1000);
+            let n = SWAPHAM_CALLS.load(Ordering::Relaxed);
+            let s = demand_addr_origin(base + (n.wrapping_mul(0x9E37_79B9_7F4A_7C15) % span));
+            core::hint::black_box(s);
+            SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        {
+            let _g = crate::sched::IfOffGuard::new();
+            if !SWAPHAM_ON.load(Ordering::Acquire) {
+                crate::sched::block_on(SWAPHAM_CHAN);
+            }
+        }
+        crate::sched::yield_now();
+    }
+}
+
+/// `[swap-irq]`: (1) every lock that `child_mem_swap` and `fork_child_owner`
+/// take is held with interrupts off, also when the taker had them on; (2) the
+/// stress: `gslots` (40 fork children with 6 threads each, ended three ways,
+/// with threads of the parent beside them) runs while a kernel task with
+/// interrupts on takes DEMAND_FILE_MAPS without pause (`demand_addr_origin`).
+/// Before the fix (2) stops the machine (BUG-390). `rounds` runs of (2).
+pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
+    let rounds = rounds.max(1);
+    let if_was = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::enable();
+    let mut bad: Vec<&str> = Vec::new();
+    macro_rules! held_irq_off {
+        ($name:literal, $l:expr) => {{
+            {
+                let _g = $l.lock();
+                if x86_64::instructions::interrupts::are_enabled() {
+                    bad.push($name);
+                }
+            }
+            if !x86_64::instructions::interrupts::are_enabled() {
+                bad.push(concat!($name, " (interrupts left off)"));
+                x86_64::instructions::interrupts::enable();
+            }
+        }};
+    }
+    held_irq_off!("CHILD_MEM", CHILD_MEM);
+    held_irq_off!("DEMAND_FILE_MAPS", DEMAND_FILE_MAPS);
+    held_irq_off!("PROT_NONE_RANGES", PROT_NONE_RANGES);
+    held_irq_off!("SHARED_ALIASES", SHARED_ALIASES);
+    held_irq_off!("SHARED_MAPS", SHARED_MAPS);
+    held_irq_off!("DEMAND_FREE", DEMAND_FREE);
+    held_irq_off!("GLIBC_FORK_CHILDREN", GLIBC_FORK_CHILDREN);
+    held_irq_off!("CHILD_THREADS", CHILD_THREADS);
+    {
+        let g = GLIBC_FORK_CHILDREN.try_lock();
+        if g.is_some() && x86_64::instructions::interrupts::are_enabled() {
+            bad.push("GLIBC_FORK_CHILDREN (try_lock)");
+        }
+    }
+    x86_64::instructions::interrupts::enable();
+    if SWAPHAM_TASK.load(Ordering::Relaxed) == usize::MAX {
+        match crate::sched::spawn_kernel(swap_hammer_main, 0) {
+            Some(t) => SWAPHAM_TASK.store(t, Ordering::Relaxed),
+            None => {
+                if !if_was {
+                    x86_64::instructions::interrupts::disable();
+                }
+                return String::from("[swap-irq] no free task slot for the kernel task: SKIPPED");
+            }
+        }
+    }
+    let caps = CAP_CONSOLE | CAP_FILE | CAP_PROC_INFO;
+    let mut runs_ok = 0usize;
+    let mut detail = String::new();
+    for r in 0..rounds {
+        reap_dead(falloc);
+        let s0 = CHILD_MEM_SWAPS.load(Ordering::Relaxed);
+        SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+        SWAPHAM_ON.store(true, Ordering::Release);
+        crate::sched::wake(SWAPHAM_CHAN, 1);
+        let prev_deadline = GLIBC_DEADLINE_TICKS.swap(36_000, Ordering::Relaxed);
+        let (out, exit) = run_glibc(falloc, gslots_bytes(), ldlinux_bytes(), &[b"/bin/gslots"], &[b"PATH=/bin"], caps);
+        GLIBC_DEADLINE_TICKS.store(prev_deadline, Ordering::Relaxed);
+        SWAPHAM_ON.store(false, Ordering::Release);
+        reap_dead(falloc);
+        let swaps = CHILD_MEM_SWAPS.load(Ordering::Relaxed) - s0;
+        let calls = SWAPHAM_CALLS.load(Ordering::Relaxed);
+        let ok = (exit == 88 || exit == 89) && out.contains("GSLOTS:") && calls > 0 && (exit == 89 || swaps > 0);
+        if ok {
+            runs_ok += 1;
+        }
+        if r < 3 || !ok {
+            detail.push_str(&alloc::format!(" run {}: exit {} swaps {swaps} lookups {calls}{};",
+                r + 1, exit as i64, if ok { "" } else { " FAILED" }));
+        }
+    }
+    if !if_was {
+        x86_64::instructions::interrupts::disable();
+    }
+    let ok = bad.is_empty() && runs_ok == rounds;
+    alloc::format!(
+        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} -> {}",
+        if bad.is_empty() { String::from("none") } else { bad.join(", ") },
+        if ok { "OK ✓" } else { "FAILED" })
 }
 
 /// A fork child exited: drop its saved memory state.
@@ -12631,17 +12766,20 @@ const DEMAND_FILE_MIN_BYTES: u64 = 1 << 20; // route file-backed mmaps >= 1 MiB 
 //  valid bytes from mapping start — beyond this the mapping reads as zero). `valid`
 //  lets one PT_LOAD segment map its filesz from the file and zero-fill the memsz
 //  tail (.bss) even when the boundary falls mid-page — the ELF loader's semantics.
-static DEMAND_FILE_MAPS: Mutex<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> = Mutex::new(alloc::vec::Vec::new());
+static DEMAND_FILE_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize, usize, u64)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "DEMAND_FILE_MAPS");
 /// Address ranges of this process's demand region that munmap gave back
 /// (BUG-131): an anonymous mmap takes its addresses from here before the bump
 /// pointer moves. Swapped per process with the rest of the demand state.
-static DEMAND_FREE: Mutex<euromm::FreeRanges> = Mutex::new(euromm::FreeRanges::new());
+static DEMAND_FREE: crate::irqlock::IrqLock<euromm::FreeRanges> =
+    crate::irqlock::IrqLock::new(euromm::FreeRanges::new(), "DEMAND_FREE");
 static DEMAND_REUSED: AtomicU64 = AtomicU64::new(0);
 /// Live MAP_SHARED regions: (file index, arena base, region length). One entry per
 /// shared in-RAM file (memfd/tmpfs) for the duration of a process — every mapping of
 /// that file resolves to this one region, which is what "shared memory" means. Arena
 /// addresses are per-process, so this is cleared when a process starts.
-static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_MAPS: crate::irqlock::IrqLock<alloc::vec::Vec<(usize, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_MAPS");
 /// Physical frames backing a shared file, one per page, allocated on first touch
 /// (0 = not yet). This is what makes sharing REAL: every mapping of the file gets
 /// its own address range, and each range faults onto THESE frames, so a write
@@ -12650,7 +12788,8 @@ static SHARED_MAPS: Mutex<alloc::vec::Vec<(usize, u64, usize)>> = Mutex::new(all
 /// keyed BY ADDRESS and CHECK-fails when two of them collide.
 static SHARED_FRAMES: Mutex<alloc::vec::Vec<(usize, euromm::ramfile::PageFile)>> = Mutex::new(alloc::vec::Vec::new());
 /// Address ranges handed out for shared mappings: (base, length, file index).
-static SHARED_ALIASES: Mutex<alloc::vec::Vec<(u64, u64, usize)>> = Mutex::new(alloc::vec::Vec::new());
+static SHARED_ALIASES: crate::irqlock::IrqLock<alloc::vec::Vec<(u64, u64, usize)>> =
+    crate::irqlock::IrqLock::new(alloc::vec::Vec::new(), "SHARED_ALIASES");
 static DEMAND_FILE_FILLED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEMAND_POOL_OOM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static DEMAND_DIAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);

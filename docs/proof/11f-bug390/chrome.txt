@@ -1,0 +1,53 @@
+# Chromium runs of the fix (fix-br.img = public image of the tree of 9692f11 + ui.tour=off, update.check=off), KVM 2 vCPU, user-net without hostfwd, pack chrome-pack2.img, nss-pack-vid.img
+# soak1-*: wave 1, three soaks side by side (CPUs 8,9 / 10,11 / 12,13) beside the 90 stress boots; soak2-*: wave 2, same CPUs, beside phase 2 (KVM boots, gui-smoke, starts, sites)
+# sites-s6: one sites round of the S6 base (55c6e25) beside the fix, for the YouTube verdict
+## soak1-a: [chrome-mem-soak] FAIL (1 step(s)): 5 rounds in 4081 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=3
+## soak1-b: [chrome-mem-soak] FAIL (1 step(s)): 5 rounds in 4086 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=3
+## soak1-c: [chrome-mem-soak] FAIL (3 step(s)): 5 rounds in 4112 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=5
+## soak2-a: [chrome-mem-soak] FAIL (2 step(s)): 5 rounds in 4024 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=4
+## soak2-b: [chrome-mem-soak] PASS: 5 rounds in 3946 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=2
+## soak2-c: [chrome-mem-soak] PASS: 5 rounds in 3951 s | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=68 irqlock=0 nmi=0 rip-dumps=2
+## starts20: [chrome-smoke] starts: 20/20 PASS | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=188 irqlock=0 nmi=0 rip-dumps=0
+## sites3: [chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /dev/shm/b390/sites3 | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=43 irqlock=0 nmi=0 rip-dumps=2
+## sites-s6: [chrome-smoke] FAIL (1 step(s)) - 13/14 steps ok, report and screenshots in /dev/shm/b390/sites-s6 | aborts=0 ring0=0 watchdog=0 FROZEN=0 oom=0 execs=23 irqlock=0 nmi=0 rip-dumps=2
+## soak steps
+soak1-a: [chrome-smoke] FAIL (1 step(s)) - 122/123 steps ok, report a
+  FAIL site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.6 s, load finished 17.4 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 1304 ms
+soak1-b: [chrome-smoke] FAIL (1 step(s)) - 122/123 steps ok, report a
+  FAIL site youtube: https://www.youtube.com/: https://www.youtube.com/ after 2.4 s, load finished 17.2 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 1130 ms
+soak1-c: [chrome-smoke] FAIL (3 step(s)) - 120/123 steps ok, report a
+  FAIL site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.7 s, load finished 18.7 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 1545 ms
+  FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.5 s, load finished 2.8 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 478 ms
+  FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.5 s, load finished 1.7 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 286 ms
+soak2-a: [chrome-smoke] FAIL (2 step(s)) - 121/123 steps ok, report a
+  FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.5 s, load finished 2.8 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 154 ms
+  FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.6 s, load finished 1.9 s later; content 274 colours, commonest 85%, still changing; desktop loop: slowest console answer 244 ms
+soak2-b: [chrome-smoke] PASS - 123/123 steps ok, report and screensho
+soak2-c: [chrome-smoke] PASS - 123/123 steps ok, report and screensho
+## local VP9+Opus with sound, one clip set a round (picture: 28 consecutive screendumps differ; sound: 12 five-second windows above the noise floor)
+soak1-a: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+soak1-b: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+soak1-c: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+soak2-a: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+soak2-b: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+soak2-c: picture 10 of 10 steps with 28 of 28 = 10, sound 10 of 10 steps with 12 of 12 = 10, local-video FAIL lines 0
+## YouTube, first visit (consent dialog: "reject all" clicked in every run); console stall per visit (FAIL when the slowest console answer >= 1000 ms)
+soak1-a: FAIL 1304 ms  454 ms  599 ms  395 ms  245 ms
+soak1-b: FAIL 1130 ms  370 ms  296 ms  306 ms  306 ms
+soak1-c: FAIL 1545 ms  305 ms  570 ms  315 ms  427 ms
+soak2-a:  564 ms  327 ms  252 ms  349 ms  223 ms
+soak2-b:  433 ms  310 ms  207 ms  212 ms  283 ms
+soak2-c:  668 ms  683 ms  245 ms  402 ms  364 ms
+sites3:  697 ms  350 ms  270 ms
+sites-s6: FAIL 1246 ms
+## consent banners (YouTube)
+     12 [gui-smoke] ok   consent youtube-last: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (534, 640), banner gone; fu
+      6 [gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; fu
+      7 [gui-smoke] ok   consent youtube-r2: no banner button found: find-in-page matched none of 17 labels
+      7 [gui-smoke] ok   consent youtube-r3: no banner button found: find-in-page matched none of 17 labels
+      1 [gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full 
+## gui-smoke (fix-pub.img, smp 4, 4 GiB)
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/b390-runs/runs/gs-fix
+## starts
+[chrome-smoke] starts: 20/20 PASS
