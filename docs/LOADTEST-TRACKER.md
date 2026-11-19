@@ -1806,6 +1806,12 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   not lost ticks. `[clock-drift]` FAILED 9 of 9 base boots -> OK everywhere; host drift over 30 min KVM at rest -855 ->
   +0.9 ppm, busy siblings -1975 -> +0.1 ppm, TCG -2222 -> +0.0 ppm. Found: BUG-420 (wall clock set once to the second,
   never adjusted), BUG-421 (markers-compare misses "-> OK"). Proof `docs/proof/11f-bug400/`.
+- **2026-11-19 (`feature/11f-integ2`):** BUG-400 (`feature/11f-bug400`) merged into ASLR S0-S7 + BUG-390 + BUG-410 (`b3eda20`,
+  only the tracker conflicted): KVM boots 1/2/4 GiB x 1/2/4 vCPU 0 markers worse against `79891a2` and `249cbf9`, `[clock-drift]`,
+  `[vdso-mono]`, `[swap-irq]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]`, `[arena-segs]` OK; TCG matrix 10/10;
+  drift over 15 min KVM +4.7 ppm at rest, +0.1 ppm busy; gui-smoke 67/67; Chromium 5/5 and 14/14. Proof `docs/proof/11f-integ2/`.
+  BUG-430 fixed (`GLIBC_THREADS` under `IfOffGuard`): `[swap-irq]` part 4 stopped 5 of 5 boots before, 30 of 30 OK after.
+  Found: BUG-440 (guard released before the lock), more candidates added to BUG-431. Proof `docs/proof/11f-bug430/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3307,17 +3313,38 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   interrupt state comes back. `FILES` itself is not made an `IrqLock`: its takers copy file contents and call functions
   that take other locks while they hold it, and not every one of them is reviewed for that.
 - **Verified:** see `proof/11f-bug410/README.md`.
-- **Same class, found by reading, NOT changed:** BUG-430, BUG-431.
+- **Same class, found by reading:** BUG-430 (fixed after this, `proof/11f-bug430/`), BUG-431 (open).
 
-### BUG-430 — GLIBC_THREADS taken with interrupts on in the launcher, the CDP frame and run_glibc ⬜ OPEN
-- **Status:**   OPEN (found by reading, not reproduced, not changed) · **Severity:** LOW to MEDIUM (`cdp_begin_frame` runs
+### BUG-430 — GLIBC_THREADS taken with interrupts on in the launcher, the CDP frame and run_glibc ✅ FIXED
+- **Status:**   FIXED (`feature/11f-integ2`, tests `acd65ba`, fix `9000469`) · **Severity:** LOW to MEDIUM (`cdp_begin_frame` runs
   in the desktop browser path)
 - **Found:**    2026-11-19 · looking for the class of BUG-410: `GLIBC_THREADS` (a plain `spin::Mutex`) is taken with
-  interrupts off by `linux_dispatch_inner_raw` (clone, exit, exit_group), `futex_purge_task`, `proc_tasks` and
-  `set_process_profile`, and with interrupts on by `cdp_begin_frame` (it prints inside the loop), `run_glibc_disk` (stall
-  snapshot, end of the run), `kill_glibc_group`, `spawn_glibc_persistent` and `run_glibc` (all in `ring3.rs`).
-  `dump_threads_now` and one site of `cdp_pump_inner` already guard it. Same hang as BUG-390 when a tick lands in a
-  critical section of an unguarded taker.
+  interrupts off by `linux_dispatch_inner_raw` (clone, exit, exit_group), `proc_tasks`, `set_process_profile`,
+  `fault_kill_group` and `retire_task` (from `kill`), and with interrupts on by `cdp_begin_frame` (it prints inside the
+  loop), `run_glibc_disk` (stall snapshot, end of the run), `kill_glibc_group`, `spawn_glibc_persistent`, `run_glibc`
+  (all in `ring3.rs`), and by `glibc_disk_launch`, `kill_persistent_glibc` and `retire_task` (from the end-of-run reap of
+  fork children) which the first list did not name. `futex_purge_task` is a false positive (it takes `FUTEX_QUEUE`).
+  Same hang as BUG-390 when a tick lands in a critical section of an unguarded taker.
+- **Checked per site:** every taker with interrupts on runs on task 0 (the launcher loop, the desktop loop: `cdp_pump`) or in
+  the end-of-run reap; BUG-040 documents that the launch code of `run_glibc` and `spawn_glibc_persistent` runs with
+  interrupts on. The takers with interrupts off are the system-call dispatcher (FMASK) and the fault handlers (interrupt
+  gates). `dump_threads_now` does not take the lock at all (the first list was wrong there); the one guarded site of
+  `cdp_pump_inner` had its guard and its lock released in the wrong order (BUG-440).
+- **Cause (proven by the test):** the launchers and `cdp_begin_frame` took `GLIBC_THREADS` without `IfOffGuard`, some of
+  them held it across other work (`reclaim_task`, `free_thread_kstack`, `serial_println!`).
+- **Reproduced:** `[swap-irq]` part 4 (`acd65ba`): a kernel task with interrupts on copies, counts and edits the list the
+  way the launchers do (32 entries) without pause while the test task takes it with interrupts off (as clone and exit do)
+  for 3 s. Before the fix **5 of 5 boots stop** (1, 2 and 4 vCPU): the NMI probe shows CPU 0, IF=0, the test task
+  spinning on the lock byte of `GLIBC_THREADS` (`proof/11f-bug430/tests-first.txt`).
+- **Fix:**      `glibc_threads_snapshot`, `_len`, `_clear`, `_forget` (one place): `IfOffGuard` before the lock, the lock
+  released before the interrupt state comes back, the critical section a copy; every taker with interrupts on goes
+  through them and works on the copy, so none of them holds the lock across other work. The takers with interrupts off
+  (dispatcher, `proc_tasks`, `set_process_profile`, `fault_kill_group`) are unchanged. `GLIBC_THREADS` is not an
+  `IrqLock`: the dispatcher sites hold it while they print and free kernel stacks, and I did not want to change those.
+- **Verified:** KVM boots 1/2/4 GiB x 1/2/4 vCPU 0 worse than the merge, `[swap-irq]` stress 30 of 30, gui-smoke 67/67, Chromium 10/10 starts
+  and 14/14 sites, chrome-mem-soak 1 h PASS (123/123 steps, 0 ring-0 faults, 0 watchdog, 0 freezes, 0 `[irqlock]`); see
+  `proof/11f-bug430/README.md`. `cdp_begin_frame` itself did not run in the browser runs (covered by the test only).
+- **Same class, found by reading, NOT changed:** BUG-431 (more locks), BUG-440 (guard released before the lock).
 
 ### BUG-431 — OUTPUT, THREAD_NAMES, GLIBC_CTIDS, CURRENT_APP, CHILD_EXE_PATH, DISK_FILES also taken both ways ⬜ OPEN
 - **Status:**   OPEN (found by a scan, not checked site by site, not reproduced, not changed) · **Severity:** LOW
@@ -3330,6 +3357,23 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   `main.rs`), `files_count` (`churn.rs`, `ltstat.rs`), `register_file` and `register_file_static` (boot and launch code),
   `fdsem_selftest`. A function listed here is a candidate: whether it runs with interrupts on while a program runs has
   to be checked per site.
+- **Added 2026-11-19 (BUG-430 work, by reading, not changed):** in the desktop browser path: `cdp_begin_frame` calls
+  `thread_name` (`THREAD_NAMES`, no guard; the system call that sets a thread name takes it with interrupts off) with
+  interrupts on, inside the same loop that BUG-430 fixed; `retire_task` takes `GLIBC_CTIDS` and `THREAD_NAMES` without a
+  guard and is reached with interrupts on from `kill_persistent_glibc` -> `reap_orphan_fork_children` ->
+  `fork_child_teardown` (the browser is closed) and from the end-of-run reap; `fork_child_teardown` takes
+  `GLIBC_CHILD_EXITS` the same way. `dump_threads_now` calls `thread_name(main)` unguarded.
+
+### BUG-440 — the IfOffGuard is released before the lock at four heartbeat and diagnostic sites ⬜ OPEN
+- **Status:**   OPEN (found by reading, the drop order checked with a small program, not reproduced, not changed) ·
+  **Severity:** LOW (a window of a few instructions)
+- **Found:**    2026-11-19 · fixing BUG-430: the pattern `{ let _g = IfOffGuard::new(); X.lock().clone() }` (edition 2021)
+  drops `_g` (interrupts back on) before the temporary of the tail expression, the lock guard, so the lock is released with
+  interrupts on. A tick in that window parks the holder and the next taker with interrupts off spins (BUG-390 class).
+  Sites: `ring3.rs` `cdp_pump_inner` (the heartbeat: `FILES` at the `files_mib` sum, `THREAD_NAMES` before the `[rmain]` line,
+  `SOCK_PAIRS` in the fd-peer lookup; the desktop browser path) and `dump_threads_now` (`THREAD_NAMES`). The BUG-430 site
+  of `cdp_pump_inner` had the same defect and is fixed (it goes through `glibc_threads_snapshot`). Fix: bind the value in a
+  statement of its own (`let v = X.lock().clone(); v`), as `files_heap_bytes` does.
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)

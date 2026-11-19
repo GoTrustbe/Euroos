@@ -1,0 +1,22 @@
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr]   exe      first 0x0a82129ea460  varying bits 30  distinct 64/64
+[aslr]   ldso     first 0x0a821310d000  varying bits 30  distinct 64/64
+[aslr]   libc     first 0x29bccbe50100  varying bits 30  distinct 64/64
+[aslr]   stack    first 0x10ab4e898d1c  varying bits 29  distinct 64/64
+[aslr]   brk      first 0x0d8e0b6ba000  varying bits 29  distinct 64/64
+[aslr]   mmap     first 0x0d8e0d803000  varying bits 30  distinct 64/64
+[aslr]   mmapbig  first 0x29bccc002000  varying bits 30  distinct 64/64
+[aslr]   vdso     first 0x64478ebb5000  varying bits 27  distinct 64/64
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-phys] 7 addresses of a glibc process looked up in its page tables: none is its own physical address → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[aslr-fork] 8 fork children: every region (exe, ld.so, libc, stack, brk, mmap 4 KiB and 1 MiB, vDSO) at the address of the parent → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+[vdso-mono]   diag: vdso.so reads the TSC ordered inside the seqlock: yes (1 ordered, 0 bare rdtsc); old read (rdtsc after the check): steps back 0 (max 0 ns), 0 of them right after a read that took its TSC after the anchor changed; ordered read (lfence; rdtsc; lfence inside the seqlock): steps back
+[vdso-mono] 16 late ticks of 1.5 periods, a 2 s run (2798821 rounds), 16 stalled reads: steps back mono 0 ns, boot 0 ns, real 0 ns (0 times); system call outside its two vDSO reads 0 times (max 0 ns); below an earlier read of another CPU: BSP 0 times (max 0 ns); 1 of 1 APs read along (233472 reads, 
+[clock-drift] rest: 10016 ms of HPET time: clock +0 ppm (+7 us), tick count +302 ppm (+3 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2203934 kHz by the 10 ms calibration (+1800 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 2, by forced advances 0
+[clock-drift] late: 6030 ms of HPET time: clock +0 ppm (-2 us), tick count -54 ppm (+0 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203934 kHz by the 10 ms calibration (+1800 ppm); timer interrupts 518 of 601 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift]   time base: reference HPET, 186 samples (0 refused, 0 restarts), offset from it now +3 us, largest 1821 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK

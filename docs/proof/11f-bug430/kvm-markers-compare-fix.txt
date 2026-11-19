@@ -1,0 +1,71 @@
+# KVM self-test boots of the fix (fix-st) and of the merge (m-st), 1/2/4 GiB x 1/2/4 vCPU, same method as 11f-integ2
+## fix-st
+smp1-1G: s1-1G end=marker after 240s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp1-2G: s1-2G end=marker after 252s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp1-4G: s1-4G end=marker after 258s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-1G: s2-1G end=marker after 244s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp2-2G: s2-2G end=marker after 259s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-4G: s2-4G end=marker after 263s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-1G: s4-1G end=marker after 244s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp4-2G: s4-2G end=marker after 250s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-4G: s4-4G end=marker after 264s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+## m-st
+smp1-1G: s1-1G end=marker after 241s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp1-2G: s1-2G end=marker after 252s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp1-4G: s1-4G end=marker after 254s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-1G: s2-1G end=marker after 246s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp2-2G: s2-2G end=marker after 256s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp2-4G: s2-4G end=marker after 258s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-1G: s4-1G end=marker after 233s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+smp4-2G: s4-2G end=marker after 250s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+smp4-4G: s4-4G end=marker after 262s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+
+# markers-compare, merge (base) against the fix (new): WORSE 0, CHANGED 0, nothing only in one side in 9 of 9 (the text of the [swap-irq] line changed, its verdict did not)
+== kvm/m-st/s1-1G.log  vs  kvm/fix-st/s1-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s1-2G.log  vs  kvm/fix-st/s1-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s1-4G.log  vs  kvm/fix-st/s1-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s2-1G.log  vs  kvm/fix-st/s2-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s2-2G.log  vs  kvm/fix-st/s2-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s2-4G.log  vs  kvm/fix-st/s2-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s4-1G.log  vs  kvm/fix-st/s4-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s4-2G.log  vs  kvm/fix-st/s4-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/m-st/s4-4G.log  vs  kvm/fix-st/s4-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+
+# the [swap-irq] line of the fix (2 vCPU, 4 GiB):
+[swap-irq] locks of the swapped state held with interrupts on: none; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: 1 of 1 runs ok; run 1: exit 88 swaps 2506 lookups 5717900; FILES: 600000 takes with interrupts off beside 272658 heap-watch sums with interrupts on; GLIBC_THREADS: 600000 takes with interrupts off beside 2623126 launcher-style copies with interrupts on -> OK ✓

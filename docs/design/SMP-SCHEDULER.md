@@ -218,8 +218,14 @@ Two refinements, each behind its own measurement:
   lists `child_mem_swap` swaps, `GLIBC_FORK_CHILDREN`, `CHILD_THREADS`) are `irqlock::IrqLock`s: interrupts off
   while held, whoever takes them; a wait of 2 s prints an `[irqlock]` line with the last holder and its place.
   `FILES` (plain `eurolock`) is taken by system calls with interrupts off; its one task-context taker while programs
-  run, the heap watch of `run_glibc_disk`, holds it under `IfOffGuard` (BUG-410, `files_heap_bytes`). Open: BUG-430,
-  BUG-431 (other locks taken both ways).
+  run, the heap watch of `run_glibc_disk`, holds it under `IfOffGuard` (BUG-410, `files_heap_bytes`).
+  `GLIBC_THREADS` (plain `spin::Mutex`) is taken by clone, exit and exit_group with interrupts off; the launchers
+  (`run_glibc`, `run_glibc_disk`, `glibc_disk_launch`, `spawn_glibc_persistent`, `kill_persistent_glibc`,
+  `kill_glibc_group`), the end-of-run reap (`retire_task`) and `cdp_begin_frame` reach it only through
+  `glibc_threads_snapshot/_len/_clear/_forget`: `IfOffGuard` first, the lock a statement of its own, the work on a copy
+  (BUG-430). A guard and a lock temporary in one block expression release in the wrong order (edition 2021: the lock
+  outlives the guard, BUG-440): bind the value in a statement of its own. Open: BUG-431, BUG-440 (other locks taken both
+  ways, the guard order at four sites).
 - `census_nolock`, `current_lockfree` (BUG-144/157): keep reading through the init-time pointer; add the CPU
   column from `RUNCTX.cpu` and `CUR_ON`. BUG-202 (scan bound of the NMI probe) is independent and should be fixed
   first, because the probe will now also land on AP entry stacks.

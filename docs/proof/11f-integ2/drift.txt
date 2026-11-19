@@ -1,0 +1,11 @@
+# drift against the host clock, 15 min, KVM, merge image (m-st), vdrift.py, drift-ana.py (first sample left out: it answers 70-90 ms late)
+## rest-m
+samples 45 over 883.2 s host: MONOTONIC +112.0 ppm (+0.099 s), REALTIME +112.0 ppm (+0.099 s), host wall vs host mono -0.000 s; largest offset from the line 0.094 s
+diag over 883.1 s host: HPET +124.2 ppm; TSC 2200246 kHz by the host (2202761 kHz by the 10 ms calibration, +1143 ppm); tick count +129.5 ppm; timer interrupts 99.8929 Hz (-1071 ppm from 100 Hz); ticks the interrupts added +129.5 ppm, forced 0; clock (diag) +124.2 ppm
+/tmp/r630-proof/drift/rest-m/samples.txt: 44 samples over 863 s: MONOTONIC +4.7 ppm (+0.004 s), REALTIME +4.7 ppm; plain difference +9.5 ppm; largest offset from the fit 0.028 s
+    HPET +6.5 ppm; TSC 2199987 kHz (10 ms calibration 2202761 kHz, +1261 ppm); tick count +7.4 ppm; timer interrupts 99.8811/s (-1189 ppm from 100); ticks the interrupts added +7.4 ppm; forced advances 0
+## load-m
+samples 45 over 883.0 s host: MONOTONIC +22.8 ppm (+0.020 s), REALTIME +22.8 ppm (+0.020 s), host wall vs host mono +0.000 s; largest offset from the line 0.020 s
+diag over 883.0 s host: HPET +22.6 ppm; TSC 2200022 kHz by the host (2205160 kHz by the 10 ms calibration, +2336 ppm); tick count +21.0 ppm; timer interrupts 99.7756 Hz (-2244 ppm from 100 Hz); ticks the interrupts added +21.0 ppm, forced 0; clock (diag) +22.6 ppm
+/tmp/r630-proof/drift/load-m/samples.txt: 44 samples over 863 s: MONOTONIC +0.1 ppm (+0.000 s), REALTIME +0.1 ppm; plain difference +0.2 ppm; largest offset from the fit 0.003 s
+    HPET +1.9 ppm; TSC 2199977 kHz (10 ms calibration 2205160 kHz, +2356 ppm); tick count +2.1 ppm; timer interrupts 99.7735/s (-2265 ppm from 100); ticks the interrupts added +2.1 ppm; forced advances 0

@@ -1,0 +1,49 @@
+# Chromium on the fix image (public image + ui.tour=off, update.check=off; user-net, no hostfwd), scripts of the tree
+## 10 starts
+[chrome-smoke] start 1/10: PASS
+[chrome-smoke] start 2/10: PASS
+[chrome-smoke] start 3/10: PASS
+[chrome-smoke] start 4/10: PASS
+[chrome-smoke] start 5/10: PASS
+[chrome-smoke] start 6/10: PASS
+[chrome-smoke] start 7/10: PASS
+[chrome-smoke] start 8/10: PASS
+[chrome-smoke] start 9/10: PASS
+[chrome-smoke] start 10/10: PASS
+[chrome-smoke] starts: 10/10 PASS
+## one sites round
+[gui-smoke] QEMU pid 2815421, booting (KVM, 2 cpu, 6144M)...
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 52.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.0), 2
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (178 px run)
+[gui-smoke] ok   consent euro-os: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.6 s, load finished 2.3 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 232 ms; fds: 7 processes, 371 descriptors, 334 objects, 215/4096 file ob
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.4 s, load finished 3.0 s later; content 592 colours, commonest 78%; desktop loop: slowest console answer 170 ms; fds: 10 processes, 476 descriptors, 4
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.1 s, load finished 7.6 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 302 ms; fds: 11 processes, 543 descriptors, 
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tout r
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.4 s, load finished 9.1 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 310 ms; fds: 13 processes, 701 descriptors, 608 objects, 376/4096
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 0.7 s, load finished 1.6 s later; content 2256 colours, commonest 36%; desktop loop: slowest console answer 224 ms; fds: 12 processes, 647 descriptors, 56
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 0.4 s, load finished 1.9 s later; content 140 colours, commonest 58%; desktop loop
+[chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/m430/sites-f
+
+## chrome-mem-soak 1 h (see soak.txt)
+[chrome-mem-soak] round 1 done after 789 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 41); files 43 MiB; demand 2562 MiB free
+[chrome-mem-soak] round 2 done after 1575 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 41); files 43 MiB; demand 2538 MiB free
+[chrome-mem-soak] round 3 done after 2358 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 41); files 43 MiB; demand 2545 MiB free
+[chrome-mem-soak] round 4 done after 3145 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 41); files 43 MiB; demand 2536 MiB free
+[chrome-mem-soak] round 5 done after 3927 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 41); files 43 MiB; demand 2533 MiB free
+[chrome-smoke] PASS - 123/123 steps ok, report and screenshots in /dev/shm/m430/soak
+[chrome-mem-soak] PASS: 5 rounds in 3928 s
+ok steps: 123   FAIL lines: 0
+serial.log: ring-0 faults/panics 0, WATCHDOG 0, [timer-probe] FROZEN 0, screen frozen 0, [irqlock] 0, allocation failures 0, "[cdp] capture requested" (cdp_begin_frame) 0
+(the one "deadman" line is the boot self-test [3g2-wire] reporting tripped=false -> OK)
+video: 10 picture checks, each "28 of 28 consecutive screendumps differ" in 10; sound windows: 10/10 ok

@@ -1,0 +1,31 @@
+# Chromium on the merge image (public image + ui.tour=off, update.check=off; user-net, no hostfwd), scripts of the tree
+## 5 starts
+[chrome-smoke] start 1/5: PASS
+[chrome-smoke] start 2/5: PASS
+[chrome-smoke] start 3/5: PASS
+[chrome-smoke] start 4/5: PASS
+[chrome-smoke] start 5/5: PASS
+[chrome-smoke] starts: 5/5 PASS
+## one sites round
+[gui-smoke] QEMU pid 2773733, booting (KVM, 2 cpu, 6144M)...
+[gui-smoke] ok   boot: desktop after 4 s, screen 1920x1080, layout us
+[gui-smoke] ok   chrome starts from the Terminal: window at (149, 89), first page file:///tmp/input-test.html painted and settled after 52.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2), 2
+[gui-smoke] ok   chrome's infobars are closed or absent: 0 left
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (178 px run)
+[gui-smoke] ok   consent euro-os: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site euro-os: https://euro-os.eu/: https://euro-os.eu/en/ after 0.6 s, load finished 2.6 s later; content 678 colours, commonest 78%; desktop loop: slowest console answer 171 ms; fds: 8 processes, 392 descriptors, 352 objects, 222/4096 file ob
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (154 px run)
+[gui-smoke] ok   consent wikipedia: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site wikipedia: https://nl.wikipedia.org/: https://nl.wikipedia.org/wiki/Hoofdpagina after 1.7 s, load finished 2.2 s later; content 592 colours, commonest 78%; desktop loop: slowest console answer 199 ms; fds: 10 processes, 475 descriptors, 4
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (291 px run)
+[gui-smoke] ok   consent github: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site github: https://github.com/GoTrustbe/Euroos: https://github.com/GoTrustbe/Euroos after 1.2 s, load finished 11.9 s later; content 476 colours, commonest 90%; desktop loop: slowest console answer 332 ms; fds: 11 processes, 541 descriptors,
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (261 px run)
+[gui-smoke] ok   consent youtube: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; full reject labels that found nothing at first and what typing them again slowly did: [('reject all', False), ('alles weigeren', False), ('tout r
+[gui-smoke] ok   site youtube: https://www.youtube.com/: https://www.youtube.com/ after 0.4 s, load finished 9.5 s later; content 268 colours, commonest 89%; desktop loop: slowest console answer 649 ms; fds: 13 processes, 694 descriptors, 601 objects, 374/4096
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (180 px run)
+[gui-smoke] ok   consent openstreetmap: no banner button found: find-in-page matched none of 17 labels
+[gui-smoke] ok   site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.1 s, load finished 1.6 s later; content 2257 colours, commonest 36%; desktop loop: slowest console answer 99 ms; fds: 12 processes, 645 descriptors, 558
+[chrome-smoke]   omnibox selection seen 0.0 s after Ctrl+L (393 px run)
+[gui-smoke] ok   site pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf after 1.3 s, load finished 1.9 s later; content 140 colours, commonest 58%; desktop loop
+[chrome-smoke] PASS - 14/14 steps ok, report and screenshots in /dev/shm/m430/sites-m

@@ -1,0 +1,35 @@
+# [swap-irq] stress: KVM boots of the self-test image of the fix (9000469, image fix-st) up to the [swap-irq] line, 4 GiB, no NIC, 10 boots each with 1, 2 and 4 vCPU. Pinned cores.
+# totals over the 30 boots: FILES (part 3): 17 970 000 takes with interrupts off beside 9 168 276 heap-watch sums with interrupts on; GLIBC_THREADS (part 4): 17 968 000 takes with interrupts off beside 88 241 754 launcher-style copies with interrupts on; 0 non-OK [swap-irq] lines, 0 [irqlock] lines, 0 crash, 0 NMI, 0 FAILED marker lines
+## 1 vCPU
+s1-1 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-2 end=marker after 248s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-3 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-4 end=marker after 244s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-5 end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-6 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-7 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-8 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-9 end=marker after 241s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s1-10 end=marker after 235s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+## 2 vCPU
+s2-1 end=marker after 256s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-2 end=marker after 255s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-3 end=marker after 247s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-4 end=marker after 250s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-5 end=marker after 243s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-6 end=marker after 241s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-7 end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-8 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-9 end=marker after 242s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s2-10 end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+## 4 vCPU
+s4-1 end=marker after 246s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-2 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-3 end=marker after 239s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-4 end=marker after 251s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-5 end=marker after 244s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-6 end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-7 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-8 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-9 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+s4-10 end=marker after 237s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
