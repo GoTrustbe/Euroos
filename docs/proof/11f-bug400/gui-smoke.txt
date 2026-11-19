@@ -1,0 +1,2 @@
+# gui-smoke.py --image b-pub.img (public image of f487cc7) --kvm --smp 4 --mem 4G --pin 18,19,38,39
+[gui-smoke] PASS — 67/67 steps ok, report and screenshots in /srv/euroos/b400-runs/ui/gs

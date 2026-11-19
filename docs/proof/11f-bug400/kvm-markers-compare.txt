@@ -1,0 +1,111 @@
+# KVM self-test boots to the desktop, -cpu host, -nic none, HD-Audio, quiet (no busy loops). B = f487cc7, base = 19f7586 (self-test image of each). 1/2/4 GiB x 1/2/4 vCPU. 1 and 2 vCPU: B on 18,38, base on 19,39 at the same time; 4 vCPU on 18,19,38,39 one after the other.
+b-1G-1 end=marker after 200s failed-lines=3 crash-lines=0
+b-1G-2 end=marker after 203s failed-lines=3 crash-lines=0
+b-1G-4 end=marker after 208s failed-lines=3 crash-lines=0
+b-2G-1 end=marker after 210s failed-lines=1 crash-lines=0
+b-2G-2 end=marker after 214s failed-lines=1 crash-lines=0
+b-2G-4 end=marker after 217s failed-lines=1 crash-lines=0
+b-4G-1 end=marker after 214s failed-lines=1 crash-lines=0
+b-4G-2 end=marker after 218s failed-lines=1 crash-lines=0
+b-4G-4 end=marker after 221s failed-lines=1 crash-lines=0
+base-1G-1 end=marker after 182s failed-lines=3 crash-lines=0
+base-1G-2 end=marker after 186s failed-lines=3 crash-lines=0
+base-1G-4 end=marker after 192s failed-lines=3 crash-lines=0
+base-2G-1 end=marker after 195s failed-lines=1 crash-lines=0
+base-2G-2 end=marker after 199s failed-lines=1 crash-lines=0
+base-2G-4 end=marker after 201s failed-lines=1 crash-lines=0
+base-4G-1 end=marker after 197s failed-lines=1 crash-lines=0
+base-4G-2 end=marker after 201s failed-lines=1 crash-lines=0
+base-4G-4 end=marker after 205s failed-lines=1 crash-lines=0
+## markers-compare base -> B, 1G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-1
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 1G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-2
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 1G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 2G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## markers-compare base -> B, 4G-4
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+## [clock-drift] in B
+[clock-drift] rest: 10001 ms of HPET time: clock +0 ppm (+6 us), tick count -124 ppm (-1 ms) -> OK
+[clock-drift] late: 6046 ms of HPET time: clock +0 ppm (-5 us), tick count +531 ppm (+3 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10011 ms of HPET time: clock +0 ppm (+9 us), tick count -120 ppm (-1 ms) -> OK
+[clock-drift] late: 6048 ms of HPET time: clock +0 ppm (-5 us), tick count +310 ppm (+1 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10027 ms of HPET time: clock +0 ppm (+7 us), tick count -702 ppm (-7 ms) -> OK
+[clock-drift] late: 6087 ms of HPET time: clock +0 ppm (-3 us), tick count +354 ppm (+2 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10000 ms of HPET time: clock +0 ppm (+6 us), tick count -67 ppm (+0 ms) -> OK
+[clock-drift] late: 6046 ms of HPET time: clock +0 ppm (-5 us), tick count +596 ppm (+3 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10005 ms of HPET time: clock +0 ppm (+7 us), tick count +437 ppm (+4 ms) -> OK
+[clock-drift] late: 6073 ms of HPET time: clock +0 ppm (+0 us), tick count -561 ppm (-3 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10028 ms of HPET time: clock +0 ppm (+6 us), tick count +164 ppm (+1 ms) -> OK
+[clock-drift] late: 6054 ms of HPET time: clock -1 ppm (-6 us), tick count -806 ppm (-4 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10003 ms of HPET time: clock +0 ppm (+4 us), tick count -316 ppm (-3 ms) -> OK
+[clock-drift] late: 6058 ms of HPET time: clock +0 ppm (-5 us), tick count +246 ppm (+1 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10011 ms of HPET time: clock +0 ppm (+8 us), tick count +804 ppm (+8 ms) -> OK
+[clock-drift] late: 6057 ms of HPET time: clock +0 ppm (-5 us), tick count -1188 ppm (-7 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+[clock-drift] rest: 10010 ms of HPET time: clock +0 ppm (+6 us), tick count -39 ppm (+0 ms) -> OK
+[clock-drift] late: 6077 ms of HPET time: clock -1 ppm (-6 us), tick count +477 ppm (+2 ms) -> OK
+[clock-drift] the clock and the tick count against the HPET -> OK
+## [vdso-mono] OK lines B / base
+b-1G-1.log 1
+b-1G-2.log 1
+b-1G-4.log 1
+b-2G-1.log 1
+b-2G-2.log 1
+b-2G-4.log 1
+b-4G-1.log 1
+b-4G-2.log 1
+b-4G-4.log 1
+base-1G-1.log 1
+base-1G-2.log 1
+base-1G-4.log 1
+base-2G-1.log 1
+base-2G-2.log 1
+base-2G-4.log 1
+base-4G-1.log 1
+base-4G-2.log 1
+base-4G-4.log 1
