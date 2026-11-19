@@ -1,0 +1,42 @@
+== 10 installs side by side (candidate public image, 8 CPUs)
+[inst] OK up=True done=True install 20s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 21s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 7s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=tr
+[inst] OK up=True done=True install 20s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 10s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 20s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 20s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 20s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 12s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+[inst] OK up=True done=True install 19s :: [q1x3] EuroInstall → virtio disk 0 (4096 MiB): GPT=true ESP-FAT32=t
+== wizard-install-test candidate
+[wizard-test] first-run tour closed with Esc
+[wizard-test] 15/15 checks passed; screenshots + serial logs in /srv/euroos/val-runs/g/wizard/
+== wizard-install-test reference (2026.11.17 public)
+[wizard-test] first-run tour closed with Esc
+[wizard-test] 15/15 checks passed; screenshots + serial logs in /srv/euroos/val-runs/g/wizard-ref/
+== ro-install-test plain (self-test image)
+[ro-install] PASS: install reported
+[ro-install] PASS: install on the writable disk 0 verified OK
+[ro-install] PASS: wizard does not offer the read-only disk 1
+[ro-install] PASS: marker [randid] dhcp xid
+[ro-install] PASS: marker [randid] smb client challenge
+[ro-install] PASS: marker [nmi-bound]
+== ro-install-test inject (self-test image)
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount ho
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: creating the EuroFS root failed: Corruption
+[ro-install] PASS: install reported
+[ro-install] PASS: nothing was written, so nothing reads back: GPT, ESP, hostname, user, euroid-store all false
+[ro-install] PASS: install verdict FAILED
+== ro-install-test ro0 (self-test image)
+[ro-install]   [q1x3] EuroInstall → virtio disk 0 (2048 MiB): GPT=false ESP-FAT32=false; EuroFS root formatted + 0 steps provisioned, after remount ho
+[ro-install]   [q1x3] target virtio disk 0: installation FAILED: the disk refused 51586 write(s) of the boot files (first at sector 0)
+[ro-install] PASS: install reported
+[ro-install] PASS: no kernel panic
+[ro-install] PASS: serial line: falls back to the RAM root
+[ro-install] PASS: boot reaches the desktop
+[ro-install] PASS: on-screen message queued ([notify] ... RAM root)
+== rename-persist candidate
+[rename-persist] ok   phase 3: scrub is clean
+[rename-persist] ok   phase 3: no fault line on the serial log
+[rename-persist] 24/24 checks ok

@@ -1,0 +1,51 @@
+# Chromium start (first page painted and settled, seconds after Enter; the harness caps settle at 40 s)
+== starts20-m
+settled after 14.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.4, first child process 6.0, renderer 8.6
+settled after 53.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.6, renderer 8.6
+settled after 52.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 52.8 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2
+settled after 14.9 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.3, first child process 5.9, renderer 8.7
+settled after 52.9 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.3, first child process 5.9, renderer 8.3
+settled after 53.2 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 53.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 52.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.4
+settled after 52.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.4
+settled after 53.7 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.6, first child process 6.4, renderer 9.6
+settled after 53.2 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.3, first child process 5.9, renderer 8.5
+settled after 14.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 53.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.6, renderer 9.0
+settled after 53.3 s (seconds after Enter: launched 3.2, window on screen 3.5, X connection 5.3, first child process 6.1, renderer 8.9
+settled after 52.9 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 53.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.4
+settled after 14.0 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2
+settled after 53.0 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+== starts20-b0
+settled after 14.8 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.9 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.6, renderer 8.6
+settled after 14.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2
+settled after 15.2 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 15.1 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.4, first child process 5.8, renderer 8.6
+settled after 15.0 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 15.3 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 14.9 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.2
+settled after 14.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 15.2 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 15.2 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.4 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.6
+settled after 14.9 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.5 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 15.7 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.8
+settled after 14.7 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+settled after 14.9 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.2, first child process 5.8, renderer 8.4
+settled after 14.6 s (seconds after Enter: launched 3.1, window on screen 3.4, X connection 5.0, first child process 5.6, renderer 8.4
+
+# sites, 3 rounds (seconds until load finished), per site
+euro-os cand [2.3, 5.3, 2.1] median 2.3 | ref [3.9, 6.3, 6.3] median 6.3
+wikipedia cand [3.0, 3.2, 2.0] median 3.0 | ref [9.7, 4.5, 3.6] median 4.5
+github cand [11.8, 14.2, 11.0] median 11.8 | ref [21.1, 22.5, 21.4] median 21.4
+youtube cand [9.6, 10.9, 8.0] median 9.6 | ref [14.7, 15.8, 13.6] median 14.7
+openstreetmap cand [3.5, 3.9, 3.6] median 3.6 | ref [7.3, 5.3, 5.4] median 5.4
+pdf cand [2.2, 2.3, 2.3] median 2.3 | ref [4.5, 3.9, 3.0] median 3.9

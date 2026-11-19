@@ -1,0 +1,55 @@
+== msoak1
+[chrome-mem-soak] round 1 done after 756 s: heap 123 MiB used, 388 MiB free; big 35/476 MiB (peak 41); files 43 MiB; demand 2563 MiB free
+[chrome-mem-soak] round 2 done after 1543 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 41); files 43 MiB; demand 2553 MiB free
+[chrome-mem-soak] round 3 done after 2334 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 41); files 43 MiB; demand 2547 MiB free
+[chrome-mem-soak] round 4 done after 3120 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 44); files 43 MiB; demand 2540 MiB free
+[chrome-mem-soak] round 5 done after 3948 s: heap 123 MiB used, 388 MiB free; big 31/480 MiB (peak 44); files 43 MiB; demand 2594 MiB free
+[chrome-smoke] FAIL (1 step(s)) - 122/123 steps ok, report and screenshots in /dev/shm/g11/msoak1
+[chrome-mem-soak] FAIL (1 step(s)): 5 rounds in 3948 s
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.5 s, load fi
+serial: irqlock=0 frozen=0 watchdog=0 crash=0 oom=0 mmap-window-full=0
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 3.12 -> 61.62 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QE
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.26 -> 61.76 s in 60.5 s of wall clock
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.72 -> 61.22 s in 60.5 s of wall clock
+== msoak2
+[chrome-mem-soak] round 1 done after 803 s: heap 123 MiB used, 388 MiB free; big 38/473 MiB (peak 44); files 43 MiB; demand 2545 MiB free
+[chrome-mem-soak] round 2 done after 1589 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 44); files 43 MiB; demand 2539 MiB free
+[chrome-mem-soak] round 3 done after 2379 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 44); files 43 MiB; demand 2541 MiB free
+[chrome-mem-soak] round 4 done after 3207 s: heap 123 MiB used, 388 MiB free; big 37/474 MiB (peak 44); files 43 MiB; demand 2551 MiB free
+[chrome-mem-soak] round 5 done after 4029 s: heap 123 MiB used, 388 MiB free; big 31/480 MiB (peak 44); files 43 MiB; demand 2595 MiB free
+[chrome-smoke] FAIL (2 step(s)) - 121/123 steps ok, report and screenshots in /dev/shm/g11/msoak2
+[chrome-mem-soak] FAIL (2 step(s)): 5 rounds in 4029 s
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.5 s, load fi
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.5 s, load fi
+serial: irqlock=0 frozen=0 watchdog=0 crash=0 oom=0 mmap-window-full=0
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.89 -> 61.89 s in 60.9 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QE
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.03 -> 61.53 s in 60.6 s of wall clock
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.72 -> 61.22 s in 60.6 s of wall clock
+== msoak3
+[chrome-mem-soak] round 1 done after 799 s: heap 123 MiB used, 388 MiB free; big 35/476 MiB (peak 42); files 43 MiB; demand 2562 MiB free
+[chrome-mem-soak] round 2 done after 1593 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 42); files 43 MiB; demand 2547 MiB free
+[chrome-mem-soak] round 3 done after 2384 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 42); files 43 MiB; demand 2544 MiB free
+[chrome-mem-soak] round 4 done after 3175 s: heap 123 MiB used, 388 MiB free; big 39/472 MiB (peak 46); files 43 MiB; demand 2537 MiB free
+[chrome-mem-soak] round 5 done after 3960 s: heap 123 MiB used, 388 MiB free; big 35/476 MiB (peak 46); files 43 MiB; demand 2532 MiB free
+[chrome-smoke] PASS - 123/123 steps ok, report and screenshots in /dev/shm/g11/msoak3
+[chrome-mem-soak] PASS: 5 rounds in 3960 s
+serial: irqlock=0 frozen=0 watchdog=0 crash=0 oom=0 mmap-window-full=0
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.8 -> 61.8 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QE
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.02 -> 61.52 s in 60.4 s of wall clock
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.79 -> 61.29 s in 60.4 s of wall clock
+== msoak-b0
+[chrome-mem-soak] round 1 done after 783 s: heap 122 MiB used, 389 MiB free; big 34/477 MiB (peak 40); files 43 MiB; demand 2559 MiB free
+[chrome-mem-soak] round 2 done after 1587 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 40); files 43 MiB; demand 2541 MiB free
+[chrome-mem-soak] round 3 done after 2390 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 40); files 43 MiB; demand 2533 MiB free
+[chrome-mem-soak] round 4 done after 3188 s: heap 123 MiB used, 388 MiB free; big 33/478 MiB (peak 40); files 43 MiB; demand 2534 MiB free
+[chrome-mem-soak] round 5 done after 3992 s: heap 123 MiB used, 388 MiB free; big 34/477 MiB (peak 40); files 43 MiB; demand 2529 MiB free
+[chrome-smoke] PASS - 123/123 steps ok, report and screenshots in /dev/shm/g11/msoak-b0
+[chrome-mem-soak] PASS: 5 rounds in 3993 s
+serial: irqlock=0 frozen=0 watchdog=0 crash=0 oom=0 mmap-window-full=0
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 3.18 -> 62.18 s in 61.3 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QE
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.31 -> 62.3 s in 61.3 s of wall clock
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.98 -> 60.98 s in 60.4 s of wall clock

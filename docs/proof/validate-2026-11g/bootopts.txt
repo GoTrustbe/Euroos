@@ -1,0 +1,67 @@
+==== on
+[bootopt] aslr=on
+[bootopt] aslr.arena=random
+[bootopt] aslr.split=on
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 31, exe-stack 32, exe-mmap 31, stack-ldso 32, exe-brk 31, brk-stack 31 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → OK ✓
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+==== off
+[bootopt] aslr=off
+[bootopt] aslr.arena=random
+[bootopt] aslr.split=on
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=off): varying bits mmap 0 (4 KiB 0, 1 MiB 0), stack 0, PIE base 0, brk 0, ld.so 0, libc 0, vDSO 0; Linux x86-64 gives mmap 28, stack 22, PIE 28 → off (boot option aslr=off: fixed addresses on purpose) ⬜
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 0, exe-stack 0, exe-mmap 0, stack-ldso 0, exe-brk 0, brk-stack 0 (want >= 20); libc-exe 0, vDSO-mmap1MiB 0, mmap1MiB-exe 0, vDSO-exe 0; same segment: ldso-exe 0, mmap-brk 0 → off (boot option aslr=off) ⬜
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=off), kept the address of the parent: exe 8/8 ldso 8/8 floor 8/8 vdso 8/8 brk 8/8 mmap 8/8 stack 8/8 → off (boot option aslr=off: no draw on purpos
+==== leg
+[bootopt] aslr=legacy
+[bootopt] aslr.arena=identity
+[bootopt] aslr.split=off
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=legacy): varying bits mmap 16 (4 KiB 16, 1 MiB 20), stack 8, PIE base 0, brk 8, ld.so 0, libc 20, vDSO 0; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, exe-mmap 9, stack-ldso 8, exe-brk 8, brk-stack 10 (want >= 20); libc-exe 29, vDSO-mmap1MiB 20, mmap1MiB-exe 29, vDSO-exe 0; same segment: ldso-exe 0, mmap-brk 14 → FAILED (stack-mmap, exe-stack, exe-mmap, stack-ldso, exe
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=legacy), kept the address of the parent: exe 8/8 ldso 8/8 floor 0/8 vdso 8/8 brk 0/8 mmap 0/8 stack 0/8 → FAILED (not yet: exe, ld.so (the arena ba
+==== fix
+[bootopt] aslr=on
+[bootopt] aslr.arena=fixed
+[bootopt] aslr.split=off
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 10 (4 KiB 10, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 10, stack-ldso 8, exe-brk 14, brk-stack 10 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31, mmap1MiB-exe 30, vDSO-exe 27; same segment: ldso-exe 0, mmap-brk 14 → FAILED (stack-mmap, exe-stack, exe-mmap, stack-ldso, e
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 8/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → FAILED (not yet: ld.so (the arena base stays 
+==== id
+[bootopt] aslr=on
+[bootopt] aslr.arena=identity
+[bootopt] aslr.split=off
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 16 (4 KiB 16, 1 MiB 30), stack 8, PIE base 0, brk 8, ld.so 0, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → FAILED (below the Linux level: BUG-088)
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 8, exe-mmap 9, stack-ldso 8, exe-brk 8, brk-stack 10 (want >= 20); libc-exe 30, vDSO-mmap1MiB 31, mmap1MiB-exe 30, vDSO-exe 27; same segment: ldso-exe 0, mmap-brk 14 → FAILED (stack-mmap, exe-stack, exe-mmap, stack-ldso, exe
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 8/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → FAILED (not yet: ld.so (the arena base stays 
+==== nosplit
+[bootopt] aslr=on
+[bootopt] aslr.arena=random
+[bootopt] aslr.split=off
+[arena-segs] lazy arena in three segments (image 0x8ffffe00000, heap 0xd0000000000, stack 0x108000000000): written, shared copy-on-write with a fork child, the child execs and its segments move to 0xa0000e00000, 0xf0000600000, 0x130000a00000; old slots empty, new arena whole, contents right, the 4 s
+[aslr] 64 starts of a glibc PIE (aslr=on): varying bits mmap 30 (4 KiB 30, 1 MiB 30), stack 29, PIE base 30, brk 29, ld.so 30, libc 30, vDSO 27; Linux x86-64 gives mmap 28, stack 22, PIE 28 → OK ✓
+[aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-stack 10, exe-mmap 15, stack-ldso 10, exe-brk 14, brk-stack 10 (want >= 20); libc-exe 34, vDSO-mmap1MiB 31, mmap1MiB-exe 34, vDSO-exe 31; same segment: ldso-exe 12, mmap-brk 14 → FAILED (stack-mmap, exe-stack, exe-mmap, stack-ldso
+[aslr-exec] the probe exec was refused (errno=8: only the persistent program from disk re-executes); kernel side, 8 execs after a launch from disk (aslr=on), kept the address of the parent: exe 0/8 ldso 0/8 floor 0/8 vdso 0/8 brk 0/8 mmap 0/8 stack 0/8 → OK ✓
+==== Chromium launch/exec entropy per option (5 starts)
+-- on
+launch: 5 lines; varying bits: exe 29, ld.so 30, arena 21, hseg 19, sseg 20, brk 26, stack 28, floor 26, vdso 26
+launch: distances varying bits: ld.so-brk 30, brk-stack 29, ld.so-stack 30, exe-brk 30, exe-stack 32, exe-floor 31, exe-vdso 25, stack-floor 30
+-- off
+launch: 5 lines; varying bits: exe 0, ld.so 0, arena 0, hseg 0, sseg 0, brk 0, stack 0, floor 0, vdso 0
+launch: distances varying bits: ld.so-brk 0, brk-stack 0, ld.so-stack 0, exe-brk 0, exe-stack 0, exe-floor 0, exe-vdso 0, stack-floor 0
+-- leg
+launch: 5 lines; varying bits: exe 0, ld.so 0, arena 0, brk 8, stack 7, floor 19, vdso 0
+launch: distances varying bits: ld.so-brk 8, brk-stack 9, ld.so-stack 7, exe-brk 8, exe-stack 7, exe-floor 19, exe-vdso 0, stack-floor 27
+-- fix
+launch: 5 lines; varying bits: exe 27, ld.so 0, arena 0, brk 8, stack 8, floor 27, vdso 27
+launch: distances varying bits: ld.so-brk 8, brk-stack 9, ld.so-stack 8, exe-brk 30, exe-stack 28, exe-floor 26, exe-vdso 28, stack-floor 27
+-- id
+launch: 5 lines; varying bits: exe 27, ld.so 0, arena 0, brk 8, stack 7, floor 26, vdso 24
+launch: distances varying bits: ld.so-brk 8, brk-stack 10, ld.so-stack 7, exe-brk 30, exe-stack 27, exe-floor 32, exe-vdso 30, stack-floor 30
+-- nosplit
+launch: 5 lines; varying bits: exe 29, ld.so 28, arena 20, brk 28, stack 29, floor 29, vdso 26
+launch: distances varying bits: ld.so-brk 9, brk-stack 10, ld.so-stack 10, exe-brk 30, exe-stack 31, exe-floor 31, exe-vdso 26, stack-floor 32

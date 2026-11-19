@@ -1,0 +1,57 @@
+# boot time, quiet host, 12 pairs alternating (seconds from QEMU start)
+m-1: kernel-entry 1.84s desktop 2.62s
+b0-1: kernel-entry 2.08s desktop 2.83s
+m-2: kernel-entry 1.62s desktop 2.34s
+b0-2: kernel-entry 2.15s desktop 2.94s
+m-3: kernel-entry 1.94s desktop 2.70s
+b0-3: kernel-entry 2.00s desktop 2.73s
+m-4: kernel-entry 1.55s desktop 2.28s
+b0-4: kernel-entry 1.88s desktop 2.63s
+m-5: kernel-entry 1.98s desktop 2.73s
+b0-5: kernel-entry 1.52s desktop 2.23s
+m-6: kernel-entry 1.71s desktop 2.44s
+b0-6: kernel-entry 2.13s desktop 2.91s
+m-7: kernel-entry 2.11s desktop 2.85s
+b0-7: kernel-entry 1.69s desktop 2.41s
+m-8: kernel-entry 1.53s desktop 2.24s
+b0-8: kernel-entry 1.61s desktop 2.32s
+m-9: kernel-entry 2.14s desktop 2.93s
+b0-9: kernel-entry 1.85s desktop 2.59s
+m-10: kernel-entry 2.15s desktop 2.94s
+b0-10: kernel-entry 2.00s desktop 2.75s
+m-11: kernel-entry 1.57s desktop 2.28s
+b0-11: kernel-entry 1.89s desktop 2.66s
+m-12: kernel-entry 1.56s desktop 2.28s
+b0-12: kernel-entry 1.52s desktop 2.23s
+m 12 desktop median 2.53 (2.24-2.94) kernel-entry median 1.77
+b0 12 desktop median 2.65 (2.23-2.94) kernel-entry median 1.88
+
+# key latency (chrome-smoke --only perf, 30 keys, fbread = verdict method), 6 rounds, 4 guests at once, CPU sets swapped every round
+ref smp2 fbread [96, 99, 91, 95, 98, 97] median 96.5 | screendump [173, 154, 151, 154, 164, 161] median 157.5
+ref smp4 fbread [97, 96, 99, 98, 97, 96] median 97.0 | screendump [164, 164, 167, 150, 172, 163] median 164.0
+cand smp2 fbread [53, 60, 56, 55, 64, 55] median 55.5 | screendump [106, 98, 111, 100, 108, 89] median 103.0
+cand smp4 fbread [47, 45, 47, 47, 47, 46] median 47.0 | screendump [103, 101, 110, 107, 105, 105] median 105.0
+
+# [fair] hogtest 5 + churn 8, 4 vCPU
+== m
+m-1: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 46 % -> FAILED
+m-2: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.5 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-3: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-4: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 46 % -> FAILED
+m-5: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-6: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-7: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 46 % -> FAILED
+m-8: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-9: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+m-10: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+== b0
+b0-1: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-2: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-3: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-4: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 46 % -> FAILED
+b0-5: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.4 s (limit 12.6 s), lowest task 0 share 46 % -> FAILED
+b0-6: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.4 s, worst 1.5 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-7: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.6 s, worst 1.7 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-8: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.6 s, worst 1.6 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-9: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.6 s, worst 1.6 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED
+b0-10: [fair] 10 rounds of hogtest 5 + churn proc 8: median 1.6 s, worst 1.6 s (limit 12.6 s), lowest task 0 share 47 % -> FAILED

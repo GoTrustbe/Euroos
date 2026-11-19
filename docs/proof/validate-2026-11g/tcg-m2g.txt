@@ -1,0 +1,35 @@
+# TCG m2g: per leg
+kernel-smp1 desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=1
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+kernel-smp4 desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=1
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+user-smp1-iommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=5
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+user-smp1-noiommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=5
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+user-smp4-iommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=5
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+user-smp4-noiommu desktop=1 wd=0 crash=0 frozen=0 vdso-mono-failed=0 clock-drift-failed=0 failed-lines=5
+    [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+    [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [conn] TCP handshake FAILED to 172.66.147.243:80
+    [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+user-smp4-iommu done 13:39:20 after 722s desktop=1 wd=0 nmi=0
+user-smp1-iommu done 13:39:40 after 742s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 13:48:26 after 546s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 13:49:11 after 571s desktop=1 wd=0 nmi=0
+kernel-smp4 done 13:56:42 after 496s desktop=1 wd=0 nmi=0
+kernel-smp1 done 13:57:07 after 476s desktop=1 wd=0 nmi=0

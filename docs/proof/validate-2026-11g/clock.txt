@@ -1,0 +1,39 @@
+# drift against the host, 30 min, KVM (vdrift.py; first sample dropped, least squares). cand: vDSO clock; ref: tick count x 10 ms (MONOTONIC column) and HPET (REALTIME column) because 2026.11.17 prints no vDSO clock
+drift/m-rest/samples.txt: 89 samples over 1766 s: MONOTONIC +0.5 ppm (+0.001 s), REALTIME +0.5 ppm; plain difference +4.5 ppm; largest offset from the fit 0.019 s
+    HPET -1.5 ppm; TSC 2199968 kHz (10 ms calibration 2202595 kHz, +1194 ppm); tick count -1.4 ppm; timer interrupts 99.8886/s (-1114 ppm from 100); ticks the interrupts added -1.4 ppm; forced advances 0
+drift/m-load/samples.txt: 89 samples over 1766 s: MONOTONIC -0.2 ppm (-0.000 s), REALTIME -0.2 ppm; plain difference +0.0 ppm; largest offset from the fit 0.001 s
+    HPET -0.1 ppm; TSC 2199971 kHz (10 ms calibration 2204351 kHz, +1991 ppm); tick count -0.2 ppm; timer interrupts 99.8112/s (-1888 ppm from 100); ticks the interrupts added -0.2 ppm; forced advances 0
+drift/b0-rest/samples.txt: 89 samples over 1765 s: MONOTONIC -1728.1 ppm (-3.049 s), REALTIME -3.1 ppm; plain difference -1724.7 ppm; largest offset from the fit 0.033 s
+drift/b0-load/samples.txt: 89 samples over 1768 s: MONOTONIC -1088.2 ppm (-1.924 s), REALTIME +0.1 ppm; plain difference -1088.6 ppm; largest offset from the fit 0.001 s
+
+# [clock-drift] / [vdso-mono] of the 16 repeat boots at 8 GiB 1 vCPU (8 cand, 8 ref)
+b0-8G-s1-1: clock-drift  crash=0
+b0-8G-s1-2: clock-drift  crash=0
+b0-8G-s1-3: clock-drift  crash=0
+b0-8G-s1-4: clock-drift  crash=0
+b0-8G-s1-5: clock-drift  crash=0
+b0-8G-s1-6: clock-drift  crash=0
+b0-8G-s1-7: clock-drift  crash=0
+b0-8G-s1-8: clock-drift  crash=0
+m-8G-s1-1: clock-drift -> OK crash=0
+m-8G-s1-2: clock-drift -> OK crash=0
+m-8G-s1-3: clock-drift -> OK crash=0
+m-8G-s1-4: clock-drift -> OK crash=0
+m-8G-s1-5: clock-drift -> OK crash=0
+m-8G-s1-6: clock-drift -> OK crash=0
+m-8G-s1-7: clock-drift -> OK crash=0
+m-8G-s1-8: clock-drift -> OK crash=0
+
+# [clock-drift] and [vdso-mono] in all cand KVM boots
+k-1G-s1: -> OK
+k-1G-s2: -> OK
+k-1G-s4: -> OK
+k-2G-s1: -> OK
+k-2G-s2: -> OK
+k-2G-s4: -> OK
+k-4G-s1: -> OK
+k-4G-s2: -> OK
+k-4G-s4: -> OK
+k-8G-s1: -> FAILED
+k-8G-s2: -> OK
+k-8G-s4: -> OK

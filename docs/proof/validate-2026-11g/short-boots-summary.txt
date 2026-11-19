@@ -1,0 +1,3 @@
+60 short boots of the candidate self-test image, KVM, 12 lanes on 12 cores incl. siblings, marker [fuzz] Linux-ABI
+boots: 60, end=marker: 60
+seconds to the marker: median 32.736702470 max 38.931363243

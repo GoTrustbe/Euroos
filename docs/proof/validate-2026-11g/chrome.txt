@@ -1,0 +1,20 @@
+== starts20-m:      20 [chrome-smoke] PASS - 5/5 steps ok, |
+== starts20-b0:      20 [chrome-smoke] PASS - 5/5 steps ok, |
+== sites3-m:       1 [chrome-smoke] PASS - 36/36 steps ok, |
+== sites3-b0:       1 [chrome-smoke] PASS - 36/36 steps ok, |
+== interact-m:       1 [chrome-smoke] PASS - 18/18 steps ok, |
+== wm480:       1 [wmvideo] PASS|      1 [chrome-smoke] PASS - 4/4 steps ok, |
+== opt-starts-on:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-starts-off:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-starts-leg:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-starts-fix:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-starts-id:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-starts-nosplit:       5 [chrome-smoke] PASS - 5/5 steps ok, |
+== opt-sites-on:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+== opt-sites-off:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+== opt-sites-leg:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+== opt-sites-fix:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+== opt-sites-id:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+== opt-sites-nosplit:       1 [chrome-smoke] PASS - 14/14 steps ok, |
+
+== localvideo-m (chrome-smoke --only localvideo): --only localvideo needs --media-dir with h264.mp4 and vp9.webm (scripts/mk-test-video.sh DIR)
