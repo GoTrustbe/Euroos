@@ -1801,6 +1801,11 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   `docs/SECURITY-ASLR.md`, boot options checked, release notes in `docs/UPDATES.md`. Merge check: KVM 1/2/4 GiB 0 markers worse against
   `55c6e25` and `19f7586`, `[vdso-mono]`, `[aslr]`, `[aslr-ind]`, `[aslr-exec]`, `[aslr-phys]`, `[arena-segs]` OK; TCG matrix 10/10 with
   `[vdso-mono]` OK in every leg; gui-smoke 67/67; Chromium 5/5 starts and a sites round 14/14. Proof `docs/proof/11f-aslr-s7/`.
+- **2026-11-17 (`feature/11f-bug400`, from `19f7586`):** BUG-400 fixed: the clock is TSC time held to the HPET (else
+  the PM timer), the tick count and the vDSO page follow it. Cause: the one 10 ms PIT calibration (+747 to +4672 ppm),
+  not lost ticks. `[clock-drift]` FAILED 9 of 9 base boots -> OK everywhere; host drift over 30 min KVM at rest -855 ->
+  +0.9 ppm, busy siblings -1975 -> +0.1 ppm, TCG -2222 -> +0.0 ppm. Found: BUG-420 (wall clock set once to the second,
+  never adjusted), BUG-421 (markers-compare misses "-> OK"). Proof `docs/proof/11f-bug400/`.
 
 ### BUG-089 — the CSPRNG is seeded once per boot and never again ✅ FIXED
 - **Status:**   FIXED (`2e5807c`) · **Severity:** MEDIUM for a virtual machine that is snapshotted or cloned, LOW otherwise
@@ -3204,13 +3209,42 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
   vCPU) -> `f426198`: OK in 6 of 6, TCG matrix 10 of 10, 30 of 30 KVM boots with busy siblings, 9 of 9 quiet KVM boots
   (`proof/11f-bug380/`). Drift against the host unchanged by the fix (BUG-400).
 
-### BUG-400 — the tick count, and with it the vDSO clock, runs slow against the host ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW on KVM (about 1 s per 15 min), MEDIUM under TCG (about 1 %)
+### BUG-400 — the tick count, and with it the vDSO clock, runs slow against the host ✅ FIXED
+- **Status:**   FIXED (`feature/11f-bug400`, `f487cc7`) · **Severity:** LOW on KVM (about 1 s per 15 min), MEDIUM under TCG (about 1 %)
 - **Found:**    2026-11-17 · drift measurement of BUG-380 (`proof/11f-bug380/drift.txt`, 12 min, `uptime` over the serial
   console): KVM 2 vCPU -1145 ppm (`7b2eea6` clock) and -809 ppm (fix), TCG 1 vCPU -9705 and -8671 ppm. The vDSO clock
-  follows `ticks x 10 ms` to within 5 ppm in every run (by design since BUG-355), so the tick count itself loses time:
-  a late tick under two periods counts as one, and the LAPIC period is calibrated once. Not caused by BUG-380's fix (the
-  same drift before and after, both runs at the same time on the same host). Not looked into further.
+  follows `ticks x 10 ms` to within 5 ppm in every run (by design since BUG-355), so the tick count itself loses time.
+- **Cause:**    the LAPIC period and the TSC rate came from one 10 ms window of PIT channel 2 at boot and nothing
+  corrected them: the period came out +747 to +2046 ppm long under KVM and +1618 to +4672 ppm under TCG (measured
+  against the HPET in the guest, 9 base boots, and against the host over 30 min). At rest no timer interrupt was lost:
+  timer interrupts, tick count and clock ran at exactly the calibration error (30 min KVM at rest: interrupts -855 ppm,
+  clock -855 ppm; busy siblings -1975/-1975; TCG -2222/-2222; HPET against the host 0.0 to 0.4 ppm). Ruled out: lost or
+  late ticks (with interrupts held off 13-35 ms the late-tick rule made up 84-86 of 83 coalesced periods), the HPET or
+  host clock, the vDSO formula, forced tick advances (0 in every run).
+- **Fix:**      `timebase.rs`: the clock is TSC time, its rate held to the HPET (else the ACPI PM timer) from a sample
+  about once a second (rate over the whole time since the reference was taken, offset removed over 4 s, at most 500 ppm,
+  re-anchored at each sample: continuous). Each timer interrupt adds the 10 ms periods the time base passed (0, 1 or
+  more); forced advances as before. `vdso_tick` publishes the time base (plus forced ticks) with its rate; the BUG-355/380
+  rules are unchanged; a lead under 1 ms is taken out over one period.
+- **Test:**     `[clock-drift]` (clock and tick count against the HPET, 10 s at rest and 6 s with late ticks, at most
+  50 ppm): base FAILED 9 of 9 (KVM 1/2/4 vCPU, busy siblings, TCG 1/2 vCPU; -726 to -5022 ppm) -> OK 9 of 9 (clock 0 ppm),
+  30 of 30 loaded KVM boots, 10 of 10 TCG legs. Host, 30 min, A/B side by side: KVM at rest -855 -> **+0.9 ppm**, busy
+  siblings -1975 -> **+0.1 ppm**, TCG -2222 -> **+0.0 ppm** (`proof/11f-bug400/drift.txt`). Regression: 1 h loadtest soak and keylat/[fair] equal to `19f7586`, gui-smoke 67/67, Chromium 20 starts and 36/36, VP9+Opus (`proof/11f-bug400/README.md`).
+
+### BUG-420 — the wall clock is set once from the RTC, to the second, and never again ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW
+- **Found:**    2026-11-17 · reading the clock path for BUG-400: `vdso_prepare` reads the CMOS RTC once
+  (`rtc::epoch()`, whole seconds, the fraction dropped: REALTIME starts 0 to 1 s behind) and REALTIME is that plus the
+  monotonic clock ever after. Nothing adjusts it later: no NTP/NTS client (`nts.rs` is a self-test of the protocol
+  with a demo timestamp), no `clock_settime`/`settimeofday`/`adjtimex`, no re-read of the RTC. With BUG-400 fixed the
+  rate is right; the offset is not corrected and a host clock change is never followed.
+
+### BUG-421 — `markers-compare.py` does not count an ASCII "-> OK" as a verdict ⬜ OPEN
+- **Status:**   OPEN · **Severity:** LOW (test tooling)
+- **Found:**    2026-11-17 · `markers-compare.py` of the R630 harness scripts (not in this repository) counts OK only for a check mark or "→ OK", although its
+  docstring says "-> OK". Markers that end in "-> OK" (`[clock-drift]`, `[vdso-mono]` diag lines and others) are not
+  verdicts to it, so a marker that goes from FAILED to OK shows as gone, and a new OK marker is not listed. FAILED is
+  counted as before.
 
 ### BUG-390 — the browser main thread spins with interrupts off in child_mem_swap: the desktop stops answering ✅ FIXED
 - **Status:**   FIXED (`feature/11f-bug390`, tests `378f83d`, fix `9692f11`) · **Severity:** HIGH when it happens (the machine

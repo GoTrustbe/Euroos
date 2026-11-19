@@ -1,0 +1,40 @@
+# TCG matrix, 10 legs, image B (f487cc7 self-test), tcgboot.sh (q35, qemu64,+smep,+smap, e1000e restrict=on, 120 s after the desktop): smp1 legs on 18,38, smp4 legs on 19,39 (4 vCPU on 2 host CPUs), the two lanes at the same time.
+user-smp1-iommu done 17:00:11 after 416s desktop=1 wd=0 nmi=0
+user-smp4-iommu done 17:00:31 after 436s desktop=1 wd=0 nmi=0
+user-smp1-noiommu done 17:07:07 after 416s desktop=1 wd=0 nmi=0
+user-smp4-noiommu done 17:07:47 after 436s desktop=1 wd=0 nmi=0
+kernel-smp1 done 17:14:08 after 421s desktop=1 wd=0 nmi=0
+kernel-smp4 done 17:15:08 after 441s desktop=1 wd=0 nmi=0
+storage-smp1-iommu-1g done 17:20:34 after 386s desktop=1 wd=0 nmi=0
+storage-smp4-iommu-1g done 17:21:59 after 411s desktop=1 wd=0 nmi=0
+combined-smp1-iommu-1g done 17:27:25 after 411s desktop=1 wd=0 nmi=0
+combined-smp4-iommu-1g done 17:29:15 after 436s desktop=1 wd=0 nmi=0
+## per leg: [vdso-mono] verdict, [clock-drift] verdict and phases, time base, crash lines, FAILED tags
+combined-smp1-iommu-1g: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 238 samples (0 refused, 0 restarts), offset from it now -3 us, largest 208 us; crash 0; FAILED: [aslr-ind] [conn] [glibc] [linux-abi] [udrv-crash] [udrv-linux] [udrv-net] 
+combined-smp4-iommu-1g: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 261 samples (0 refused, 0 restarts), offset from it now -2 us, largest 758 us; crash 0; FAILED: [aslr-ind] [conn] [glibc] [linux-abi] [udrv-crash] [udrv-linux] [udrv-net] 
+kernel-smp1: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 215 samples (0 refused, 0 restarts), offset from it now -3 us, largest 884 us; crash 0; FAILED: [aslr-ind] [conn] 
+kernel-smp4: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 236 samples (0 refused, 0 restarts), offset from it now -2 us, largest 22 us; crash 0; FAILED: [aslr-ind] [conn] 
+storage-smp1-iommu-1g: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 211 samples (0 refused, 0 restarts), offset from it now +3 us, largest 1045 us; crash 0; FAILED: [aslr-ind] [conn] [glibc] [linux-abi] [udrv-crash] [udrv-linux] [udrv-net] 
+storage-smp4-iommu-1g: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 235 samples (0 refused, 0 restarts), offset from it now +3 us, largest 171 us; crash 0; FAILED: [aslr-ind] [conn] [glibc] [linux-abi] [udrv-crash] [udrv-linux] [udrv-net] 
+user-smp1-iommu: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 228 samples (0 refused, 0 restarts), offset from it now -3 us, largest 147 us; crash 0; FAILED: [aslr-ind] [conn] [udrv-crash] [udrv-linux] [udrv-net] 
+user-smp1-noiommu: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 225 samples (0 refused, 0 restarts), offset from it now -2 us, largest 224 us; crash 0; FAILED: [aslr-ind] [conn] [udrv-crash] [udrv-linux] [udrv-net] 
+user-smp4-iommu: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 250 samples (0 refused, 0 restarts), offset from it now -2 us, largest 313 us; crash 0; FAILED: [aslr-ind] [conn] [udrv-crash] [udrv-linux] [udrv-net] 
+user-smp4-noiommu: vdso-mono 1 OK 0 FAILED; clock-drift > OK; clock +0 ppm clock +0 ppm ; 249 samples (0 refused, 0 restarts), offset from it now -3 us, largest 201 us; crash 0; FAILED: [aslr-ind] [conn] [udrv-crash] [udrv-linux] [udrv-net] 
+## FAILED lines per leg (11f-bug380 at f426198: 8/8/2/2/8/8/6/6/6/6, the same known ones)
+combined-smp1-iommu-1g.log 8
+combined-smp4-iommu-1g.log 8
+kernel-smp1.log 2
+kernel-smp4.log 2
+storage-smp1-iommu-1g.log 8
+storage-smp4-iommu-1g.log 8
+user-smp1-iommu.log 6
+user-smp1-noiommu.log 6
+user-smp4-iommu.log 6
+user-smp4-noiommu.log 6
+     18 [conn] TCP handshake FAILED to 172.66.147.243:80
+     10 [aslr-ind] 64 starts: varying bits of the distance stack-mmap 10, exe-
+      8 [udrv-net] netstack over EuroIPC through e1000d: DHCP + ARP + DNS + HT
+      8 [udrv-linux] glibc process /bin/gnet (Linux ABI, scheduled, blocking s
+      8 [udrv-crash] e1000d pid 131072 killed by a real fault (memory isolatio
+      4 [linux-abi] GBIG: malloc(209715200) FAILED
+      4 [glibc]   GBIG: malloc(209715200) FAILED

@@ -105,6 +105,8 @@ mod linuxrand;
 mod renametest;
 mod aslrtest;
 mod forkvdsotest;
+mod clockdrift;
+mod timebase;
 mod nts;
 mod verity;
 mod euroattr;
@@ -4371,6 +4373,8 @@ fn main() -> Status {
         aslrtest::selftest(&mut allocator);
         // BUG-351, BUG-352, BUG-355 ([fork-cow-write], [fork-fault-wait], [vdso-mono]).
         forkvdsotest::selftest(&mut allocator);
+        // BUG-400: the clock and the tick count against the HPET ([clock-drift]).
+        clockdrift::selftest();
         ring3::lowmem_launch_selftest(&mut allocator);
         churn::thread_churn(&mut allocator);
         churn::fork_churn(&mut allocator);

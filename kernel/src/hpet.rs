@@ -51,6 +51,16 @@ pub fn counter() -> u64 {
     unsafe { reg(0xF0).read_volatile() }
 }
 
+/// The bits of the main counter: all 64, or the low 32 when the HPET has a
+/// 32-bit counter (CAP bit 13 clear), which wraps (BUG-400 time base).
+pub fn counter_mask() -> u64 {
+    if !present() {
+        return 0;
+    }
+    let cap = unsafe { reg(0x00).read_volatile() };
+    if cap & (1 << 13) != 0 { u64::MAX } else { 0xFFFF_FFFF }
+}
+
 /// Clock frequency in Hz (10^15 fs/s ÷ period).
 pub fn freq_hz() -> u64 {
     let p = PERIOD_FS.load(Ordering::Relaxed);

@@ -1394,6 +1394,20 @@ pub static TICKS_PER_TASK: [AtomicU64; MAX_TASKS] = {
     [Z; MAX_TASKS]
 };
 pub static LOST_TICKS: AtomicU64 = AtomicU64::new(0);
+/// BUG-400 (`[clock-drift]`, `uptime`): timer interrupts taken on the BSP, and
+/// the ticks they added to the tick count (the rest of the count is forced
+/// advances from task context).
+pub static TICK_IRQS: AtomicU64 = AtomicU64::new(0);
+pub static TICK_ADDED: AtomicU64 = AtomicU64::new(0);
+/// BUG-400: the tick count's share of real time, the periods of the time
+/// base (`timebase`) the timer interrupts have counted. `TICKS` is this plus
+/// the forced advances from task context.
+static REAL_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// The ticks of real time counted so far (the rest of `TICKS` was forced).
+pub fn real_ticks() -> u64 {
+    REAL_TICKS.load(Ordering::Relaxed)
+}
 
 // -- S0 measurement (docs/design/SMP-SCHEDULER.md) --
 // Run time per task on the TSC (a short turn right after a tick is never seen by
@@ -1568,7 +1582,30 @@ pub extern "sysv64" fn schedule_tick(rsp: u64) -> u64 {
             }
         }
     }
+    // BUG-400: the tick count follows the time base, not the interrupts. The
+    // late-tick rule above made up a coalesced period only when the gap was
+    // over two periods, and the LAPIC period is as good as one 10 ms PIT
+    // window (+747 ppm long under KVM: the clock lost 0.7 s an hour). Now each
+    // interrupt adds the 10 ms periods the time base passed since the last one
+    // (on a grid half a period off the interrupts, so jitter does not flip it):
+    // 1 as a rule, 0 when the LAPIC runs early, more after a lost interrupt.
+    // The rule above still logs the late ones.
+    if per != 0 {
+        if !crate::timebase::running() {
+            let t = crate::interrupts::TICKS.load(Ordering::Relaxed) + add;
+            crate::timebase::start(now_tsc, t * 10_000_000, per);
+            REAL_TICKS.store(t, Ordering::Relaxed);
+        } else {
+            crate::timebase::on_tick(now_tsc, per);
+            let due = (crate::timebase::ns_at(now_tsc) + 5_000_000) / 10_000_000;
+            let done = REAL_TICKS.load(Ordering::Relaxed);
+            add = due.saturating_sub(done);
+            REAL_TICKS.store(done.max(due), Ordering::Relaxed);
+        }
+    }
     crate::interrupts::TICKS.fetch_add(add, Ordering::Relaxed);
+    TICK_IRQS.fetch_add(1, Ordering::Relaxed);
+    TICK_ADDED.fetch_add(add, Ordering::Relaxed);
     // Who was running when this tick landed: the CPU ledger the [cpu] heartbeat
     // line reads (the browser's download crawled at 8 KB/s in run 61 with the
     // data queued unread: was the reader starved, and by whom?).

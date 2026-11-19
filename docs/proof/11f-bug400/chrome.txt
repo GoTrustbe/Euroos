@@ -1,0 +1,71 @@
+# Chromium, image B (f487cc7) public + euroos-boot.conf (update.check=off, ui.tour=off), chrome-pack2.img, nss-pack-vid.img, smp 2, KVM, user-net without hostfwd. 20 starts on 18,38 and the 3-round session on 19,39 at the same time; then the video soak (chrome-mem-soak, sites + local VP9+Opus clips, 0.5 h = 3 rounds) on 18,38 alone.
+## 20 starts
+[chrome-smoke] start 1/20: PASS
+[chrome-smoke] start 2/20: PASS
+[chrome-smoke] start 3/20: PASS
+[chrome-smoke] start 4/20: PASS
+[chrome-smoke] start 5/20: PASS
+[chrome-smoke] start 6/20: PASS
+[chrome-smoke] start 7/20: PASS
+[chrome-smoke] start 8/20: PASS
+[chrome-smoke] start 9/20: PASS
+[chrome-smoke] start 10/20: PASS
+[chrome-smoke] start 11/20: PASS
+[chrome-smoke] start 12/20: PASS
+[chrome-smoke] start 13/20: PASS
+[chrome-smoke] start 14/20: PASS
+[chrome-smoke] start 15/20: PASS
+[chrome-smoke] start 16/20: PASS
+[chrome-smoke] start 17/20: PASS
+[chrome-smoke] start 18/20: PASS
+[chrome-smoke] start 19/20: PASS
+[chrome-smoke] start 20/20: PASS
+[chrome-smoke] starts: 20/20 PASS
+## sites, 3 rounds in one session
+[chrome-smoke] PASS - 36/36 steps ok, report and screenshots in /srv/euroos/b400-runs/ui/r3
+## consent banners (3-round session and video soak)
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (558, 640), banner gone; fu
+[gui-smoke] ok   consent youtube-r1: reject button clicked: clicked 'reject all' (reject) at (534, 640), banner gone; fu
+## crash lines in every serial log of the starts and the session: 0
+## video soak
+[chrome-mem-soak] round 1 done after 800 s: heap 122 MiB used, 389 MiB free; big 38/473 MiB (peak 44); files 43 MiB; demand 2561 MiB free
+[chrome-mem-soak] round 2 done after 1630 s: heap 123 MiB used, 388 MiB free; big 30/481 MiB (peak 44); files 43 MiB; demand 2605 MiB free
+[chrome-mem-soak] round 3 done after 2454 s: heap 123 MiB used, 388 MiB free; big 32/479 MiB (peak 44); files 43 MiB; demand 2550 MiB free
+[chrome-smoke] FAIL (2 step(s)) - 73/75 steps ok, report and screenshots in /srv/euroos/b400-runs/ui/vid
+[chrome-mem-soak] FAIL (2 step(s)): 3 rounds in 2454 s
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 2.91 -> 61.41 s in 60.6 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.41, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.16 -> 61.67 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 61.67, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.75 -> 61.25 s in 60.5 s of wall clock
+[gui-smoke] ok   local video opus audio only: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video opus audio only: no media error: last state {'st': 'playing', 't': 61.25, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 3.09 -> 61.59 s in 60.8 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.59, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.09 -> 61.59 s in 60.5 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 61.59, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 2.77 -> 61.77 s in 60.8 s of wall clock
+[gui-smoke] ok   local video opus audio only: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video opus audio only: no media error: last state {'st': 'playing', 't': 61.77, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9+opus: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9+opus: the video's time increases: currentTime 3.02 -> 61.52 s in 60.6 s of wall clock
+[gui-smoke] ok   local video vp9+opus: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video vp9+opus: no media error: last state {'st': 'playing', 't': 61.52, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video vp9 video only: the picture advances for 60 s: 28 of 28 consecutive screendumps of the player differ
+[gui-smoke] ok   local video vp9 video only: the video's time increases: currentTime 3.2 -> 61.7 s in 60.7 s of wall clock
+[gui-smoke] ok   local video vp9 video only: no media error: last state {'st': 'playing', 't': 61.7, 'rs': 4, 'err': 'none', 'can': 'probably'}
+[gui-smoke] ok   local video opus audio only: the video's time increases: currentTime 3.21 -> 61.21 s in 60.6 s of wall clock
+[gui-smoke] ok   local video opus audio only: sound reaches the audio device for 60 s: 12 of 12 five-second windows of the guest's audio output (QEMU wav) above the noise floor 
+[gui-smoke] ok   local video opus audio only: no media error: last state {'st': 'playing', 't': 61.21, 'rs': 4, 'err': 'none', 'can': 'probably'}
+## failed steps
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 1.9 s, load finished 2.4 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 261 ms; fds: 11 processes, 619 
+[gui-smoke] FAIL site openstreetmap: https://www.openstreetmap.org/: https://www.openstreetmap.org/ after 2.9 s, load finished 1.6 s later; content 273 colours, commonest 85%, still changing; desktop loop: slowest console answer 362 ms; fds: 11 processes, 621 
+## clips served: opus.webm
+vp9.webm
+vp9v.webm

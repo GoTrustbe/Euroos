@@ -1,0 +1,121 @@
+# [clock-drift] tests first. a = 475f73c (19f7586 + the test), b = f487cc7 (fix). KVM -cpu host 2 GiB, -nic none: q1 pin 18, q2 pin 18,19, q4 pin 18,19,38,39 (quiet); l2 pin 18,19 and l1 pin 18 with busy loops on 38 and 39. TCG qemu64,+smep,+smap 2 GiB: t1 1 vCPU, t2 2 vCPU, a on 18,38 and b on 19,39 at the same time.
+## a q1
+[clock-drift] rest: 10017 ms of HPET time: clock -726 ppm (-7273 us), tick count -734 ppm (-7 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2201615 kHz by the 10 ms calibration (+747 ppm); timer interrupts 1001 of 1000 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6074 ms of HPET time: clock -727 ppm (-4417 us), tick count -724 ppm (-4 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2201615 kHz by the 10 ms calibration (+747 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## a q2
+[clock-drift] rest: 10013 ms of HPET time: clock -2253 ppm (-22565 us), tick count -1397 ppm (-13 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2203002 kHz by the 10 ms calibration (+1377 ppm); timer interrupts 1000 of 1000 the calibrated period predicts (0 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6068 ms of HPET time: clock -1362 ppm (-8270 us), tick count +274 ppm (+1 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203002 kHz by the 10 ms calibration (+1377 ppm); timer interrupts 523 of 605 the calibrated period predicts (82 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## a q4
+[clock-drift] rest: 10012 ms of HPET time: clock -1748 ppm (-17504 us), tick count -1222 ppm (-12 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2202770 kHz by the 10 ms calibration (+1271 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6067 ms of HPET time: clock -1362 ppm (-8267 us), tick count -1217 ppm (-7 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2202770 kHz by the 10 ms calibration (+1271 ppm); timer interrupts 522 of 605 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## a l2
+[clock-drift] rest: 10006 ms of HPET time: clock -1190 ppm (-11911 us), tick count -632 ppm (-6 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2202592 kHz by the 10 ms calibration (+1191 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6057 ms of HPET time: clock -1135 ppm (-6877 us), tick count +464 ppm (+2 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199971 kHz by the HPET, 2202592 kHz by the 10 ms calibration (+1191 ppm); timer interrupts 521 of 604 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## a l1
+[clock-drift] rest: 10021 ms of HPET time: clock -1184 ppm (-11869 us), tick count -1143 ppm (-11 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2202610 kHz by the 10 ms calibration (+1199 ppm); timer interrupts 1001 of 1000 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6055 ms of HPET time: clock -1150 ppm (-6968 us), tick count -939 ppm (-5 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2202610 kHz by the 10 ms calibration (+1199 ppm); timer interrupts 521 of 604 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## b q1
+[clock-drift] rest: 10014 ms of HPET time: clock +0 ppm (+6 us), tick count -462 ppm (-4 ms) -> OK
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2203268 kHz by the 10 ms calibration (+1498 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6068 ms of HPET time: clock +0 ppm (-3 us), tick count +185 ppm (+1 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203268 kHz by the 10 ms calibration (+1498 ppm); timer interrupts 522 of 605 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift]   time base: reference HPET, 173 samples (0 refused, 0 restarts), offset from it now -1 us, largest 1513 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## b q2
+[clock-drift] rest: 10018 ms of HPET time: clock +0 ppm (+7 us), tick count +145 ppm (+1 ms) -> OK
+[clock-drift]   rest diag: TSC 2199971 kHz by the HPET, 2202332 kHz by the 10 ms calibration (+1073 ppm); timer interrupts 1001 of 1000 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6066 ms of HPET time: clock -1 ppm (-6 us), tick count -1026 ppm (-6 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2202332 kHz by the 10 ms calibration (+1072 ppm); timer interrupts 522 of 605 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 173 samples (0 refused, 0 restarts), offset from it now +0 us, largest 1073 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## b q4
+[clock-drift] rest: 10029 ms of HPET time: clock +0 ppm (+2 us), tick count +47 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2203030 kHz by the 10 ms calibration (+1389 ppm); timer interrupts 1002 of 1001 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6075 ms of HPET time: clock +0 ppm (-2 us), tick count -849 ppm (-5 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203030 kHz by the 10 ms calibration (+1389 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 173 samples (0 refused, 0 restarts), offset from it now +3 us, largest 1403 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## b l2
+[clock-drift] rest: 10006 ms of HPET time: clock +0 ppm (+0 us), tick count +329 ppm (+3 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2203781 kHz by the 10 ms calibration (+1731 ppm); timer interrupts 999 of 998 the calibrated period predicts (-1 missing); ticks added for late ones 2, by forced advances 0
+[clock-drift] late: 6077 ms of HPET time: clock +0 ppm (+0 us), tick count +416 ppm (+2 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203781 kHz by the 10 ms calibration (+1731 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift]   time base: reference HPET, 194 samples (0 refused, 0 restarts), offset from it now -2 us, largest 1748 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## b l1
+[clock-drift] rest: 10013 ms of HPET time: clock +0 ppm (+0 us), tick count -350 ppm (-3 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2203151 kHz by the 10 ms calibration (+1445 ppm); timer interrupts 1000 of 999 the calibrated period predicts (-1 missing); ticks added for late ones 1, by forced advances 0
+[clock-drift] late: 6058 ms of HPET time: clock +0 ppm (+0 us), tick count +293 ppm (+1 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203151 kHz by the 10 ms calibration (+1445 ppm); timer interrupts 521 of 604 the calibrated period predicts (83 missing); ticks added for late ones 85, by forced advances 0
+[clock-drift]   time base: reference HPET, 195 samples (0 refused, 0 restarts), offset from it now -2 us, largest 1459 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## tcg t1a
+[clock-drift] rest: 10016 ms of HPET time: clock -1684 ppm (-16868 us), tick count -1637 ppm (-16 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2203533 kHz by the 10 ms calibration (+1618 ppm); timer interrupts 1000 of 1000 the calibrated period predicts (0 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6076 ms of HPET time: clock -1714 ppm (-10414 us), tick count -994 ppm (-6 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2203533 kHz by the 10 ms calibration (+1618 ppm); timer interrupts 523 of 606 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## tcg t1b
+[clock-drift] rest: 10034 ms of HPET time: clock +0 ppm (+0 us), tick count +586 ppm (+5 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2200256 kHz by the 10 ms calibration (+128 ppm); timer interrupts 1004 of 1003 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6058 ms of HPET time: clock +0 ppm (+0 us), tick count +315 ppm (+1 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2200256 kHz by the 10 ms calibration (+128 ppm); timer interrupts 522 of 605 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift]   time base: reference HPET, 221 samples (0 refused, 0 restarts), offset from it now -3 us, largest 129 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## tcg t2a
+[clock-drift] rest: 10029 ms of HPET time: clock -5022 ppm (-50368 us), tick count -3940 ppm (-39 ms) -> FAILED
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2210252 kHz by the 10 ms calibration (+4672 ppm); timer interrupts 999 of 998 the calibrated period predicts (-1 missing); ticks added for late ones 0, by forced advances 0
+[clock-drift] late: 6045 ms of HPET time: clock -4808 ppm (-29068 us), tick count -4230 ppm (-25 ms) -> FAILED
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2210252 kHz by the 10 ms calibration (+4672 ppm); timer interrupts 518 of 601 the calibrated period predicts (83 missing); ticks added for late ones 84, by forced advances 0
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> FAILED
+[vdso-mono] OK lines: 1
+## tcg t2b
+[clock-drift] rest: 10000 ms of HPET time: clock +0 ppm (+0 us), tick count -50 ppm (+0 ms) -> OK
+[clock-drift]   rest diag: TSC 2199972 kHz by the HPET, 2206734 kHz by the 10 ms calibration (+3073 ppm); timer interrupts 997 of 996 the calibrated period predicts (-1 missing); ticks added for late ones 3, by forced advances 0
+[clock-drift] late: 6056 ms of HPET time: clock +0 ppm (+0 us), tick count +501 ppm (+3 ms) -> OK
+[clock-drift]   late diag: TSC 2199972 kHz by the HPET, 2206734 kHz by the 10 ms calibration (+3073 ppm); timer interrupts 520 of 603 the calibrated period predicts (83 missing); ticks added for late ones 86, by forced advances 0
+[clock-drift]   time base: reference HPET, 240 samples (0 refused, 0 restarts), offset from it now -3 us, largest 3073 us
+[clock-drift] the clock and the tick count against the HPET (at most 50 ppm; ticks within 2 + 50 ppm), at rest and with late ticks -> OK
+[vdso-mono] OK lines: 1
+## boots
+q1 end=marker after 177s failed-lines=4 crash-lines=0
+q2 end=marker after 182s failed-lines=4 crash-lines=0
+q4 end=marker after 186s failed-lines=4 crash-lines=0
+l2 end=marker after 187s failed-lines=4 crash-lines=0
+l1 end=marker after 190s failed-lines=4 crash-lines=0
+q1 end=marker after 180s failed-lines=1 crash-lines=0
+q2 end=marker after 181s failed-lines=1 crash-lines=0
+q4 end=marker after 180s failed-lines=1 crash-lines=0
+l2 end=marker after 204s failed-lines=1 crash-lines=0
+l1 end=marker after 204s failed-lines=1 crash-lines=0
+t1a end=marker after 245s failed-lines=4 crash-lines=0
+t1b end=marker after 230s failed-lines=1 crash-lines=0
+t2a end=marker after 258s failed-lines=4 crash-lines=0
+t2b end=marker after 250s failed-lines=1 crash-lines=0

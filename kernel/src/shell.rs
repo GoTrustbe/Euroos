@@ -418,6 +418,8 @@ pub fn exec(ctx: &mut ShellCtx, line: &str) -> Vec<String> {
             // BUG-380: the clock processes read (vDSO page), to measure its
             // drift against a host clock over the serial console.
             out.push(format!("vdso clock: mono {} ns, real {} ns", crate::ring3::clock_ns(1), crate::ring3::clock_ns(0)));
+            // BUG-400: raw counters, to split the drift into its causes on the host.
+            out.push(crate::clockdrift::diag_line());
             if crate::hpet::present() {
                 out.push(format!(
                     "HPET  : {} MHz, {} ms since activation (high-resolution HAL time source)",

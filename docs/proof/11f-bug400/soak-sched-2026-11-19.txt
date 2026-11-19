@@ -1,0 +1,51 @@
+# run on 2026-11-19 (R630, CPUs 0-9/20-29): 1 h loadtest soak of B (f487cc7 self-test image) and base (19f7586) side by side, 4 vCPU 16 GiB, --hammer 4 --procs 32 --soak-churn-proc 8 --duration 3900; B on 0,1,20,21, base on 2,3,22,23
+b: 5925 commands in 3906 s (5461 an hour), not ok 0
+   churn fs: 190 runs, median 8601 ms, max 10414 ms
+   churn net: 189 runs, median 145 ms, max 882 ms
+   churn proc: 759 runs, median 1310 ms, max 2630 ms
+base: 5958 commands in 3905 s (5493 an hour), not ok 0
+   churn fs: 191 runs, median 8559 ms, max 10123 ms
+   churn net: 190 runs, median 138 ms, max 1119 ms
+   churn proc: 763 runs, median 1315 ms, max 3232 ms
+b: [loadtest] hammer (inbound httpd, 4 clients): {"ok": 344032, "err": 0, "p50_ms": 7.0, "p99_ms": 436.0, "max_ms": 7682.3, "busy_windows": 190, "busy_s": 1640, "busy": {"ok": 151708, "err": 0, "p50_ms": 7.3, "p99_ms": 427.7, "max_ms": 1643.7}, "idle": {"ok": 192324, "err": 0, "p50_ms": 6.8, "p99_ms": 443.7, "max_ms": 7682.3}}
+b: completed clean: 1; crash/panic/NMI/watchdog/deadman/FROZEN lines: 0; [tick-late] lines: 25; order inversions (last): [scon] order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+base: [loadtest] hammer (inbound httpd, 4 clients): {"ok": 342959, "err": 0, "p50_ms": 7.0, "p99_ms": 436.8, "max_ms": 8873.1, "busy_windows": 191, "busy_s": 1633, "busy": {"ok": 150168, "err": 0, "p50_ms": 7.3, "p99_ms": 428.5, "max_ms": 1463.5}, "idle": {"ok": 192791, "err": 0, "p50_ms": 6.8, "p99_ms": 445.5, "max_ms": 8873.1}}
+base: completed clean: 1; crash/panic/NMI/watchdog/deadman/FROZEN lines: 0; [tick-late] lines: 24; order inversions (last): [scon] order inversions=0 (self-test provoked=2) task-lock-with-IF0=24
+
+# keylat and site load (chrome-smoke --only perf, KVM 2 vCPU, B = f487cc7 public image, base = 19f7586), 3 rounds on 2026-11-19 (run2/kb*.out, kbase*.out), and the first pair of 2026-11-17 (sched/k*.out)
+sched/k1-b:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.68 s (min 0.39, max 3.13), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 67 ms, p90 86 ms, max 106 ms over 30 keys (60 characters arrived); one poll takes 3.2 ms, which is in every number; screendump method (until 11e): media
+sched/k1-base:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.46 s (min 0.36, max 3.11), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 67 ms, p90 85 ms, max 89 ms over 30 keys (60 characters arrived); one poll takes 3.5 ms, which is in every number; screendump method (until 11e): median
+sched/k2-b:
+FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.04 s (min 2.40, max 4.14), first change median 0.19 s, n=5 | X input modifiers=0x0 (1 Shift, 2 Lock,
+ok   perf: key to screen under 100 ms: median 65 ms, p90 79 ms, max 105 ms over 30 keys (60 characters arrived); one poll takes 3.5 ms, which is in every number; screendump method (until 11e): media
+sched/k2-base:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.59 s (min 2.46, max 3.49), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 68 ms, p90 79 ms, max 95 ms over 30 keys (60 characters arrived); one poll takes 3.4 ms, which is in every number; screendump method (until 11e): median
+run2/kb1:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.66 s (min 2.10, max 3.20), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 62 ms, p90 86 ms, max 110 ms over 30 keys (60 characters arrived); one poll takes 3.3 ms, which is in every number; screendump method (until 11e): media
+run2/kbase1:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.70 s (min 2.47, max 3.48), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 67 ms, p90 80 ms, max 97 ms over 30 keys (60 characters arrived); one poll takes 3.4 ms, which is in every number; screendump method (until 11e): median
+run2/kb2:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.73 s (min 2.58, max 3.72), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 68 ms, p90 85 ms, max 93 ms over 30 keys (60 characters arrived); one poll takes 3.2 ms, which is in every number; screendump method (until 11e): median
+run2/kbase2:
+FAIL perf: reference site loads in under 3 s (Enter to the final picture): final picture median 3.16 s (min 2.51, max 4.21), first change median 0.19 s, n=5 | X input modifiers=0x0 (1 Shift, 2 Lock,
+ok   perf: key to screen under 100 ms: median 65 ms, p90 72 ms, max 97 ms over 30 keys (60 characters arrived); one poll takes 3.3 ms, which is in every number; screendump method (until 11e): median
+run2/kb3:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.93 s (min 2.89, max 3.84), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 68 ms, p90 76 ms, max 83 ms over 30 keys (60 characters arrived); one poll takes 3.2 ms, which is in every number; screendump method (until 11e): median
+run2/kbase3:
+ok   perf: reference site loads in under 3 s (Enter to the final picture): final picture median 2.93 s (min 1.27, max 3.86), first change median 0.19 s, n=5
+ok   perf: key to screen under 100 ms: median 61 ms, p90 75 ms, max 91 ms over 30 keys (60 characters arrived); one poll takes 3.3 ms, which is in every number; screendump method (until 11e): median
+
+# [fair] hogtest 5 10 8 (public image, KVM 4 vCPU, 2 runs each, sched/fair-*.log)
+sched/fair-b-1: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.3 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 63 % -> OK ✓
+sched/fair-b-2: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.3 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 62 % -> OK ✜�
+sched/fair-base-1: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.4 s, worst 0.5 s (llimit 12.6 s), lowest task 0 share 62 % -> OK ✓
+sched/fair-base-2: [fair] 10 rounds of hogtest 5 + churn proc 8: median 0.3 s, worst 0.4 s (limit 12.6 s), lowest task 0 share 61 % -> OK ✓

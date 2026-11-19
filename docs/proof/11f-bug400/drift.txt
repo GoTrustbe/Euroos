@@ -1,0 +1,30 @@
+# drift over 30 min (uptime over the serial console every 20 s, host clocks at the arrival of the line), A = 475f73c (19f7586 clock + uptime diag), B = f487cc7 (fix), A and B at the same time. rest: KVM 2 vCPU 2 GiB, A pin 18,38 / B 19,39. load: KVM 1 vCPU 2 GiB, A pin 18 / B pin 19, busy loops on the siblings 38 and 39. tcg: TCG 1 vCPU 2 GiB, A pin 18,38 / B 19,39. -nic none.
+## drift-ana.py (first sample left out: the first uptime after boot answers 70-90 ms late; least-squares slope)
+rest-a/samples.txt: 89 samples over 1767 s: MONOTONIC -854.8 ppm (-1.511 s), REALTIME -854.8 ppm; plain difference -855.4 ppm; largest offset from the fit 0.027 s
+    HPET +0.4 ppm; TSC 2199973 kHz (10 ms calibration 2201982 kHz, +913 ppm); tick count -854.9 ppm; timer interrupts 99.9145/s (-855 ppm from 100); ticks the interrupts added -854.9 ppm; forced advances 0
+rest-b/samples.txt: 89 samples over 1766 s: MONOTONIC +0.9 ppm (+0.002 s), REALTIME +0.9 ppm; plain difference -0.0 ppm; largest offset from the fit 0.035 s
+    HPET +0.8 ppm; TSC 2199974 kHz (10 ms calibration 2203959 kHz, +1812 ppm); tick count +0.9 ppm; timer interrupts 99.8223/s (-1777 ppm from 100); ticks the interrupts added +0.9 ppm; forced advances 0
+load-a/samples.txt: 89 samples over 1765 s: MONOTONIC -1975.5 ppm (-3.486 s), REALTIME -1975.5 ppm; plain difference -1975.5 ppm; largest offset from the fit 0.001 s
+    HPET +0.4 ppm; TSC 2199973 kHz (10 ms calibration 2204474 kHz, +2046 ppm); tick count -1974.9 ppm; timer interrupts 99.8025/s (-1975 ppm from 100); ticks the interrupts added -1974.9 ppm; forced advances 0
+load-b/samples.txt: 89 samples over 1766 s: MONOTONIC +0.1 ppm (+0.000 s), REALTIME +0.1 ppm; plain difference +0.1 ppm; largest offset from the fit 0.009 s
+    HPET +0.0 ppm; TSC 2199972 kHz (10 ms calibration 2204276 kHz, +1956 ppm); tick count +0.2 ppm; timer interrupts 99.8066/s (-1934 ppm from 100); ticks the interrupts added +0.2 ppm; forced advances 0
+tcg-a/samples.txt: 89 samples over 1766 s: MONOTONIC -2222.2 ppm (-3.924 s), REALTIME -2222.2 ppm; plain difference -2222.3 ppm; largest offset from the fit 0.000 s
+    HPET -0.0 ppm; TSC 2199971 kHz (10 ms calibration 2204756 kHz, +2175 ppm); tick count -2222.2 ppm; timer interrupts 99.7778/s (-2222 ppm from 100); ticks the interrupts added -2222.2 ppm; forced advances 0
+tcg-b/samples.txt: 89 samples over 1766 s: MONOTONIC +0.0 ppm (+0.000 s), REALTIME +0.0 ppm; plain difference -0.0 ppm; largest offset from the fit 0.000 s
+    HPET -0.1 ppm; TSC 2199971 kHz (10 ms calibration 2207793 kHz, +3555 ppm); tick count +0.3 ppm; timer interrupts 99.6219/s (-3781 ppm from 100); ticks the interrupts added +0.3 ppm; forced advances 0
+## vdrift.py (first to last sample, as in 11f-bug380)
+rest-a: samples 90 over 1787.5 s host: MONOTONIC -814.4 ppm (-1.456 s), REALTIME -814.4 ppm (-1.456 s), host wall vs host mono +0.000 s; largest offset from the line 0.073 s
+diag over 1787.5 s host: HPET +41.2 ppm; TSC 2200063 kHz by the host (2201982 kHz by the 10 ms calibration, +873 ppm); tick count -814.1 ppm; timer interrupts 99.9186 Hz (-814 ppm from 100 Hz); ticks the interrupts added -814.1 ppm, forced 0; clock (diag) -814.2 ppm
+rest-b: samples 90 over 1785.9 s host: MONOTONIC +52.1 ppm (+0.093 s), REALTIME +52.1 ppm (+0.093 s), host wall vs host mono -0.000 s; largest offset from the line 0.092 s
+diag over 1785.9 s host: HPET +41.9 ppm; TSC 2200064 kHz by the host (2203959 kHz by the 10 ms calibration, +1770 ppm); tick count +45.1 ppm; timer interrupts 99.8265 Hz (-1735 ppm from 100 Hz); ticks the interrupts added +45.1 ppm, forced 0; clock (diag) +41.9 ppm
+load-a: samples 90 over 1785.0 s host: MONOTONIC -1954.0 ppm (-3.488 s), REALTIME -1954.0 ppm (-3.488 s), host wall vs host mono -0.000 s; largest offset from the line 0.038 s
+diag over 1785.0 s host: HPET +20.7 ppm; TSC 2200018 kHz by the host (2204474 kHz by the 10 ms calibration, +2026 ppm); tick count -1954.3 ppm; timer interrupts 99.8046 Hz (-1954 ppm from 100 Hz); ticks the interrupts added -1954.3 ppm, forced 0; clock (diag) -1954.5 ppm
+load-b: samples 90 over 1786.6 s host: MONOTONIC +16.3 ppm (+0.029 s), REALTIME +16.3 ppm (+0.029 s), host wall vs host mono -0.000 s; largest offset from the line 0.029 s
+diag over 1786.6 s host: HPET +15.9 ppm; TSC 2200007 kHz by the host (2204276 kHz by the 10 ms calibration, +1940 ppm); tick count +13.2 ppm; timer interrupts 99.8082 Hz (-1918 ppm from 100 Hz); ticks the interrupts added +13.2 ppm, forced 0; clock (diag) +15.9 ppm
+tcg-a: samples 90 over 1784.9 s host: MONOTONIC -2216.5 ppm (-3.956 s), REALTIME -2216.6 ppm (-3.956 s), host wall vs host mono +0.000 s; largest offset from the line 0.010 s
+diag over 1784.9 s host: HPET +5.3 ppm; TSC 2199983 kHz by the host (2204756 kHz by the 10 ms calibration, +2170 ppm); tick count -2215.7 ppm; timer interrupts 99.7784 Hz (-2216 ppm from 100 Hz); ticks the interrupts added -2215.7 ppm, forced 0; clock (diag) -2216.9 ppm
+tcg-b: samples 90 over 1785.1 s host: MONOTONIC +2.1 ppm (+0.004 s), REALTIME +2.1 ppm (+0.004 s), host wall vs host mono -0.000 s; largest offset from the line 0.004 s
+diag over 1785.1 s host: HPET +1.9 ppm; TSC 2199975 kHz by the host (2207793 kHz by the 10 ms calibration, +3553 ppm); tick count +3.5 ppm; timer interrupts 99.6222 Hz (-3778 ppm from 100 Hz); ticks the interrupts added +3.5 ppm, forced 0; clock (diag) +1.9 ppm
+## repeat 2026-11-19, rest B (f487cc7) again, KVM 2 vCPU 2 GiB, pin 6,26, other VMs on other CPUs (vdrift.py printed nothing at the end, the samples file is complete: 90 samples)
+drift-ana.py: 89 samples over 1766 s: MONOTONIC -1.5 ppm (-0.003 s), REALTIME -1.5 ppm; plain difference -0.7 ppm; HPET -1.4 ppm; tick count -1.2 ppm; timer interrupts 99.9199/s (-801 ppm from 100, the calibration error: unchanged); forced advances 0
+first to last sample (as vdrift.py): 90 samples over 1786.3 s host: MONOTONIC +27.9 ppm, REALTIME +27.9 ppm (the first uptime answer after boot arrives late: the 40-50 ppm the first sample adds)
