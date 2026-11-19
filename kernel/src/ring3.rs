@@ -1890,7 +1890,7 @@ fn cdp_begin_frame() {
     crate::serial_println!("[cdp] capture requested; threads now:");
     let (mn, ma, mr) = last_syscall(main);
     crate::serial_println!("  main t{main} {:?}: last={mn}(a1={ma:#x})->{mr:#x}", thread_name(main));
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         let (n2, a2, r2) = last_syscall(t);
         crate::serial_println!("  t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
     }
@@ -5117,6 +5117,38 @@ pub fn files_count() -> usize {
     FILES.lock().len()
 }
 
+// -- BUG-430: GLIBC_THREADS from the launchers and the CDP frame --
+//
+// System calls (clone, exit, exit_group, prctl, seccomp), `retire_task` and the
+// fault handler take GLIBC_THREADS with interrupts off. The launcher code of task 0
+// (`run_glibc`, `run_glibc_disk`, `glibc_disk_launch`, `spawn_glibc_persistent`,
+// `kill_persistent_glibc`, `kill_glibc_group`) and `cdp_begin_frame` take it with
+// interrupts on: a tick inside such a critical section parks the holder for good
+// and the next task that wants the lock spins (kernel code runs on the BSP only).
+// All of those go through these four functions, each a short statement of its own.
+
+/// A copy of the list of worker tasks of the running glibc program.
+fn glibc_threads_snapshot() -> alloc::vec::Vec<usize> {
+    let v = GLIBC_THREADS.lock().clone();
+    v
+}
+
+/// How many worker tasks the running glibc program has.
+fn glibc_threads_len() -> usize {
+    let n = GLIBC_THREADS.lock().len();
+    n
+}
+
+/// Forget all worker tasks (a launch starts, or the persistent program ended).
+fn glibc_threads_clear() {
+    GLIBC_THREADS.lock().clear();
+}
+
+/// Forget one worker task (its slot is retired).
+fn glibc_threads_forget(t: usize) {
+    GLIBC_THREADS.lock().retain(|&x| x != t);
+}
+
 pub fn reap_dead(falloc: &mut FrameAllocator) {
     // BUG-007: do NOT hold BG.lock() across the (preemptible) frame-freeing below. If the
     // timer preempts task 0 mid-free, the scheduler may switch to a bg-musl process whose
@@ -5382,7 +5414,7 @@ fn retire_task(t: usize) {
     // which tasks the end of the run kills, GLIBC_CTIDS where an exiting thread
     // writes its zero (in another address space by then), THREAD_NAMES what the
     // diagnostics call it.
-    GLIBC_THREADS.lock().retain(|&x| x != t);
+    glibc_threads_forget(t);
     GLIBC_CTIDS.lock().retain(|&(x, _)| x != t);
     THREAD_NAMES.lock().retain(|(x, _)| *x != t);
     if t < crate::sched::MAX_TASKS && crate::sched::is_dead(t) {
@@ -11451,6 +11483,8 @@ static SWAPHAM_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBo
 static SWAPHAM_CALLS: AtomicU64 = AtomicU64::new(0);
 /// The hammer takes FILES the way the heap watch does (`files_heap_bytes`) instead of DEMAND_FILE_MAPS (BUG-410).
 static SWAPHAM_FILES: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// The hammer copies, counts and edits GLIBC_THREADS the way the launchers do (`glibc_threads_*`, BUG-430).
+static SWAPHAM_THREADS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static SWAPHAM_TASK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
 const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
 
@@ -11459,6 +11493,12 @@ const SWAPHAM_CHAN: u64 = 0x5357_4150_4841_4D21; // "SWAPHAM!"
 extern "C" fn swap_hammer_main() -> ! {
     loop {
         while SWAPHAM_ON.load(Ordering::Acquire) {
+            if SWAPHAM_THREADS.load(Ordering::Relaxed) {
+                core::hint::black_box(glibc_threads_snapshot().len() + glibc_threads_len());
+                glibc_threads_forget(usize::MAX);
+                SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             if SWAPHAM_FILES.load(Ordering::Relaxed) {
                 core::hint::black_box(files_heap_bytes());
                 SWAPHAM_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -11581,14 +11621,48 @@ pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
     SWAPHAM_FILES.store(false, Ordering::Release);
     let sums = SWAPHAM_CALLS.load(Ordering::Relaxed);
     let files_ok = sums > 0;
+    // (4) BUG-430: the launchers and `cdp_begin_frame` copy GLIBC_THREADS from
+    // task 0 with interrupts on; clone, exit and exit_group take it with
+    // interrupts off. Same shape as (3): a kernel task copies, counts and edits
+    // the list without pause (32 entries, so the critical section is not empty),
+    // this task takes it with interrupts off for 3 s. No program runs here, so the
+    // list is ours; it is emptied again afterwards.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut g = GLIBC_THREADS.lock();
+        g.clear();
+        g.extend((0..32usize).map(|i| usize::MAX - 1 - i));
+    });
+    SWAPHAM_CALLS.store(0, Ordering::Relaxed);
+    SWAPHAM_THREADS.store(true, Ordering::Release);
+    SWAPHAM_ON.store(true, Ordering::Release);
+    crate::sched::wake(SWAPHAM_CHAN, 1);
+    let t_end = crate::interrupts::ticks() + 300;
+    let mut taken_t = 0u64;
+    while crate::interrupts::ticks() < t_end {
+        crate::sched::yield_now();
+        for _ in 0..2000 {
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                core::hint::black_box(GLIBC_THREADS.lock().len());
+            });
+            taken_t += 1;
+        }
+    }
+    SWAPHAM_ON.store(false, Ordering::Release);
+    SWAPHAM_THREADS.store(false, Ordering::Release);
+    let copies = SWAPHAM_CALLS.load(Ordering::Relaxed);
+    let threads_ok = copies > 0;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        GLIBC_THREADS.lock().clear();
+    });
     if !if_was {
         x86_64::instructions::interrupts::disable();
     }
-    let ok = bad.is_empty() && runs_ok == rounds && files_ok;
+    let ok = bad.is_empty() && runs_ok == rounds && files_ok && threads_ok;
     alloc::format!(
-        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} FILES: {taken} takes with interrupts off beside {sums} heap-watch sums with interrupts on{} -> {}",
+        "[swap-irq] locks of the swapped state held with interrupts on: {}; gslots beside a kernel task that takes DEMAND_FILE_MAPS with interrupts on: {runs_ok} of {rounds} runs ok;{detail} FILES: {taken} takes with interrupts off beside {sums} heap-watch sums with interrupts on{}; GLIBC_THREADS: {taken_t} takes with interrupts off beside {copies} launcher-style copies with interrupts on{} -> {}",
         if bad.is_empty() { String::from("none") } else { bad.join(", ") },
         if files_ok { "" } else { " (no sum ran) FAILED" },
+        if threads_ok { "" } else { " (no copy ran) FAILED" },
         if ok { "OK ✓" } else { "FAILED" })
 }
 
@@ -13666,7 +13740,7 @@ pub fn spawn_glibc_persistent(
     // the first attempt mapped nothing and the auxv promise nearly caused a crash.
     let _ = vdso_ok;
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
@@ -13709,11 +13783,11 @@ pub fn kill_persistent_glibc(falloc: &mut FrameAllocator) {
     // before the demand pool their pages came from is handed back below.
     reap_orphan_fork_children();
     crate::sched::reclaim_task(main);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::mark_dead(t);
         crate::sched::reclaim_task(t);
     }
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     let pml4 = PERSIST_PML4.swap(0, Ordering::Relaxed);
     let arena = PERSIST_ARENA.swap(0, Ordering::Relaxed);
@@ -14354,7 +14428,7 @@ fn glibc_disk_launch(
         return Err("(out of memory: vDSO mapping)");
     }
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
@@ -14585,7 +14659,7 @@ pub fn run_glibc_disk(
             let tick = crate::interrupts::ticks();
             crate::serial_println!("[stall] snap {snaps} ({iters} iters): +{} syscalls +{} futex +{} epoll, ticks {}->{} ({}) | threads={}",
                 seq - prev_seq, fx - prev_futex, ep - prev_epoll, prev_tick, tick,
-                if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, GLIBC_THREADS.lock().len());
+                if tick == prev_tick { "TIMER DEAD" } else { "ticking" }, glibc_threads_len());
             crate::serial_println!("[evfd] writes={} epoll-checks={} epoll-ready={}",
                 crate::net::EVENTFD_WRITES.load(Ordering::Relaxed),
                 EVFD_IN_EPOLLSET.load(Ordering::Relaxed),
@@ -14634,12 +14708,12 @@ pub fn run_glibc_disk(
     reap_orphan_fork_children();
     // Idempotent: the clean exit path already freed these.
     free_thread_kstack(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
     crate::sched::reclaim_task(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::reclaim_task(t);
     }
     let out = OUTPUT.lock().clone();
@@ -14669,7 +14743,7 @@ pub fn run_glibc_disk(
 /// main and worker tasks Dead and drop their futex waits, so nothing can wake them
 /// after their stacks and address space are freed. Caller is task 0, never one of them.
 fn kill_glibc_group(main_task: usize) {
-    let threads: alloc::vec::Vec<usize> = GLIBC_THREADS.lock().clone();
+    let threads = glibc_threads_snapshot();
     let mut killed = 0usize;
     for &t in core::iter::once(&main_task).chain(threads.iter()) {
         futex_purge_task(t);
@@ -15753,7 +15827,7 @@ pub fn run_glibc(
     }
     // Threads this process clones share this address space.
     GLIBC_PML4.store(pml4, Ordering::Relaxed);
-    GLIBC_THREADS.lock().clear();
+    glibc_threads_clear();
     GLIBC_CTIDS.lock().clear();
     GLIBC_DONE.store(false, Ordering::Relaxed);
     GLIBC_EXIT_CODE.store(0, Ordering::Relaxed);
@@ -15868,7 +15942,7 @@ pub fn run_glibc(
         // ...and the call it is IN (the ring keeps a call that has not returned
         // with result 0xffff...: that is the one it waits in).
         dump_main_syscalls();
-        for &t in GLIBC_THREADS.lock().iter() {
+        for t in glibc_threads_snapshot() {
             let (n2, a2, r2) = last_syscall(t);
             crate::serial_println!("[glibc]   thread t{t} {:?}: last={n2}(a1={a2:#x})->{r2:#x}", thread_name(t));
         }
@@ -15881,7 +15955,7 @@ pub fn run_glibc(
     // Reclaim any kstacks still held by this run's tasks (idempotent on the
     // clean-exit path, which already freed them).
     free_thread_kstack(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         free_thread_kstack(t);
     }
     GLIBC_MAIN_TASK.store(usize::MAX, Ordering::Relaxed);
@@ -15889,7 +15963,7 @@ pub fn run_glibc(
     // kernel stacks + address space are freed, and glibc tasks have no BgProc, so the
     // slots can be reused — otherwise the 48-slot table fills after ~14 programs.
     crate::sched::reclaim_task(main_task);
-    for &t in GLIBC_THREADS.lock().iter() {
+    for t in glibc_threads_snapshot() {
         crate::sched::reclaim_task(t);
     }
     let out = OUTPUT.lock().clone();
