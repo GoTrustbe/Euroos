@@ -2469,7 +2469,9 @@ fn cdp_pump_inner() {
         crate::serial_println!("  main t{main}: last={mn}(a1={ma:#x})->{mr:#x}");
         // Snapshot under IF=0, print without the lock: clone/exit take GLIBC_THREADS
         // in syscalls with interrupts off, and this runs on task 0 with them on.
-        let threads: alloc::vec::Vec<usize> = { let _g = crate::sched::IfOffGuard::new(); GLIBC_THREADS.lock().clone() };
+        // (The guard used to sit in a block whose tail expression held the lock
+        // temporary: the lock was released after the interrupts came back, BUG-430.)
+        let threads = glibc_threads_snapshot();
         for &t in threads.iter() {
             let (n, a, r) = last_syscall(t);
             crate::serial_println!("  thread t{t} {:?}: last={n}(a1={a:#x})->{r:#x} dead={}",
@@ -5125,27 +5127,34 @@ pub fn files_count() -> usize {
 // `kill_persistent_glibc`, `kill_glibc_group`) and `cdp_begin_frame` take it with
 // interrupts on: a tick inside such a critical section parks the holder for good
 // and the next task that wants the lock spins (kernel code runs on the BSP only).
-// All of those go through these four functions, each a short statement of its own.
+// All of those go through these four functions: interrupts off before the lock,
+// back on after it is released, the critical section a copy and nothing else (the
+// caller works on the copy). Each lock is a statement of its own: a temporary of
+// a tail expression would outlive the guard and be released with interrupts on.
 
 /// A copy of the list of worker tasks of the running glibc program.
 fn glibc_threads_snapshot() -> alloc::vec::Vec<usize> {
+    let _g = crate::sched::IfOffGuard::new();
     let v = GLIBC_THREADS.lock().clone();
     v
 }
 
 /// How many worker tasks the running glibc program has.
 fn glibc_threads_len() -> usize {
+    let _g = crate::sched::IfOffGuard::new();
     let n = GLIBC_THREADS.lock().len();
     n
 }
 
 /// Forget all worker tasks (a launch starts, or the persistent program ended).
 fn glibc_threads_clear() {
+    let _g = crate::sched::IfOffGuard::new();
     GLIBC_THREADS.lock().clear();
 }
 
 /// Forget one worker task (its slot is retired).
 fn glibc_threads_forget(t: usize) {
+    let _g = crate::sched::IfOffGuard::new();
     GLIBC_THREADS.lock().retain(|&x| x != t);
 }
 
@@ -11526,7 +11535,9 @@ extern "C" fn swap_hammer_main() -> ! {
 /// stress: `gslots` (40 fork children with 6 threads each, ended three ways,
 /// with threads of the parent beside them) runs while a kernel task with
 /// interrupts on takes DEMAND_FILE_MAPS without pause (`demand_addr_origin`).
-/// Before the fix (2) stops the machine (BUG-390). `rounds` runs of (2).
+/// Before the fix (2) stops the machine (BUG-390). `rounds` runs of (2). (3) and
+/// (4) are the same shape for FILES (BUG-410) and GLIBC_THREADS (BUG-430): a
+/// kernel task takes the lock with interrupts on, this task with interrupts off.
 pub fn swap_irq_selftest(falloc: &mut FrameAllocator, rounds: usize) -> String {
     let rounds = rounds.max(1);
     let if_was = x86_64::instructions::interrupts::are_enabled();
