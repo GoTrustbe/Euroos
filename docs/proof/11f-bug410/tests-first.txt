@@ -1,0 +1,23 @@
+# tests first: image of 781537d (the [swap-irq] part 3 test, the heap-watch sum still without IfOffGuard), KVM, 4 GiB, no NIC, up to the [swap-irq] line (120 s without serial output = stop, then an NMI probe). CPUs 10-19.
+# The NMI probe of every boot: CPU 0, RFLAGS=0x2 (IF=0), current task 0 (the test task) spinning in the lock function of FILES
+# (eurolock Mutex<Vec<(String, Cow<[u8]>)>>::lock +0xa0 / +0x94, symbolised with the link map of the image: the pause loop).
+== t-s1-1: t-s1-1 end=silent after 362s swapirq= failed-lines=0 crash-lines=0 nmi=2
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ff4025f CS=0x8 RSP=0x000000007fe79a10 RFLAGS=0x2
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=0
+== t-s1-2: t-s1-2 end=silent after 354s swapirq= failed-lines=0 crash-lines=0 nmi=2
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ff4025f CS=0x8 RSP=0x000000007fe79a10 RFLAGS=0x2
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=0
+== t-s2-1: t-s2-1 end=silent after 365s swapirq= failed-lines=0 crash-lines=0 nmi=2
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ff3025f CS=0x8 RSP=0x000000007fe68a10 RFLAGS=0x2
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=0
+== t-s2-2: t-s2-2 end=silent after 363s swapirq= failed-lines=0 crash-lines=0 nmi=2
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ff3025f CS=0x8 RSP=0x000000007fe68a10 RFLAGS=0x2
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=0
+== t-s4-1: t-s4-1 end=silent after 362s swapirq= failed-lines=0 crash-lines=0 nmi=2
+[nmi] cpu 0
+[nmi] interrupted RIP=0x000000006ff10253 CS=0x8 RSP=0x000000007fe46a10 RFLAGS=0x2
+[nmi] current task 0 last-syscall=60(a1=0x0)->0x0 globals-owner=0

@@ -217,6 +217,9 @@ Two refinements, each behind its own measurement:
   census, the browser spun in `child_mem_swap`). The locks of the swapped demand state (`CHILD_MEM`, the five
   lists `child_mem_swap` swaps, `GLIBC_FORK_CHILDREN`, `CHILD_THREADS`) are `irqlock::IrqLock`s: interrupts off
   while held, whoever takes them; a wait of 2 s prints an `[irqlock]` line with the last holder and its place.
+  `FILES` (plain `eurolock`) is taken by system calls with interrupts off; its one task-context taker while programs
+  run, the heap watch of `run_glibc_disk`, holds it under `IfOffGuard` (BUG-410, `files_heap_bytes`). Open: BUG-430,
+  BUG-431 (other locks taken both ways).
 - `census_nolock`, `current_lockfree` (BUG-144/157): keep reading through the init-time pointer; add the CPU
   column from `RUNCTX.cpu` and `CUR_ON`. BUG-202 (scan bound of the NMI probe) is independent and should be fixed
   first, because the probe will now also land on AP entry stacks.

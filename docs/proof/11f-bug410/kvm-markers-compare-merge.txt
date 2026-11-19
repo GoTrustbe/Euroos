@@ -1,0 +1,49 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -cpu host, no NIC, to "interactive loop started". merge = d18fa36 (S0-S7 + BUG-390), bases = 4df79a3 (S7) and 5ec0c28 (BUG-390). CPUs 10,11 / 12,13 / 14,15
+kvm/d18fa36-st/k-1G: k-1G end=marker after 218s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+kvm/d18fa36-st/k-2G: k-2G end=marker after 269s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/d18fa36-st/k-4G: k-4G end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/4df79a3-st/k-1G: k-1G end=marker after 218s swapirq= failed-lines=2 crash-lines=0 nmi=0
+kvm/4df79a3-st/k-2G: k-2G end=marker after 219s swapirq= failed-lines=0 crash-lines=0 nmi=0
+kvm/4df79a3-st/k-4G: k-4G end=marker after 221s swapirq= failed-lines=0 crash-lines=0 nmi=0
+kvm/5ec0c28-st/k-1G: k-1G end=marker after 249s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+kvm/5ec0c28-st/k-2G: k-2G end=marker after 252s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/5ec0c28-st/k-4G: k-4G end=marker after 306s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+== kvm/4df79a3-st/k-1G.log  vs  kvm/d18fa36-st/k-1G.log
+== runs/kvm/4df79a3-st/k-1G.log  vs  runs/kvm/d18fa36-st/k-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/4df79a3-st/k-2G.log  vs  kvm/d18fa36-st/k-2G.log
+== runs/kvm/4df79a3-st/k-2G.log  vs  runs/kvm/d18fa36-st/k-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/4df79a3-st/k-4G.log  vs  kvm/d18fa36-st/k-4G.log
+== runs/kvm/4df79a3-st/k-4G.log  vs  runs/kvm/d18fa36-st/k-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 1
+   swap-irq: OKx1
+== kvm/5ec0c28-st/k-1G.log  vs  kvm/d18fa36-st/k-1G.log
+== runs/kvm/5ec0c28-st/k-1G.log  vs  runs/kvm/d18fa36-st/k-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/5ec0c28-st/k-2G.log  vs  kvm/d18fa36-st/k-2G.log
+== runs/kvm/5ec0c28-st/k-2G.log  vs  runs/kvm/d18fa36-st/k-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/5ec0c28-st/k-4G.log  vs  kvm/d18fa36-st/k-4G.log
+== runs/kvm/5ec0c28-st/k-4G.log  vs  runs/kvm/d18fa36-st/k-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0

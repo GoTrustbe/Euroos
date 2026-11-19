@@ -1,0 +1,44 @@
+# KVM self-test boots, 2 vCPU, HD-Audio, -cpu host, no NIC, to "interactive loop started". fix = tree of a780d84, base = merge d18fa36. CPUs 38,39 (fix) and 10,11 (merge)
+kvm/fix-st/k-1G: k-1G end=marker after 229s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+kvm/d18fa36-st/k-1G: k-1G end=marker after 218s swapirq=OK ✓ failed-lines=2 crash-lines=0 nmi=0
+kvm/fix-st/k-2G: k-2G end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/d18fa36-st/k-2G: k-2G end=marker after 269s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/fix-st/k-4G: k-4G end=marker after 240s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+kvm/d18fa36-st/k-4G: k-4G end=marker after 238s swapirq=OK ✓ failed-lines=0 crash-lines=0 nmi=0
+== kvm/d18fa36-st/k-1G.log  vs  kvm/fix-st/k-1G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/d18fa36-st/k-2G.log  vs  kvm/fix-st/k-2G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+== kvm/d18fa36-st/k-4G.log  vs  kvm/fix-st/k-4G.log
+-- WORSE: 0
+-- CHANGED (not worse): 0
+-- only in base: 0
+-- only in new: 0
+# the 2 FAILED lines at 1 GiB in every image: GBIG malloc(200 MiB) on a 1 GiB machine (not a marker verdict)
+fix 1G swap-irq: 1 ok, 0 failed
+fix 1G vdso-mono: 1 ok, 0 failed
+fix 1G aslr: 1 ok, 0 failed
+fix 1G aslr-ind: 1 ok, 0 failed
+fix 1G aslr-exec: 1 ok, 0 failed
+fix 1G aslr-phys: 1 ok, 0 failed
+fix 1G arena-segs: 1 ok, 0 failed
+fix 2G swap-irq: 1 ok, 0 failed
+fix 2G vdso-mono: 1 ok, 0 failed
+fix 2G aslr: 1 ok, 0 failed
+fix 2G aslr-ind: 1 ok, 0 failed
+fix 2G aslr-exec: 1 ok, 0 failed
+fix 2G aslr-phys: 1 ok, 0 failed
+fix 2G arena-segs: 1 ok, 0 failed
+fix 4G swap-irq: 1 ok, 0 failed
+fix 4G vdso-mono: 1 ok, 0 failed
+fix 4G aslr: 1 ok, 0 failed
+fix 4G aslr-ind: 1 ok, 0 failed
+fix 4G aslr-exec: 1 ok, 0 failed
+fix 4G aslr-phys: 1 ok, 0 failed
+fix 4G arena-segs: 1 ok, 0 failed

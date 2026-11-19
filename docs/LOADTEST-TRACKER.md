@@ -3248,13 +3248,54 @@ scenarios `procs`/`churn`/`fsio`/`net`/`soak`), `scripts/loadtest-lockbench.py`,
 - **Release 2026.11.17 (`b30adb6`):** the same code (`demand_addr_origin` takes `DEMAND_FILE_MAPS`, a plain spin lock,
   unguarded from `dump_rip_profile`, which the heartbeat census calls): the same risk.
 
-### BUG-410 — FILES taken with interrupts on in the heap watch of run_glibc_disk ⬜ OPEN
-- **Status:**   OPEN · **Severity:** LOW (only `run_glibc_disk`: the chrome-boot image, the crashpad and LLM runners; not
-  the desktop browser)
+### BUG-410 — FILES taken with interrupts on in the heap watch of run_glibc_disk ✅ FIXED
+- **Status:**   FIXED (`feature/11f-integ2`, tests `781537d`, fix `a780d84`) · **Severity:** LOW (only `run_glibc_disk`: the
+  chrome-boot image, the crashpad and LLM runners; not the desktop browser)
 - **Found:**    2026-11-17 · reading for BUG-390: the launcher loop of `run_glibc_disk` (task 0, interrupts on: it ends
   in `hlt`) sums `FILES` when the kernel heap grows by a 64 MiB step, without `IfOffGuard`. The demand fault handler and
   system calls take `FILES` with interrupts off, so a tick inside that sum can stop the machine the way BUG-390 did.
-  `FILES` is an `eurolock` `Mode::Plain` lock (statistics only). Not reproduced, not changed in `feature/11f-bug390`.
+  `FILES` is an `eurolock` `Mode::Plain` lock (statistics only).
+- **Who takes FILES:** about 100 call sites in `ring3.rs` and `fsback.rs`. The system-call dispatcher
+  (`linux_dispatch_inner_raw` and the `vfs_*` functions below it) and the demand fault handler
+  (`handle_demand_fault_inner`) take it with interrupts off (FMASK; an interrupt gate), as does everything that wraps it in
+  `IfOffGuard` or `without_interrupts` (`cdp_pump_inner`, `ram_files_census_inner`, `mem_totals`, `paged_named_release`,
+  `ram_file_sweep`, `take_dirty`, `fsback::fetch`, `pipehold_ctl`, `fsback::write_back`). So the hang is possible for
+  every taker with interrupts on: ring-0 code runs on the BSP only, and a holder the timer parked can never run again
+  once a task with interrupts off spins on the lock. The taker with interrupts on that runs while programs run was the
+  heap watch of `run_glibc_disk`.
+- **Cause (proven by the test):** `run_glibc_disk` summed `FILES` with interrupts on (`FILES.lock().iter()...sum()`).
+- **Reproduced:** `[swap-irq]` part 3 (`781537d`): a kernel task with interrupts on calls the heap-watch sum
+  (`files_heap_bytes`) without pause while the test task takes `FILES` with interrupts off (`files_count`, as a system call
+  does) for 3 s. Before the fix **5 of 5 boots stop** (1, 2 and 4 vCPU): task 0 spins with IF=0 in `FILES.lock`
+  (`proof/11f-bug410/tests-first.txt`).
+- **Fix:**      `files_heap_bytes` (the sum, one function) turns interrupts off before it takes `FILES`
+  (`IfOffGuard`, as the other `FILES` takers of the launcher and the census do); the lock is released before the
+  interrupt state comes back. `FILES` itself is not made an `IrqLock`: its takers copy file contents and call functions
+  that take other locks while they hold it, and not every one of them is reviewed for that.
+- **Verified:** see `proof/11f-bug410/README.md`.
+- **Same class, found by reading, NOT changed:** BUG-430, BUG-431.
+
+### BUG-430 — GLIBC_THREADS taken with interrupts on in the launcher, the CDP frame and run_glibc ⬜ OPEN
+- **Status:**   OPEN (found by reading, not reproduced, not changed) · **Severity:** LOW to MEDIUM (`cdp_begin_frame` runs
+  in the desktop browser path)
+- **Found:**    2026-11-19 · looking for the class of BUG-410: `GLIBC_THREADS` (a plain `spin::Mutex`) is taken with
+  interrupts off by `linux_dispatch_inner_raw` (clone, exit, exit_group), `futex_purge_task`, `proc_tasks` and
+  `set_process_profile`, and with interrupts on by `cdp_begin_frame` (it prints inside the loop), `run_glibc_disk` (stall
+  snapshot, end of the run), `kill_glibc_group`, `spawn_glibc_persistent` and `run_glibc` (all in `ring3.rs`).
+  `dump_threads_now` and one site of `cdp_pump_inner` already guard it. Same hang as BUG-390 when a tick lands in a
+  critical section of an unguarded taker.
+
+### BUG-431 — OUTPUT, THREAD_NAMES, GLIBC_CTIDS, CURRENT_APP, CHILD_EXE_PATH, DISK_FILES also taken both ways ⬜ OPEN
+- **Status:**   OPEN (found by a scan, not checked site by site, not reproduced, not changed) · **Severity:** LOW
+- **Found:**    2026-11-19 · same scan as BUG-430. Locks that system calls take with interrupts off and that launcher and
+  diagnostics functions of `ring3.rs` take with no `IfOffGuard` in the function: `OUTPUT` (`take_output`,
+  `run_glibc_disk`, `run_glibc`, `run_args`, `run_dynamic`, `run_interp`, `glibc_disk_launch`, `spawn_glibc_persistent`;
+  system calls: `output_push`), `THREAD_NAMES` (`thread_name`, `thread_name_print`, `thread_name_try`, `retire_task`, the
+  launchers), `GLIBC_CTIDS`, `CURRENT_APP`, `CHILD_EXE_PATH`, `DISK_FILES` (`europack_*`, `glibc_disk_launch`,
+  `do_child_execve`). `FILES` itself has a few more takers that depend on the caller: `vfs_file_bytes` (called from
+  `main.rs`), `files_count` (`churn.rs`, `ltstat.rs`), `register_file` and `register_file_static` (boot and launch code),
+  `fdsem_selftest`. A function listed here is a candidate: whether it runs with interrupts on while a program runs has
+  to be checked per site.
 
 ### BUG-354 — an exec in a fork child moved the swap floor of the browser main process ✅ FIXED
 - **Status:**   FIXED (`feature/11f-aslr-s01`, `deaba4d`) · **Severity:** LOW (only with swap on)
